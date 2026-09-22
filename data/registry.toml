@@ -1,0 +1,12 @@
+# 目标版本与参考源指纹。tools/gen_registry 读取本文件生成
+# build/generated/cyane/generated/registry_meta.hpp
+#
+# [registry] 段的方块/物品/实体注册表规模在 M2 接入数据提取后填入。
+
+[protocol]
+version = 340
+minecraft = "1.12.2"
+
+[reference]
+vanilla_server = "fe1f9274e6dad9191bf6e6e8e36ee6ebc737f373603df0946aafcded0d53167e"
+spigot_server = "ff5440e15f371b6def688c86bce296f8451fa8d00df9ad4270eb250621a468f2"

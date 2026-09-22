@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake ninja-build pkg-config zlib1g-dev libssl-dev liburing-dev
+          sudo apt-get install -y libzlib-ng-dev || true
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCYANE_WERROR=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Tick loop smoke test
+        run: ./build/cyane --ticks 5
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake ninja-build pkg-config zlib1g-dev libssl-dev liburing-dev
+
+      - name: Configure with sanitizers
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCYANE_SANITIZE=ON
+          -DCYANE_LTO=OFF
+          -DCYANE_WERROR=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Unit tests under ASan/UBSan
+        run: ctest --test-dir build --output-on-failure

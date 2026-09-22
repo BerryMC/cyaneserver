@@ -1,0 +1,118 @@
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <string_view>
+
+#include "cyane/core/bytes.hpp"
+#include "cyane/crypto/cipher.hpp"
+#include "cyane/crypto/rsa.hpp"
+#include "cyane/net/reactor.hpp"
+#include "cyane/net/session_service.hpp"
+#include "cyane/net/socket.hpp"
+#include "cyane/proto/frame.hpp"
+#include "cyane/proto/packet_ids.hpp"
+#include "cyane/entity/player_manager.hpp"
+#include "cyane/world/world.hpp"
+
+namespace cyane::net {
+
+// 游戏层注入到网络层的能力，避免 net 反向依赖 game
+class StatusProvider {
+public:
+    StatusProvider() = default;
+    virtual ~StatusProvider() = default;
+    StatusProvider(const StatusProvider&) = delete;
+    StatusProvider& operator=(const StatusProvider&) = delete;
+
+    [[nodiscard]] virtual std::string build_status_json() const = 0;
+};
+
+struct ConnectionContext {
+    const StatusProvider* status{nullptr};
+    const crypto::RsaKeyPair* keys{nullptr};
+    const SessionService* sessions{nullptr};
+    bool online_mode{true};
+    std::int32_t compression_threshold{proto::kDefaultCompressionThreshold};
+    std::string disconnect_message{"CyaneServer"};
+    entity::PlayerManager* player_manager{nullptr};
+    cyane::world::World* world{nullptr};
+    std::int32_t view_distance{10};
+    std::int32_t max_players{20};
+};
+
+class Connection final : public ReactorHandler {
+public:
+    Connection(Socket socket, std::string peer, Reactor& reactor, ConnectionContext context);
+    ~Connection() override;
+
+    void on_readable() override;
+    void on_writable() override;
+    void on_error() override;
+
+    [[nodiscard]] bool alive() const noexcept { return alive_; }
+    [[nodiscard]] int fd() const noexcept { return socket_.fd(); }
+    [[nodiscard]] std::string_view peer() const noexcept { return peer_; }
+    [[nodiscard]] proto::State state() const noexcept { return state_; }
+    [[nodiscard]] std::string_view username() const noexcept { return username_; }
+
+    void send_packet(std::int32_t packet_id, ByteSpan fields);
+    void disconnect(std::string_view reason);
+
+    static constexpr std::size_t kReadChunk = 16 * 1024;
+    static constexpr std::size_t kMaxInboxBytes = static_cast<std::size_t>(proto::kMaxFrameBytes) + kReadChunk;
+    static constexpr std::size_t kOutboxHighWater = 1U << 20;
+
+private:
+    void teardown() noexcept;
+    void process_inbox();
+    [[nodiscard]] bool handle_packet(std::int32_t packet_id, ByteSpan payload);
+    [[nodiscard]] bool handle_handshake(ByteSpan payload);
+    [[nodiscard]] bool handle_status(std::int32_t packet_id, ByteSpan payload);
+    [[nodiscard]] bool handle_login(std::int32_t packet_id, ByteSpan payload);
+    [[nodiscard]] bool handle_play(std::int32_t packet_id, ByteSpan payload);
+    [[nodiscard]] bool handle_play_keepalive();
+    [[nodiscard]] bool handle_play_position(std::int32_t packet_id, ByteSpan payload);
+    [[nodiscard]] bool handle_play_chat(ByteSpan payload);
+    [[nodiscard]] bool handle_play_chunk_request(ByteSpan payload);
+    void update_player_position(entity::Position pos);
+    void send_spawn_player();
+    [[nodiscard]] bool handle_login_start(ByteSpan payload);
+    [[nodiscard]] bool handle_encryption_response(ByteSpan payload);
+    void send_encryption_request();
+    void finish_login(std::string uuid_with_dashes);
+    void enable_cipher(ByteSpan session_key);
+    void flush_outbox();
+    void set_writable(bool writable);
+
+    Socket socket_;
+    std::string peer_;
+    Reactor* reactor_{nullptr};
+    ConnectionContext context_;
+
+    proto::State state_{proto::State::handshake};
+    std::string username_;
+    std::int32_t protocol_version_{0};
+    std::int32_t compression_threshold_{-1};
+    Bytes verify_token_;
+    std::uint32_t keepalive_id_{0};
+    std::int32_t teleport_id_{0};
+    std::uint32_t player_id_{0};
+    entity::Position player_pos_{};
+
+    std::unique_ptr<crypto::StreamCipher> decrypt_cipher_;
+    std::unique_ptr<crypto::StreamCipher> encrypt_cipher_;
+
+    Bytes inbox_;
+    std::size_t inbox_offset_{0};
+    Bytes outbox_;
+    std::size_t outbox_offset_{0};
+    Bytes scratch_;
+
+    bool want_write_{false};
+    bool alive_{true};
+    bool close_after_flush_{false};
+};
+
+}

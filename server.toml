@@ -1,0 +1,17 @@
+[network]
+bind = "0.0.0.0"
+port = 25565
+motd = "CyaneServer 1.12.2"
+online_mode = false
+
+[server]
+max_players = 20
+view_distance = 10
+tick_rate = 20
+# 0 = 物理核数 - 1
+worker_threads = 0
+world_dir = "world"
+
+[log]
+level = "info"
+file = "logs/latest.log"
