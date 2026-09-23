@@ -21,6 +21,13 @@ namespace cyane::net::detail {
     return (static_cast<std::int64_t>(pos.x) << 32) | (static_cast<std::uint32_t>(pos.z));
 }
 
+// 方块世界坐标打包成 64 位键（26 位 x | 12 位 y | 26 位 z），用于容器索引
+[[nodiscard]] inline std::int64_t block_key(std::int32_t x, std::int32_t y, std::int32_t z) noexcept {
+    return (static_cast<std::int64_t>(x & 0x3FFFFFF) << 38) |
+           (static_cast<std::int64_t>(y & 0xFFF) << 26) |
+           static_cast<std::int64_t>(z & 0x3FFFFFF);
+}
+
 inline void write_player_info_add(ByteWriter& out, const std::array<std::uint8_t, 16>& uuid,
                                   std::string_view name) {
     out.varint(proto::play_cb::kPlayerInfoAddPlayer);

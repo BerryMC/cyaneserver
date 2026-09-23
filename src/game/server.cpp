@@ -174,6 +174,10 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.player_manager = server->player_manager_.get();
     server->hub_ = std::make_unique<net::PlayerHub>();
     context.hub = server->hub_.get();
+    server->item_drops_ = std::make_unique<net::ItemDropManager>();
+    context.item_drops = server->item_drops_.get();
+    server->containers_ = std::make_unique<net::ContainerStore>();
+    context.containers = server->containers_.get();
     server->world_ = std::make_unique<world::World>();
     context.world = server->world_.get();
     context.view_distance = server->config_.view_distance;

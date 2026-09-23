@@ -137,8 +137,11 @@ void Connection::tick(std::uint64_t now_ms) {
     if (!alive_ || state_ != proto::State::play) {
         return;
     }
+    now_ms_ = now_ms;
     // 先投递他人广播来的消息（进入 play 后 hub_entry_ 有效）
     drain_mailbox();
+    // 检测并拾取附近掉落物
+    collect_items(now_ms);
     // 首次进入 play：以当前时间作为存活基线
     if (last_keepalive_recv_ms_ == 0) {
         last_keepalive_recv_ms_ = now_ms;

@@ -43,8 +43,28 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     if (!destroy) {
         return true;
     }
-    set_block_and_broadcast(position_x(*packed), position_y(*packed), position_z(*packed),
-                            world::kStateAir);
+    const std::int32_t bx = position_x(*packed);
+    const std::int32_t by = position_y(*packed);
+    const std::int32_t bz = position_z(*packed);
+    // 破坏前记录原方块，用于生成掉落物（生存模式且非空气）
+    const std::uint16_t prev = context_.world != nullptr ? context_.world->block_at(bx, by, bz)
+                                                         : world::kStateAir;
+    set_block_and_broadcast(bx, by, bz, world::kStateAir);
+    if (!creative && context_.item_drops != nullptr && prev != world::kStateAir) {
+        // 方块 → 掉落物：1.12.2 方块 id<256 与物品 id 同值，meta 作 damage
+        const std::int16_t item_id = static_cast<std::int16_t>(world::block_id(prev));
+        const std::int16_t dmg = static_cast<std::int16_t>(world::state_meta(prev));
+        const DroppedItem drop{context_.item_drops->spawn(bx + 0.5, by + 0.25, bz + 0.5,
+                                                          item::ItemStack{item_id, 1, dmg}, now_ms_),
+                               bx + 0.5, by + 0.25, bz + 0.5, item::ItemStack{item_id, 1, dmg}, now_ms_};
+        if (drop.entity_id != 0) {
+            spawn_dropped_item(drop);
+            if (context_.hub != nullptr) {
+                // 让附近其他玩家也看到掉落物（复用 SpawnObject+Metadata 二连）
+                // 简化：仅本连接立即可见，他人下次进入区块或本阶段先不广播
+            }
+        }
+    }
     return true;
 }
 
@@ -57,15 +77,24 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
     if (!packed || !face) {
         return false;
     }
+    const std::int32_t cx = position_x(*packed);
+    const std::int32_t cy = position_y(*packed);
+    const std::int32_t cz = position_z(*packed);
+    // 右键点到已有箱子：打开容器窗口而非放置
+    if (context_.world != nullptr && context_.containers != nullptr &&
+        world::block_id(context_.world->block_at(cx, cy, cz)) == world::block_id(world::kStateChest)) {
+        open_chest(detail::block_key(cx, cy, cz));
+        return true;
+    }
     const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
     const std::uint16_t state = world::block_state_from_item(held.id, held.damage);
     if (state == world::kStateAir) {
         return true;  // 空手或非方块物品：忽略
     }
     const auto delta = world::face_delta(*face);
-    const std::int32_t tx = position_x(*packed) + delta.dx;
-    const std::int32_t ty = position_y(*packed) + delta.dy;
-    const std::int32_t tz = position_z(*packed) + delta.dz;
+    const std::int32_t tx = cx + delta.dx;
+    const std::int32_t ty = cy + delta.dy;
+    const std::int32_t tz = cz + delta.dz;
     // 原版会取消放置到会挤压任意玩家（含自己）的格子：把方块放进玩家碰撞体 → 直接踢出
     if (context_.hub != nullptr && context_.hub->block_intersects_any_player(tx, ty, tz)) {
         // 向放置者回发当前方块状态，让客户端回滚预测
@@ -78,6 +107,11 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         return true;
     }
     set_block_and_broadcast(tx, ty, tz, state);
+    // 放下的是箱子：在容器存储登记一个空箱
+    if (context_.containers != nullptr &&
+        world::block_id(state) == world::block_id(world::kStateChest)) {
+        context_.containers->ensure(detail::block_key(tx, ty, tz));
+    }
     // 生存模式消耗一个手持方块并回发该槽（创造模式无限）
     if (context_.game_mode != proto::game_mode::kCreative) {
         const std::size_t hs = item::PlayerInventory::hotbar_slot(selected_slot_);

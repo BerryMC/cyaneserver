@@ -92,6 +92,9 @@ add_library(cyane_net
   src/net/connection_play.cpp
   src/net/connection_world.cpp
   src/net/connection_inventory.cpp
+  src/net/connection_combat.cpp
+  src/net/connection_drops.cpp
+  src/net/connection_container.cpp
   src/net/net_service.cpp
   src/net/session_service.cpp
 )

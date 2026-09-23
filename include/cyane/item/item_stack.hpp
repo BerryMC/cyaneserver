@@ -17,7 +17,16 @@ struct ItemStack {
     [[nodiscard]] bool empty() const noexcept { return id < 0 || count == 0; }
 
     [[nodiscard]] static ItemStack air() noexcept { return {}; }
+
+    // 两个堆叠可否合并：非空、同 id 同 damage
+    [[nodiscard]] bool stacks_with(const ItemStack& other) const noexcept {
+        return !empty() && !other.empty() && id == other.id && damage == other.damage;
+    }
 };
+
+// 1.12.2 绝大多数物品堆叠上限 64（工具/盔甲等为 1，本阶段统一按 64 近似）
+inline constexpr std::uint8_t kMaxStack = 64;
+
 
 inline void write_slot(ByteWriter& out, const ItemStack& item) {
     if (item.empty()) {

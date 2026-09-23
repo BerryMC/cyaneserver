@@ -41,14 +41,18 @@ bool Connection::handle_play(std::int32_t packet_id, ByteSpan payload) {
     if (packet_id == proto::play_sb::kClickWindow) {
         return handle_play_click_window(payload);
     }
+    if (packet_id == proto::play_sb::kClientCommand) {
+        return handle_play_client_command(payload);
+    }
+    if (packet_id == proto::play_sb::kCloseWindow) {
+        return handle_play_close_window(payload);
+    }
     // 已知但暂无游戏逻辑的 serverbound 包：静默接受，避免日志刷屏
     switch (packet_id) {
         case proto::play_sb::kSettings:                  // 客户端设置（视距/语言/皮肤部件）
         case proto::play_sb::kPluginMessage:             // 插件通道（MC|Brand 等）
         case proto::play_sb::kAbilities:                 // 飞行能力回报
         case proto::play_sb::kAnimation:                 // 挥手动画
-        case proto::play_sb::kClientCommand:             // 重生/统计请求
-        case proto::play_sb::kCloseWindow:               // 关闭窗口
         case proto::play_sb::kConfirmTransaction:        // 事务确认回执
         case proto::play_sb::kRecipeDisplayed:           // 配方书
         case proto::play_sb::kUseItem:                   // 使用物品
@@ -99,6 +103,10 @@ bool Connection::handle_play_position(std::int32_t packet_id, ByteSpan payload) 
     player_pos_ = pos;
     if (context_.player_manager != nullptr) {
         context_.player_manager->update_position(player_id_, pos);
+    }
+    // 掉出世界底部（虚空）致死：y < -64 触发死亡界面
+    if (!dead_ && pos.y < -64.0) {
+        kill_player();
     }
     broadcast_movement(pos);
     const auto chunk = world::ChunkPos::from_world(

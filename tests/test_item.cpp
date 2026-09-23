@@ -67,3 +67,12 @@ CYANE_TEST(block_state_from_item_maps_block_items) {
     // 空手(id=-1) → 空气
     CYANE_CHECK_EQ(cyane::world::block_state_from_item(-1, 0), cyane::world::kStateAir);
 }
+
+CYANE_TEST(item_stacks_with_matches_same_id_and_damage) {
+    const ItemStack a{1, 10, 0};
+    CYANE_CHECK(a.stacks_with(ItemStack{1, 5, 0}));
+    CYANE_CHECK(!a.stacks_with(ItemStack{1, 5, 1}));    // damage 不同
+    CYANE_CHECK(!a.stacks_with(ItemStack{2, 5, 0}));    // id 不同
+    CYANE_CHECK(!a.stacks_with(ItemStack::air()));      // 空堆叠不合并
+}
+

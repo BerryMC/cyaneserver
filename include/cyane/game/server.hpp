@@ -69,6 +69,8 @@ private:
     std::unique_ptr<game::ServerStatus> status_;
     std::unique_ptr<entity::PlayerManager> player_manager_;
     std::unique_ptr<net::PlayerHub> hub_;
+    std::unique_ptr<net::ItemDropManager> item_drops_;
+    std::unique_ptr<net::ContainerStore> containers_;
     std::unique_ptr<world::World> world_;
     std::unique_ptr<net::NetService> network_;
     std::unique_ptr<ThreadPool> workers_;

@@ -18,6 +18,8 @@
 #include "cyane/proto/play_fields.hpp"
 #include "cyane/entity/player_manager.hpp"
 #include "cyane/item/player_inventory.hpp"
+#include "cyane/net/container_store.hpp"
+#include "cyane/net/item_drop.hpp"
 #include "cyane/net/player_hub.hpp"
 #include "cyane/world/world.hpp"
 
@@ -43,6 +45,8 @@ struct ConnectionContext {
     std::string disconnect_message{"CyaneServer"};
     entity::PlayerManager* player_manager{nullptr};
     PlayerHub* hub{nullptr};
+    ItemDropManager* item_drops{nullptr};
+    ContainerStore* containers{nullptr};
     cyane::world::World* world{nullptr};
     std::int32_t view_distance{10};
     std::int32_t max_players{20};
@@ -91,6 +95,22 @@ private:
     [[nodiscard]] bool handle_play_held_item(ByteSpan payload);
     [[nodiscard]] bool handle_play_creative_action(ByteSpan payload);
     [[nodiscard]] bool handle_play_click_window(ByteSpan payload);
+    [[nodiscard]] bool handle_play_close_window(ByteSpan payload);
+    [[nodiscard]] bool handle_play_client_command(ByteSpan payload);
+    // 打开箱子容器：下发 OpenWindow + 容器 WindowItems
+    void open_chest(std::int64_t chest_key);
+    void apply_click(std::int16_t slot, std::uint8_t button, std::int32_t mode);
+    void apply_chest_click(std::int16_t slot, std::uint8_t button, std::int32_t mode);
+    // 把 moving 尽量并入 [lo,hi] 槽区间（先叠已有同类，再填空槽），就地更新剩余
+    [[nodiscard]] bool merge_into_range(item::ItemStack& moving, std::size_t lo, std::size_t hi);
+    void kill_player();
+    void respawn_player();
+    // 掉落物：生成、给自己补发已有、拾取入包
+    void spawn_dropped_item(const DroppedItem& drop);
+    void send_existing_drops();
+    void collect_items(std::uint64_t now_ms);
+    // 把一个堆叠尽量塞进玩家背包（热区栏优先，再主背包），返回未放下的剩余
+    [[nodiscard]] item::ItemStack give_item(item::ItemStack stack);
     void send_inventory();
     void send_slot(std::int8_t window_id, std::int16_t slot, const item::ItemStack& item);
     // 修改一个方块：写世界 + 向自己与附近玩家广播 BlockChange
@@ -141,6 +161,8 @@ private:
     bool awaiting_keepalive_{false};
     static constexpr std::uint64_t kKeepAliveIntervalMs = 10'000;
     static constexpr std::uint64_t kKeepAliveTimeoutMs = 30'000;
+    // 最近一次 tick 的时间戳，供非 tick 路径（如掉落物出生时刻）读取
+    std::uint64_t now_ms_{0};
 
     // 玩家动作状态（潜行/疾跑），供后续移动广播与碰撞使用
     bool sneaking_{false};
@@ -149,6 +171,16 @@ private:
     // 玩家背包（windowId=0，46 槽）与当前选中热区栏槽（0..8）
     item::PlayerInventory inventory_;
     std::uint8_t selected_slot_{0};
+    // 窗口点击时鼠标游标上握着的物品堆叠
+    item::ItemStack cursor_item_{};
+    // 当前打开的箱子容器键（0 表示只开着自身背包）；窗口 id 固定用 1
+    std::int64_t open_chest_key_{0};
+    bool chest_open_{false};
+    static constexpr std::uint8_t kChestWindowId = 1;
+
+    // 生命与死亡状态（伤害/重生）
+    float health_{20.0f};
+    bool dead_{false};
 
     // 已发送给客户端的区块集合，与玩家所在区块 + 视距一同维护
     std::unordered_set<std::int64_t> loaded_chunks_;
