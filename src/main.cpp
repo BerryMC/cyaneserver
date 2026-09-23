@@ -60,10 +60,11 @@ void print_usage() {
 
     if (cmd == "help") {
         std::print("commands:\n");
-        std::print("  help          显示此帮助\n");
-        std::print("  tps           显示当前 TPS 与在线人数\n");
-        std::print("  say <消息>    以服务器身份向所有玩家广播\n");
-        std::print("  stop          停止服务器\n");
+        std::print("  help            显示此帮助\n");
+        std::print("  tps             显示当前 TPS 与在线人数\n");
+        std::print("  say <消息>      以服务器身份向所有玩家广播\n");
+        std::print("  kill <玩家名>   杀死指定在线玩家\n");
+        std::print("  stop            停止服务器\n");
         return true;
     }
     if (cmd == "tps") {
@@ -78,6 +79,18 @@ void print_usage() {
         const std::string message = std::format("[Server] {}", rest);
         server.broadcast_system_message(message);
         std::print("{}\n", message);
+        return true;
+    }
+    if (cmd == "kill") {
+        if (rest.empty()) {
+            std::print("usage: kill <player>\n");
+            return true;
+        }
+        if (server.kill_player_by_name(rest)) {
+            std::print("killed {}\n", rest);
+        } else {
+            std::print("player not found: {}\n", rest);
+        }
         return true;
     }
     if (cmd == "stop") {

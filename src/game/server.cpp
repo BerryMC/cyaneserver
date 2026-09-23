@@ -247,4 +247,12 @@ void Server::broadcast_system_message(std::string_view message) {
     hub_->broadcast_all(proto::play_cb::kChatMessage, chat.data());
 }
 
+bool Server::kill_player_by_name(std::string_view name) {
+    const std::uint32_t target_id = hub_->player_id_by_name(name);
+    if (target_id == 0) {
+        return false;
+    }
+    return hub_->send_kill(target_id);
+}
+
 }

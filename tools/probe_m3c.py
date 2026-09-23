@@ -307,12 +307,35 @@ def chest_open(host, port) -> dict:
     return out
 
 
+def drop_visibility(host, port) -> dict:
+    """生存双连接：Alice 破坏远处方块生成掉落物，Bob（不移动）应通过广播看到 SpawnObject。"""
+    a = Client(host, port, "Alice")
+    time.sleep(1.0)
+    b = Client(host, port, "Bob")
+    time.sleep(1.0)
+    with b.lock:
+        before = len(b.spawn_objects)
+    # Alice 破坏远离自己出生点的方块 (10,3,10)，掉落物不会被 Alice 立即拾取
+    a.creative_set(36, iid=1, count=1)
+    time.sleep(0.3)
+    a.dig(10, 3, 10, status=2)
+    time.sleep(0.8)
+    with b.lock:
+        after = b.spawn_objects[before:]
+    a.close()
+    b.close()
+    return {"bob_saw_spawn_objects": after}
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 3 and sys.argv[3] == "survival":
         print(json.dumps(survival_drops(sys.argv[1], int(sys.argv[2])), indent=2, ensure_ascii=False))
         sys.exit(0)
     if len(sys.argv) > 3 and sys.argv[3] == "chest":
         print(json.dumps(chest_open(sys.argv[1], int(sys.argv[2])), indent=2, ensure_ascii=False))
+        sys.exit(0)
+    if len(sys.argv) > 3 and sys.argv[3] == "dropvis":
+        print(json.dumps(drop_visibility(sys.argv[1], int(sys.argv[2])), indent=2, ensure_ascii=False))
         sys.exit(0)
     sys.exit(main())
 

@@ -107,6 +107,8 @@ private:
     void respawn_player();
     // 掉落物：生成、给自己补发已有、拾取入包
     void spawn_dropped_item(const DroppedItem& drop);
+    // 生成掉落物的两个包（SpawnObject + EntityMetadata）编码到 out_spawn/out_meta
+    void encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn, ByteWriter& out_meta) const;
     void send_existing_drops();
     void collect_items(std::uint64_t now_ms);
     // 把一个堆叠尽量塞进玩家背包（热区栏优先，再主背包），返回未放下的剩余

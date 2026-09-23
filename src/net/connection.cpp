@@ -177,6 +177,10 @@ void Connection::drain_mailbox() {
         pending.swap(hub_entry_->mailbox);
     }
     for (const auto& msg : pending) {
+        if (msg.kill_flag) {
+            kill_player();
+            continue;
+        }
         send_packet(msg.packet_id, ByteSpan{msg.payload});
     }
 }

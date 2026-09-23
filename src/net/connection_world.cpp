@@ -54,14 +54,27 @@ bool Connection::handle_play_digging(ByteSpan payload) {
         // 方块 → 掉落物：1.12.2 方块 id<256 与物品 id 同值，meta 作 damage
         const std::int16_t item_id = static_cast<std::int16_t>(world::block_id(prev));
         const std::int16_t dmg = static_cast<std::int16_t>(world::state_meta(prev));
-        const DroppedItem drop{context_.item_drops->spawn(bx + 0.5, by + 0.25, bz + 0.5,
-                                                          item::ItemStack{item_id, 1, dmg}, now_ms_),
-                               bx + 0.5, by + 0.25, bz + 0.5, item::ItemStack{item_id, 1, dmg}, now_ms_};
-        if (drop.entity_id != 0) {
+        const double dx = bx + 0.5;
+        const double dy = by + 0.25;
+        const double dz = bz + 0.5;
+        const item::ItemStack stack{item_id, 1, dmg};
+        const std::uint32_t eid = context_.item_drops->spawn(dx, dy, dz, stack, now_ms_);
+        if (eid != 0) {
+            const DroppedItem drop{eid, dx, dy, dz, stack, now_ms_};
             spawn_dropped_item(drop);
+            // 向附近其他玩家广播掉落物（SpawnObject + EntityMetadata 二连）
             if (context_.hub != nullptr) {
-                // 让附近其他玩家也看到掉落物（复用 SpawnObject+Metadata 二连）
-                // 简化：仅本连接立即可见，他人下次进入区块或本阶段先不广播
+                const auto cpos = world::ChunkPos::from_world(bx, bz);
+                if (cpos) {
+                    const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+                    ByteWriter spawn;
+                    ByteWriter meta;
+                    encode_dropped_item(drop, spawn, meta);
+                    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                                 proto::play_cb::kSpawnObject, spawn.data());
+                    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                                 proto::play_cb::kEntityMetadata, meta.data());
+                }
             }
         }
     }

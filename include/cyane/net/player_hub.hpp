@@ -31,6 +31,7 @@ struct PlayerSnapshot {
 struct HubMessage {
     std::int32_t packet_id{0};
     Bytes payload;
+    bool kill_flag{false};  // true：要求目标连接自杀（用于控制台 /kill）
 };
 
 // 线程安全的多人广播中心：连接跨 reactor 线程时也安全。
@@ -92,6 +93,29 @@ public:
 
     // exclude=0 意味着不排除任何人（entity id 从 1 起）；用于聊天等全员广播
     void broadcast_all(std::int32_t packet_id, ByteSpan payload) { broadcast(0, packet_id, payload); }
+
+    // 向指定玩家投递一条带 kill 标记的消息（由对方 reactor 线程处理）
+    bool send_kill(std::uint32_t target_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = players_.find(target_id);
+        if (it == players_.end()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
+        it->second->mailbox.push_back(HubMessage{/*packet_id=*/0, Bytes{}, /*kill_flag=*/true});
+        return true;
+    }
+
+    // 按玩家名查找 entity id（用于控制台 /kill 等）
+    [[nodiscard]] std::uint32_t player_id_by_name(std::string_view name) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [id, entry] : players_) {
+            if (entry->snapshot.name == name) {
+                return id;
+            }
+        }
+        return 0;
+    }
 
     // 只投递给所在区块与 (cx,cz) 的切比雪夫距离 ≤ radius 的玩家（方块变更等局部事件）
     void broadcast_near(std::int32_t cx, std::int32_t cz, std::int32_t radius, std::uint32_t exclude,

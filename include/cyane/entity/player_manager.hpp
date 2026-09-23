@@ -39,6 +39,16 @@ public:
         return nullptr;
     }
 
+    std::shared_ptr<Player> find_by_name(std::string_view name) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& [id, player] : players_) {
+            if (player->name() == name) {
+                return player;
+            }
+        }
+        return nullptr;
+    }
+
     void remove(std::uint32_t id) {
         std::lock_guard<std::mutex> lock(mutex_);
         players_.erase(id);

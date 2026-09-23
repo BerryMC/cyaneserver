@@ -59,6 +59,8 @@ public:
     [[nodiscard]] std::uint64_t online_players() const noexcept { return network_->active(); }
     // 以系统身份向所有在线玩家广播一条聊天消息（控制台 say 命令）
     void broadcast_system_message(std::string_view message);
+    // 根据玩家名杀死一名在线玩家（控制台 /kill 命令）
+    [[nodiscard]] bool kill_player_by_name(std::string_view name);
 
 private:
     explicit Server(ServerConfig config);

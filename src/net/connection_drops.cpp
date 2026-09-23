@@ -13,35 +13,40 @@ constexpr std::uint8_t kMetaTypeSlot = 5;
 constexpr std::int32_t kObjectTypeItem = 2;  // SpawnObject type：掉落物
 }
 
-void Connection::spawn_dropped_item(const DroppedItem& drop) {
+void Connection::encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn,
+                                     ByteWriter& out_meta) const {
     // SpawnObject (0x00)：varint id | uuid(16) | byte type | double x/y/z
     //                    | byte pitch | byte yaw | int data | short vX/vY/vZ
-    ByteWriter spawn;
-    spawn.varint(static_cast<std::int32_t>(drop.entity_id));
+    out_spawn.varint(static_cast<std::int32_t>(drop.entity_id));
     std::array<std::uint8_t, 16> uuid{};
     uuid[15] = static_cast<std::uint8_t>(drop.entity_id & 0xFF);
     uuid[14] = static_cast<std::uint8_t>((drop.entity_id >> 8) & 0xFF);
-    spawn.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid.data()), uuid.size()});
-    spawn.u8(static_cast<std::uint8_t>(kObjectTypeItem));
-    spawn.f64(drop.x);
-    spawn.f64(drop.y);
-    spawn.f64(drop.z);
-    spawn.u8(0);   // pitch
-    spawn.u8(0);   // yaw
-    spawn.i32(1);  // data≠0：让客户端读取后续速度
-    spawn.i16(0);
-    spawn.i16(0);
-    spawn.i16(0);
-    send_packet(proto::play_cb::kSpawnObject, spawn.data());
+    out_spawn.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid.data()), uuid.size()});
+    out_spawn.u8(static_cast<std::uint8_t>(kObjectTypeItem));
+    out_spawn.f64(drop.x);
+    out_spawn.f64(drop.y);
+    out_spawn.f64(drop.z);
+    out_spawn.u8(0);   // pitch
+    out_spawn.u8(0);   // yaw
+    out_spawn.i32(1);  // data≠0：让客户端读取后续速度
+    out_spawn.i16(0);
+    out_spawn.i16(0);
+    out_spawn.i16(0);
 
     // EntityMetadata (0x3C)：varint id | (byte index | varint type | 值)... | 0xFF 终止
     // 只写 index 6 的物品堆叠，客户端据此把实体渲染成对应物品
+    out_meta.varint(static_cast<std::int32_t>(drop.entity_id));
+    out_meta.u8(kItemMetaIndex);
+    out_meta.varint(kMetaTypeSlot);
+    item::write_slot(out_meta, drop.stack);
+    out_meta.u8(0xFF);
+}
+
+void Connection::spawn_dropped_item(const DroppedItem& drop) {
+    ByteWriter spawn;
     ByteWriter meta;
-    meta.varint(static_cast<std::int32_t>(drop.entity_id));
-    meta.u8(kItemMetaIndex);
-    meta.varint(kMetaTypeSlot);
-    item::write_slot(meta, drop.stack);
-    meta.u8(0xFF);
+    encode_dropped_item(drop, spawn, meta);
+    send_packet(proto::play_cb::kSpawnObject, spawn.data());
     send_packet(proto::play_cb::kEntityMetadata, meta.data());
 }
 
@@ -99,8 +104,16 @@ void Connection::collect_items(std::uint64_t now_ms) {
         if (context_.hub != nullptr) {
             context_.hub->broadcast(player_id_, proto::play_cb::kCollectItem, collect.data());
         }
-        // 物品进背包；放不下的部分销毁（本阶段不回吐为掉落物）
-        (void)give_item(ev.stack);
+        // 物品进背包；放不下的部分回吐为新的掉落物（就在玩家脚下）
+        item::ItemStack leftover = give_item(ev.stack);
+        if (!leftover.empty() && context_.item_drops != nullptr) {
+            const std::uint32_t eid = context_.item_drops->spawn(player_pos_.x, player_pos_.y,
+                                                                player_pos_.z, leftover, now_ms);
+            if (eid != 0) {
+                spawn_dropped_item(DroppedItem{eid, player_pos_.x, player_pos_.y, player_pos_.z,
+                                               leftover, now_ms});
+            }
+        }
         // 全员销毁该掉落物实体
         ByteWriter destroy;
         destroy.varint(1);
