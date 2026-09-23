@@ -287,19 +287,32 @@ bool Connection::handle_play(std::int32_t packet_id, ByteSpan payload) {
     if (packet_id == proto::play_sb::kChatMessage) {
         return handle_play_chat(payload);
     }
+    if (packet_id == proto::play_sb::kPlayerDigging) {
+        return handle_play_digging(payload);
+    }
+    if (packet_id == proto::play_sb::kBlockPlace) {
+        return handle_play_block_place(payload);
+    }
+    if (packet_id == proto::play_sb::kHeldItemChange) {
+        return handle_play_held_item(payload);
+    }
+    if (packet_id == proto::play_sb::kCreativeInventoryAction) {
+        return handle_play_creative_action(payload);
+    }
+    if (packet_id == proto::play_sb::kClickWindow) {
+        return handle_play_click_window(payload);
+    }
     // 已知但暂无游戏逻辑的 serverbound 包：静默接受，避免日志刷屏
     switch (packet_id) {
         case proto::play_sb::kSettings:                  // 客户端设置（视距/语言/皮肤部件）
         case proto::play_sb::kPluginMessage:             // 插件通道（MC|Brand 等）
         case proto::play_sb::kAbilities:                 // 飞行能力回报
-        case proto::play_sb::kHeldItemChange:            // 切换手持栏位
         case proto::play_sb::kAnimation:                 // 挥手动画
         case proto::play_sb::kClientCommand:             // 重生/统计请求
         case proto::play_sb::kCloseWindow:               // 关闭窗口
+        case proto::play_sb::kConfirmTransaction:        // 事务确认回执
         case proto::play_sb::kRecipeDisplayed:           // 配方书
         case proto::play_sb::kUseItem:                   // 使用物品
-        case proto::play_sb::kPlayerDigging:             // 挖掘（M3 再实现）
-        case proto::play_sb::kBlockPlace:                // 放置（M3 再实现）
             return true;
         default:
             break;
@@ -452,6 +465,171 @@ bool Connection::handle_play_chat(ByteSpan payload) {
     return true;
 }
 
+void Connection::set_block_and_broadcast(std::int32_t wx, std::int32_t wy, std::int32_t wz,
+                                         std::uint16_t state) {
+    if (context_.world != nullptr) {
+        context_.world->set_block(wx, wy, wz, state);
+    }
+    // BlockChange (0x0B)：position(i64) | varint blockStateId
+    ByteWriter change;
+    change.position(wx, wy, wz);
+    change.varint(static_cast<std::int32_t>(state));
+    send_packet(proto::play_cb::kBlockChange, change.data());
+    if (context_.hub != nullptr) {
+        const auto cpos = world::ChunkPos::from_world(wx, wz);
+        if (cpos) {
+            const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kBlockChange, change.data());
+        }
+    }
+}
+
+bool Connection::handle_play_digging(ByteSpan payload) {
+    // PlayerDigging (0x14)：varint status | position(i64) | byte face
+    ByteReader reader{payload};
+    auto status = reader.varint();
+    auto packed = reader.i64();
+    auto face = reader.u8();
+    if (!status || !packed || !face) {
+        return false;
+    }
+    // 创造模式左键即刻破坏(status 0)；生存模式挖掘完成(status 2)才破坏
+    const bool creative = context_.game_mode == proto::game_mode::kCreative;
+    const bool destroy = creative ? (*status == 0) : (*status == 2);
+    if (!destroy) {
+        return true;
+    }
+    set_block_and_broadcast(position_x(*packed), position_y(*packed), position_z(*packed),
+                            world::kStateAir);
+    return true;
+}
+
+bool Connection::handle_play_block_place(ByteSpan payload) {
+    // PlayerBlockPlacement (0x1F)：position(i64) | varint face | varint hand
+    //                             | float cursorX/Y/Z
+    ByteReader reader{payload};
+    auto packed = reader.i64();
+    auto face = reader.varint();
+    if (!packed || !face) {
+        return false;
+    }
+    const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
+    const std::uint16_t state = world::block_state_from_item(held.id, held.damage);
+    if (state == world::kStateAir) {
+        return true;  // 空手或非方块物品：忽略
+    }
+    const auto delta = world::face_delta(*face);
+    const std::int32_t tx = position_x(*packed) + delta.dx;
+    const std::int32_t ty = position_y(*packed) + delta.dy;
+    const std::int32_t tz = position_z(*packed) + delta.dz;
+    // 原版会取消放置到会挤压任意玩家（含自己）的格子：把方块放进玩家碰撞体 → 直接踢出
+    if (context_.hub != nullptr && context_.hub->block_intersects_any_player(tx, ty, tz)) {
+        // 向放置者回发当前方块状态，让客户端回滚预测
+        ByteWriter rollback;
+        rollback.position(tx, ty, tz);
+        rollback.varint(static_cast<std::int32_t>(context_.world != nullptr
+                                                      ? context_.world->block_at(tx, ty, tz)
+                                                      : world::kStateAir));
+        send_packet(proto::play_cb::kBlockChange, rollback.data());
+        return true;
+    }
+    set_block_and_broadcast(tx, ty, tz, state);
+    // 生存模式消耗一个手持方块并回发该槽（创造模式无限）
+    if (context_.game_mode != proto::game_mode::kCreative) {
+        const std::size_t hs = item::PlayerInventory::hotbar_slot(selected_slot_);
+        item::ItemStack after = held;
+        if (after.count > 0) {
+            --after.count;
+        }
+        if (after.count == 0) {
+            after = item::ItemStack::air();
+        }
+        inventory_.set_slot(hs, after);
+        send_slot(0, static_cast<std::int16_t>(hs), after);
+    }
+    return true;
+}
+
+bool Connection::handle_play_held_item(ByteSpan payload) {
+    // HeldItemChange (0x1A)：short slot（0..8）
+    ByteReader reader{payload};
+    auto slot = reader.i16();
+    if (!slot) {
+        return false;
+    }
+    if (*slot >= 0 && *slot < 9) {
+        selected_slot_ = static_cast<std::uint8_t>(*slot);
+    }
+    return true;
+}
+
+bool Connection::handle_play_creative_action(ByteSpan payload) {
+    // CreativeInventoryAction (0x1B)：short slot | slot 数据
+    ByteReader reader{payload};
+    auto slot = reader.i16();
+    if (!slot) {
+        return false;
+    }
+    auto item = item::read_slot(reader);
+    if (!item) {
+        return false;
+    }
+    if (*slot >= 0 && *slot < static_cast<std::int16_t>(item::PlayerInventory::kSlotCount)) {
+        inventory_.set_slot(static_cast<std::size_t>(*slot), *item);
+    }
+    return true;
+}
+
+bool Connection::handle_play_click_window(ByteSpan payload) {
+    // ClickWindow (0x07)：byte windowId | short slot | byte button | short action
+    //                    | varint mode | slot clickedItem
+    ByteReader reader{payload};
+    auto window_id = reader.u8();
+    auto slot = reader.i16();
+    auto button = reader.u8();
+    auto action = reader.i16();
+    auto mode = reader.varint();
+    auto clicked = item::read_slot(reader);
+    if (!window_id || !slot || !button || !action || !mode || !clicked) {
+        return false;
+    }
+    // 仅处理玩家自身背包 windowId=0；其余窗口本阶段不支持
+    // ConfirmTransaction (0x11)：byte windowId | short action | bool accepted
+    // 回 accepted=false，让客户端撤销本次预测并等待权威 SetSlot 重同步
+    ByteWriter confirm;
+    confirm.u8(*window_id);
+    confirm.i16(*action);
+    confirm.boolean(false);
+    send_packet(proto::play_cb::kConfirmTransaction, confirm.data());
+    // 权威重发被点击槽（本阶段不改动背包内容，客户端据此回滚）
+    if (*window_id == 0 && *slot >= 0 &&
+        *slot < static_cast<std::int16_t>(item::PlayerInventory::kSlotCount)) {
+        send_slot(0, *slot, inventory_.slot(static_cast<std::size_t>(*slot)));
+    }
+    return true;
+}
+
+void Connection::send_slot(std::int8_t window_id, std::int16_t slot, const item::ItemStack& item) {
+    // SetSlot (0x16)：byte windowId | short slot | slot data
+    ByteWriter fields;
+    fields.u8(static_cast<std::uint8_t>(window_id));
+    fields.i16(slot);
+    item::write_slot(fields, item);
+    send_packet(proto::play_cb::kSetSlot, fields.data());
+}
+
+void Connection::send_inventory() {
+    // WindowItems (0x14)：byte windowId | short count | slot[count]
+    ByteWriter fields;
+    fields.u8(0);
+    fields.i16(static_cast<std::int16_t>(item::PlayerInventory::kSlotCount));
+    for (const auto& item : inventory_.slots()) {
+        item::write_slot(fields, item);
+    }
+    send_packet(proto::play_cb::kWindowItems, fields.data());
+}
+
 void Connection::send_spawn_player() {
     ByteWriter info;
     write_player_info_add(info, uuid_bytes_, username_);
@@ -581,13 +759,23 @@ void Connection::send_join_game() {
     //                 | byte maxPlayers | string levelType | bool reducedDebug
     cyane::ByteWriter fields;
     fields.i32(static_cast<std::int32_t>(player_id_));
-    fields.u8(0);   // survival
+    fields.u8(context_.game_mode);
     fields.i32(0);  // overworld
     fields.u8(2);   // normal
     fields.u8(static_cast<std::uint8_t>(std::min<std::int32_t>(context_.max_players, 255)));
     fields.string("default");
     fields.boolean(false);
     send_packet(proto::play_cb::kJoinGame, fields.data());
+
+    // 创造模式：PlayerAbilities (0x2C) 允许飞行/免疫，客户端才会进入创造交互
+    if (context_.game_mode == proto::game_mode::kCreative) {
+        cyane::ByteWriter abilities;
+        abilities.u8(proto::abilities::kInvulnerable | proto::abilities::kAllowFlying |
+                     proto::abilities::kCreativeMode);
+        abilities.f32(0.05f);  // flying speed
+        abilities.f32(0.1f);   // field of view modifier
+        send_packet(proto::play_cb::kPlayerAbilities, abilities.data());
+    }
 }
 
 void Connection::send_world_state() {
@@ -614,6 +802,9 @@ void Connection::send_world_state() {
     const auto spawn_chunk = world::ChunkPos::from_world(
         static_cast<std::int32_t>(player_pos_.x), static_cast<std::int32_t>(player_pos_.z));
     update_view(spawn_chunk.value_or(world::ChunkPos{0, 0}));
+
+    // 同步整份背包（windowId=0）：客户端据此渲染物品栏
+    send_inventory();
 }
 
 void Connection::send_initial_teleport() {
@@ -649,7 +840,8 @@ void Connection::register_in_hub() {
 }
 
 void Connection::send_chunk(world::ChunkPos pos) {
-    world::Chunk chunk = world::make_flat_chunk(pos);
+    world::Chunk chunk = context_.world != nullptr ? context_.world->build_chunk(pos)
+                                                    : world::make_flat_chunk(pos);
     cyane::ByteWriter fields;
     world::write_full_chunk(fields, chunk);
     send_packet(proto::play_cb::kChunkData, fields.data());

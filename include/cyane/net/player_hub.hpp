@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -91,6 +93,31 @@ public:
     // exclude=0 意味着不排除任何人（entity id 从 1 起）；用于聊天等全员广播
     void broadcast_all(std::int32_t packet_id, ByteSpan payload) { broadcast(0, packet_id, payload); }
 
+    // 只投递给所在区块与 (cx,cz) 的切比雪夫距离 ≤ radius 的玩家（方块变更等局部事件）
+    void broadcast_near(std::int32_t cx, std::int32_t cz, std::int32_t radius, std::uint32_t exclude,
+                        std::int32_t packet_id, ByteSpan payload) {
+        std::vector<std::shared_ptr<Entry>> targets;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            targets.reserve(players_.size());
+            for (const auto& [id, entry] : players_) {
+                if (id == exclude) {
+                    continue;
+                }
+                const auto& s = entry->snapshot;
+                const std::int32_t pcx = static_cast<std::int32_t>(std::floor(s.x / 16.0));
+                const std::int32_t pcz = static_cast<std::int32_t>(std::floor(s.z / 16.0));
+                if (std::max(std::abs(pcx - cx), std::abs(pcz - cz)) <= radius) {
+                    targets.push_back(entry);
+                }
+            }
+        }
+        for (const auto& entry : targets) {
+            std::lock_guard<std::mutex> lock(entry->mailbox_mutex);
+            entry->mailbox.push_back(HubMessage{packet_id, Bytes{payload.begin(), payload.end()}});
+        }
+    }
+
     void update_position(std::uint32_t entity_id, double x, double y, double z, float yaw, float pitch) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (auto it = players_.find(entity_id); it != players_.end()) {
@@ -101,6 +128,26 @@ public:
             s.yaw = yaw;
             s.pitch = pitch;
         }
+    }
+
+    // 检查在 (bx,by,bz) 放置实心方块是否会与任何在线玩家的碰撞体重叠。
+    // 玩家近似为 0.6x0.6 水平截面、1.8 高的 AABB，脚下为 y..y+1.8。
+    [[nodiscard]] bool block_intersects_any_player(std::int32_t bx, std::int32_t by,
+                                                    std::int32_t bz) const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [id, entry] : players_) {
+            const auto& s = entry->snapshot;
+            const double px = s.x;
+            const double py = s.y;
+            const double pz = s.z;
+            // 水平方向：玩家 AABB [px-0.3, px+0.3] 与方块 [bx, bx+1) 是否相交
+            if (px + 0.3 > static_cast<double>(bx) && px - 0.3 < static_cast<double>(bx + 1) &&
+                pz + 0.3 > static_cast<double>(bz) && pz - 0.3 < static_cast<double>(bz + 1) &&
+                py + 1.8 > static_cast<double>(by) && py < static_cast<double>(by + 1)) {
+                return true;
+            }
+        }
+        return false;
     }
 
 private:

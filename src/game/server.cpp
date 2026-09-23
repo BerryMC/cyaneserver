@@ -7,6 +7,7 @@
 #include "cyane/generated/registry_meta.hpp"
 #include "cyane/proto/json.hpp"
 #include "cyane/proto/packet_ids.hpp"
+#include "cyane/proto/play_fields.hpp"
 
 namespace cyane {
 namespace {
@@ -122,6 +123,15 @@ Result<ServerConfig> ServerConfig::from(const Config& config) {
     }
     out.world_dir = std::move(*world_dir);
 
+    auto game_mode = string_value(config, "server.game_mode", out.game_mode);
+    if (!game_mode) {
+        return std::unexpected{std::move(game_mode.error())};
+    }
+    if (*game_mode != "survival" && *game_mode != "creative") {
+        return make_error(ErrorCode::config, "server.game_mode must be 'survival' or 'creative'");
+    }
+    out.game_mode = std::move(*game_mode);
+
     auto log_level = string_value(config, "log.level", out.log_level);
     if (!log_level) {
         return std::unexpected{std::move(log_level.error())};
@@ -159,7 +169,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.status = server->status_.get();
     context.online_mode = server->config_.online_mode;
     context.compression_threshold = server->config_.compression_threshold;
-    context.disconnect_message = "CyaneServer: world system not implemented yet";
+    context.disconnect_message = "CyaneServer";
     server->player_manager_ = std::make_unique<entity::PlayerManager>();
     context.player_manager = server->player_manager_.get();
     server->hub_ = std::make_unique<net::PlayerHub>();
@@ -168,6 +178,8 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.world = server->world_.get();
     context.view_distance = server->config_.view_distance;
     context.max_players = static_cast<std::int32_t>(server->config_.max_players);
+    context.game_mode = server->config_.game_mode == "survival" ? proto::game_mode::kSurvival
+                                                                 : proto::game_mode::kCreative;
     server->network_ = std::make_unique<net::NetService>(
         server->config_.bind_address, server->config_.port, server->config_.io_threads, std::move(context));
     return server;

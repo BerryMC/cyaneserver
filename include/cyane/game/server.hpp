@@ -33,6 +33,7 @@ struct ServerConfig {
     std::string world_dir{"world"};
     std::string log_level{"info"};
     std::string log_file{"logs/latest.log"};
+    std::string game_mode{"creative"};
 
     [[nodiscard]] static Result<ServerConfig> from(const Config& config);
 };

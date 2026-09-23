@@ -164,8 +164,8 @@ inline constexpr std::int32_t kCreativeInventoryAction = 0x1B;
 inline constexpr std::int32_t kUpdateSign = 0x1C;
 inline constexpr std::int32_t kAnimation = 0x1D;
 inline constexpr std::int32_t kSpectate = 0x1E;
-inline constexpr std::int32_t kUseItem = 0x1F;
-inline constexpr std::int32_t kBlockPlace = 0x20;
+inline constexpr std::int32_t kBlockPlace = 0x1F;
+inline constexpr std::int32_t kUseItem = 0x20;
 }
 
 }

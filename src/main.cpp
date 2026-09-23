@@ -151,25 +151,29 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
-    // tick 循环放到后台线程，主线程读取控制台命令
-    int code = 0;
-    std::thread runner{[running, max_ticks, &code] { code = running->run(max_ticks); }};
-
-    // 仅在没有固定 tick 上限（即长期运行）时启用交互式控制台
+    // 交互式控制台读取放到后台线程；tick 循环留在主线程，
+    // 这样 SIGINT 触发 request_stop 后 run() 立即返回并退出进程，
+    // 不会被卡在 std::getline 上的读取线程阻塞。
+    std::thread console;
     if (max_ticks == 0) {
-        std::string line;
-        while (std::getline(std::cin, line)) {
-            if (!handle_console_command(*running, line)) {
-                running->request_stop();
-                break;
+        console = std::thread{[running] {
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                if (!handle_console_command(*running, line)) {
+                    running->request_stop();
+                    return;
+                }
             }
-        }
-        // stdin 关闭（EOF/管道）也让服务器优雅停机
-        running->request_stop();
+        }};
     }
 
-    runner.join();
+    const int code = running->run(max_ticks);
+
     g_server.store(nullptr, std::memory_order_relaxed);
+    // 读取线程可能仍阻塞在 getline 上，无法唤醒，直接 detach 让进程退出
+    if (console.joinable()) {
+        console.detach();
+    }
     cyane::log::stop();
     return code;
 }

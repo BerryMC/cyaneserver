@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -14,7 +15,9 @@
 #include "cyane/net/socket.hpp"
 #include "cyane/proto/frame.hpp"
 #include "cyane/proto/packet_ids.hpp"
+#include "cyane/proto/play_fields.hpp"
 #include "cyane/entity/player_manager.hpp"
+#include "cyane/item/player_inventory.hpp"
 #include "cyane/net/player_hub.hpp"
 #include "cyane/world/world.hpp"
 
@@ -43,6 +46,7 @@ struct ConnectionContext {
     cyane::world::World* world{nullptr};
     std::int32_t view_distance{10};
     std::int32_t max_players{20};
+    std::uint8_t game_mode{proto::game_mode::kCreative};
 };
 
 class Connection final : public ReactorHandler {
@@ -82,6 +86,15 @@ private:
     [[nodiscard]] bool handle_play_position(std::int32_t packet_id, ByteSpan payload);
     [[nodiscard]] bool handle_play_entity_action(ByteSpan payload);
     [[nodiscard]] bool handle_play_chat(ByteSpan payload);
+    [[nodiscard]] bool handle_play_digging(ByteSpan payload);
+    [[nodiscard]] bool handle_play_block_place(ByteSpan payload);
+    [[nodiscard]] bool handle_play_held_item(ByteSpan payload);
+    [[nodiscard]] bool handle_play_creative_action(ByteSpan payload);
+    [[nodiscard]] bool handle_play_click_window(ByteSpan payload);
+    void send_inventory();
+    void send_slot(std::int8_t window_id, std::int16_t slot, const item::ItemStack& item);
+    // 修改一个方块：写世界 + 向自己与附近玩家广播 BlockChange
+    void set_block_and_broadcast(std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state);
     void send_spawn_player();
     // 按玩家所在区块与视距，加载缺失区块、卸载出界区块
     void update_view(world::ChunkPos center);
@@ -132,6 +145,10 @@ private:
     // 玩家动作状态（潜行/疾跑），供后续移动广播与碰撞使用
     bool sneaking_{false};
     bool sprinting_{false};
+
+    // 玩家背包（windowId=0，46 槽）与当前选中热区栏槽（0..8）
+    item::PlayerInventory inventory_;
+    std::uint8_t selected_slot_{0};
 
     // 已发送给客户端的区块集合，与玩家所在区块 + 视距一同维护
     std::unordered_set<std::int64_t> loaded_chunks_;

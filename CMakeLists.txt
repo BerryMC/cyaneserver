@@ -98,8 +98,6 @@ add_library(cyane::net ALIAS cyane_net)
 add_library(cyane_game
   src/game/server.cpp
   src/game/status.cpp
-  src/world/region.cpp
-  src/world/world.cpp
   src/entity/entity.cpp
   "${CYANE_REGISTRY_HEADER}"
 )
@@ -134,6 +132,7 @@ if(CYANE_BUILD_TESTS)
     tests/test_json.cpp
     tests/test_status.cpp
     tests/test_status_ping.cpp
+    tests/test_item.cpp
   )
   target_include_directories(cyane_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
   target_link_libraries(cyane_tests PRIVATE cyane::game)
