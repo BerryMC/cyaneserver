@@ -38,7 +38,8 @@ wiki.vg 已并入 minecraft.wiki，页面标注 `[vg]` 来源，其"当前协议
 | Login | SB | 0x00 | 探针 |
 | Login | CB | 0x00 Disconnect | 探针 |
 | Login | CB | 0x01/0x02/0x03 | M1b 完成 |
-| Play | — | 未开始 | M2 |
+| Play | SB | 移动/挖掘/放置/物品/聊天/KeepAlive | M2+M3 |
+| Play | CB | JoinGame/ChunkData/实体/BlockChange/窗口 | M2+M3 |
 
 ## 编码决策
 

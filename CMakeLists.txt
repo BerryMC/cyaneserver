@@ -88,6 +88,10 @@ add_library(cyane::proto ALIAS cyane_proto)
 
 add_library(cyane_net
   src/net/connection.cpp
+  src/net/connection_login.cpp
+  src/net/connection_play.cpp
+  src/net/connection_world.cpp
+  src/net/connection_inventory.cpp
   src/net/net_service.cpp
   src/net/session_service.cpp
 )

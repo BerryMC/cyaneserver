@@ -413,8 +413,8 @@ JVM 嵌入、`cyane-bukkit.jar` 核心子集、第三方类路径（§5.3）、�
 - [x] 架构、兼容策略与里程碑规划（本文档）
 - [x] **M0 工程骨架**
 - [x] **M1 协议与连接（M1a + M1b：Handshake/Status/Ping/加密登录完成）**
-- [~] **M2 世界与移动（Play 状态机与登录后包序列已通，Chunk Data/移动同步进行中）**
-- [ ] M3 玩法基础
+- [x] **M2 世界与移动（超平坦区块、移动同步、多人可见、聊天、KeepAlive、动态区块加载）**
+- [~] **M3 玩法基础（M3a 方块破坏/放置 + M3b 物品栏与窗口同步完成；容器/合成/熔炉/掉落物/生物/伤害重生待做）**
 - [ ] M4 插件基座
 - [ ] M5 Bukkit API 覆盖扩展
 - [ ] M6 NMS shim
@@ -441,7 +441,7 @@ ctest --test-dir build --output-on-failure
 | `core/config` | TOML 子集解析，带行号错误，类型严格校验 |
 | `core/time` | `Ticker` 固定节拍（过载重同步，不累加欠债）、`TickStats` 窗口统计 |
 | `core/thread_pool` | 信号量唤醒 + MPMC 队列，任务异常隔离，`wait_idle` 语义可靠 |
-| `game/server` | 20Hz tick 循环、优雅停机（SIGINT/SIGTERM）、每秒状态上报 |
+| `game/server` | 20Hz tick 循环、优雅停机（SIGINT/SIGTERM）、控制台命令 |
 | 代码生成 | `data/registry.toml` → `generated/registry_meta.hpp`（含参考 jar 哈希指纹） |
 | 测试 | 35 个用例，`ctest` 通过；ASan+UBSan 构建下零错误 |
 
@@ -471,9 +471,9 @@ python3 tools/probe_status.py 127.0.0.1 25599   # 打原版 oracle（jars/vanill
 
 **验证结论**：状态响应（Handshake→Status→Ping→Pong）与原版 1.12.2 服务端**逐字节一致**；登录流程与原版行为对照（offline 序列 `SetCompression→LoginSuccess`、online 的 `EncryptionRequest` 字段布局与 162 字节 RSA 公钥）；**M1b 加密登录实现完成**：AES-128-CFB8 会话密钥协商、RSA-1024 解密、压缩启用（SetCompression→LoginSuccess）、`SessionService` 会话验证，76 个测试全绿。协议不匹配给出原版同款 `Outdated client!`。
 
-### M2 进展（Play 包序列打通）
+### M2 交付（世界与移动完成）
 
-登录成功后进入 Play 状态并按原版顺序下发一整套初始化包（`tools/probe_login_full.py` 逐包验证）：
+登录成功后进入 Play 状态并按原版顺序下发初始化包，客户端进入超平坦世界自由移动、互相可见、聊天：
 
 ```
 0x03 SetCompression   阈值 256，先于 LoginSuccess，之后启用压缩
@@ -484,17 +484,57 @@ python3 tools/probe_status.py 127.0.0.1 25599   # 打原版 oracle（jars/vanill
 0x2E PlayerInfo       action=0 | count | UUID(16 字节二进制) | name | props | gameMode | ping | hasDisplayName
 0x41 UpdateHealth     float health | varint food | float saturation
 0x47 TimeUpdate       long worldAge | long timeOfDay
-0x1A Disconnect       世界系统未实现，登录后主动断开并说明
+0x20 ChunkData        视距内超平坦区块（per-section 调色板 + 打包 long[] + 光照 + 生物群系）
+0x2F PlayerPositionLook  绝对坐标下车，客户端回 ConfirmTeleport
 ```
 
-关键修复（对照 spigot 1.12.2 `EnumProtocol` 权威表与 Minecraft-Console-Client 协议实现）：
+| 模块 | 内容 |
+|---|---|
+| `world/chunk_codec` | Chunk Data(0x20) 线格式：per-section bitsPerBlock + 线性调色板 + 跨 long 打包（复刻 `DataBits.a`）+ blockLight/skyLight + 生物群系；`make_flat_chunk` 超平坦出生地形 |
+| `net/player_hub` | 线程安全多人广播中心：每玩家带锁 mailbox，跨 reactor 线程只投递逻辑消息不触碰对端 socket；全员/按区块范围广播 |
+| 移动同步 | Position/PositionLook/Look/Flying → EntityTeleport(0x4C 绝对坐标) + EntityHeadLook(0x36)；角度 float→字节角编码 |
+| 可见性 | 登录互发 PlayerInfo+SpawnPlayer、补发已在线玩家、退出广播 DestroyEntities+PlayerInfo(remove) |
+| 聊天 | ChatMessage 广播全员（含自己），服务端日志 `<name> message` |
+| KeepAlive | 进入 Play 后 10s 心跳，30s 超时断开 |
+| 动态区块 | 玩家跨区块时按视距（切比雪夫环）加载缺失区块、卸载出界区块（UnloadChunk 0x1D） |
+| 控制台 | `help`/`tps`/`say`/`stop` 命令（后台读取线程，SIGINT 即时停机） |
+| 工具 | `tools/probe_login_full.py`（逐包验证）、`tools/probe_visibility.py`（多连接互见/角度） |
 
-- **包 ID 全量对齐**：`packet_ids.hpp` 的 play_cb/play_sb 按 `EnumProtocol` 注册顺序重写（JoinGame=0x23、PlayerInfo=0x2E、SpawnPosition=0x46 等）。
-- **JoinGame 字段**：entityId/dimension 用 `int`（非 varint），与 `PacketPlayOutLogin.b` 一致。
-- **PlayerInfo UUID**：改为 16 字节二进制而非字符串——此前的 40 字符双连字符 UUID 是 `108 > 64` 报错的根因。
-- **SpawnPosition**：单个 position long。
-- **帧解析**：`process_inbox` 用长度前缀 + `decode_frame`，正确处理半包/粘包与压缩阈值切换。
-- **握手完整解析** protocol/host/port/nextState，消除 `unknown state`。
+**验证结论**：两个客户端可互相看到并聊天；出生点按实体 id 错开成网格，避免重叠导致的视锥剔除消失；角度字节编码对负 yaw/大 yaw 正确回绕。
 
-76 个测试全绿；`tools/probe_login_full.py` 完整解析全部 8 个包。
+### M3 交付（M3a 方块交互 + M3b 物品栏，进行中）
+
+创造/生存模式下可破坏、放置方块，客户端登入即同步整份背包：
+
+```
+serverbound:
+0x14 PlayerDigging          varint status | position | byte face（创造 status0 即破坏，生存 status2）
+0x1F BlockPlacement         position | varint face | varint hand | float cursorX/Y/Z
+0x1A HeldItemChange         short slot（切换热区栏选中）
+0x1B CreativeInventoryAction short slot | slot（创造改物品）
+0x07 ClickWindow            byte win | short slot | byte button | short action | varint mode | slot
+clientbound:
+0x0B BlockChange            position | varint blockStateId（按区块范围 broadcast_near）
+0x14 WindowItems            登入下发整份背包（46 槽）
+0x16 SetSlot                单槽权威同步
+0x11 ConfirmTransaction     ClickWindow 事务回执
+0x2C PlayerAbilities        创造模式允许飞行/免疫
+```
+
+| 模块 | 内容 |
+|---|---|
+| `world/world` | 共享可编辑方块存储：超平坦 baseline + 编辑覆盖表（`std::mutex` 保护，多 reactor 共享），`build_chunk` 打底套用编辑 |
+| `world/blocks` | 物品→方块状态映射（1.12.2 方块型物品 id<256 与 block id 同值），六向 face 增量 |
+| `item/item_stack` | `ItemStack{id,count,damage}` 与 1.12.2 网络 slot 编解码（带 NBT 的物品本阶段拒绝） |
+| `item/player_inventory` | 46 槽玩家背包（护甲/2×2 合成/主包/热区栏/副手）与热区栏→窗口槽映射 |
+| 方块交互 | 破坏置空气、放置按手持物品映射；放置碰撞检测拒绝挤压玩家的格子并回滚；生存放置消耗手持物品 |
+| 窗口同步 | 登入 WindowItems、创造 CreativeInventoryAction 写入并 SetSlot 回发、ClickWindow 回 ConfirmTransaction + 权威重同步 |
+| 配置 | `server.game_mode`（默认 creative）驱动 JoinGame gameMode 与 PlayerAbilities |
+| 工具 | `tools/probe_blocks.py`（破坏/放置/持久化/碰撞拒绝）、`tools/probe_inventory.py`（背包同步/点击事务） |
+| 测试 | 82 个用例全绿（新增 `tests/test_item.cpp` 6 项） |
+
+**验证结论**：破坏/放置后写入 World 并持久化——新登入客户端读区块采样一致；放置到玩家碰撞体的格子被拒绝并回滚（修复"站在方块上右键被顶出"）；登入即收到 46 槽 WindowItems，创造改物品经 SetSlot 反映，点击有 ConfirmTransaction 回执。
+
+**M3 待做**：ClickWindow 真实拿放/堆叠语义、容器窗口（箱子/工作台/熔炉）、合成、掉落物与拾取、生物生成与 AI、伤害与重生。
+
 
