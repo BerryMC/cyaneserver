@@ -53,15 +53,21 @@ public:
     [[nodiscard]] const net::NetService& network() const noexcept { return *network_; }
     [[nodiscard]] const game::ServerStatus& status() const noexcept { return *status_; }
 
+    // 控制台命令支持
+    [[nodiscard]] double current_tps() const noexcept { return stats_.tps(); }
+    [[nodiscard]] std::uint64_t online_players() const noexcept { return network_->active(); }
+    // 以系统身份向所有在线玩家广播一条聊天消息（控制台 say 命令）
+    void broadcast_system_message(std::string_view message);
+
 private:
     explicit Server(ServerConfig config);
 
     void tick();
-    void report_status();
 
     ServerConfig config_;
     std::unique_ptr<game::ServerStatus> status_;
     std::unique_ptr<entity::PlayerManager> player_manager_;
+    std::unique_ptr<net::PlayerHub> hub_;
     std::unique_ptr<world::World> world_;
     std::unique_ptr<net::NetService> network_;
     std::unique_ptr<ThreadPool> workers_;

@@ -5,6 +5,8 @@
 
 #include "cyane/core/log.hpp"
 #include "cyane/generated/registry_meta.hpp"
+#include "cyane/proto/json.hpp"
+#include "cyane/proto/packet_ids.hpp"
 
 namespace cyane {
 namespace {
@@ -160,6 +162,8 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.disconnect_message = "CyaneServer: world system not implemented yet";
     server->player_manager_ = std::make_unique<entity::PlayerManager>();
     context.player_manager = server->player_manager_.get();
+    server->hub_ = std::make_unique<net::PlayerHub>();
+    context.hub = server->hub_.get();
     server->world_ = std::make_unique<world::World>();
     context.world = server->world_.get();
     context.view_distance = server->config_.view_distance;
@@ -193,9 +197,9 @@ int Server::run(std::uint64_t max_ticks) {
         stats_.record(elapsed_nanos(tick_start));
         ticker.wait_next();
 
-        if (ticker.tick() % (rate * 10) == 0) {
+        // 每秒结算一次 TPS 窗口，供 /tps 命令读取（不再打印刷屏日志）
+        if (ticker.tick() % rate == 0) {
             stats_.complete_second();
-            report_status();
         }
         if (max_ticks != 0 && ticker.tick() >= max_ticks) {
             break;
@@ -219,16 +223,12 @@ void Server::tick() {
     status_->set_online(static_cast<std::int32_t>(network_->active()));
 }
 
-void Server::report_status() {
-    const auto workers = workers_->stats();
-    log::debug("tps {:.1f} | tick avg {:.3f}ms max {:.3f}ms | total {} | connections {} | workers done {} busy {:.1f}%",
-              stats_.tps(),
-              nanos_to_ms(stats_.avg_nanos()),
-              nanos_to_ms(stats_.max_nanos()),
-              stats_.total_ticks(),
-              network_->active(),
-              workers.executed,
-              workers.busy_nanos == 0 ? 0.0 : 100.0 * static_cast<double>(workers.busy_nanos) / 1e9);
+void Server::broadcast_system_message(std::string_view message) {
+    // 以聊天框消息广播给所有在线玩家（position=0）
+    ByteWriter chat;
+    chat.string(proto::chat_text(message));
+    chat.u8(0);
+    hub_->broadcast_all(proto::play_cb::kChatMessage, chat.data());
 }
 
 }

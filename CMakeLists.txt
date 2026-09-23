@@ -29,8 +29,13 @@ target_compile_options(cyane_flags INTERFACE ${CYANE_WARNINGS} ${CYANE_OPT_FLAGS
 target_compile_definitions(cyane_flags INTERFACE ${CYANE_DEFINES})
 
 if(CYANE_LTO)
-  target_compile_options(cyane_flags INTERFACE -flto=thin)
-  target_link_options(cyane_flags INTERFACE -flto=thin)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(cyane_flags INTERFACE -flto)
+    target_link_options(cyane_flags INTERFACE -flto)
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(cyane_flags INTERFACE -flto=auto)
+    target_link_options(cyane_flags INTERFACE -flto=auto)
+  endif()
 endif()
 
 if(CYANE_SANITIZE)

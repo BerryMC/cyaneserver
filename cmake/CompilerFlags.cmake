@@ -15,8 +15,10 @@ set(CYANE_WARNINGS
   -Wformat=2
   -Wimplicit-fallthrough
   -Wctad-maybe-unsupported
-  -Wdeprecated-copy-with-user-provided-dtor
 )
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  list(APPEND CYANE_WARNINGS -Wdeprecated-copy-with-user-provided-dtor)
+endif()
 
 set(CYANE_DEFINES)
 

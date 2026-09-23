@@ -8,6 +8,11 @@ out/
 cmake-build-*/
 compile_commands.json
 logs/
+# 源码根目录内的 CMake 生成物（应使用 build/ 目录构建）
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+/Makefile
 
 # 生成物（由 tools/ 重建，不入库）
 java/build/
@@ -21,3 +26,7 @@ java/build/
 .cache/
 *.swp
 .DS_Store
+
+# Python 缓存
+__pycache__/
+*.pyc

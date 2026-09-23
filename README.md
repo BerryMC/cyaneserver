@@ -412,8 +412,8 @@ JVM 嵌入、`cyane-bukkit.jar` 核心子集、第三方类路径（§5.3）、�
 - [x] ABI 编译链路验证（`javac -cp spigot.jar` 编译含 NMS 的类通过）
 - [x] 架构、兼容策略与里程碑规划（本文档）
 - [x] **M0 工程骨架**
-- [x] **M1 协议与连接（M1a：Handshake/Status/Ping 已与原版逐字节一致）**
-- [ ] M2 世界与移动
+- [x] **M1 协议与连接（M1a + M1b：Handshake/Status/Ping/加密登录完成）**
+- [~] **M2 世界与移动（Play 状态机与登录后包序列已通，Chunk Data/移动同步进行中）**
 - [ ] M3 玩法基础
 - [ ] M4 插件基座
 - [ ] M5 Bukkit API 覆盖扩展
@@ -470,4 +470,31 @@ python3 tools/probe_status.py 127.0.0.1 25599   # 打原版 oracle（jars/vanill
 | 测试 | 76 个用例全绿（ASan/UBSan 亦全绿） |
 
 **验证结论**：状态响应（Handshake→Status→Ping→Pong）与原版 1.12.2 服务端**逐字节一致**；登录流程与原版行为对照（offline 序列 `SetCompression→LoginSuccess`、online 的 `EncryptionRequest` 字段布局与 162 字节 RSA 公钥）；**M1b 加密登录实现完成**：AES-128-CFB8 会话密钥协商、RSA-1024 解密、压缩启用（SetCompression→LoginSuccess）、`SessionService` 会话验证，76 个测试全绿。协议不匹配给出原版同款 `Outdated client!`。
+
+### M2 进展（Play 包序列打通）
+
+登录成功后进入 Play 状态并按原版顺序下发一整套初始化包（`tools/probe_login_full.py` 逐包验证）：
+
+```
+0x03 SetCompression   阈值 256，先于 LoginSuccess，之后启用压缩
+0x02 LoginSuccess     UUID(36 位带连字符) + 用户名
+0x23 JoinGame         int entityId | byte gameMode | int dimension | byte difficulty
+                      | byte maxPlayers | string levelType | bool reducedDebug
+0x46 SpawnPosition    position long（x/y/z 打包）
+0x2E PlayerInfo       action=0 | count | UUID(16 字节二进制) | name | props | gameMode | ping | hasDisplayName
+0x41 UpdateHealth     float health | varint food | float saturation
+0x47 TimeUpdate       long worldAge | long timeOfDay
+0x1A Disconnect       世界系统未实现，登录后主动断开并说明
+```
+
+关键修复（对照 spigot 1.12.2 `EnumProtocol` 权威表与 Minecraft-Console-Client 协议实现）：
+
+- **包 ID 全量对齐**：`packet_ids.hpp` 的 play_cb/play_sb 按 `EnumProtocol` 注册顺序重写（JoinGame=0x23、PlayerInfo=0x2E、SpawnPosition=0x46 等）。
+- **JoinGame 字段**：entityId/dimension 用 `int`（非 varint），与 `PacketPlayOutLogin.b` 一致。
+- **PlayerInfo UUID**：改为 16 字节二进制而非字符串——此前的 40 字符双连字符 UUID 是 `108 > 64` 报错的根因。
+- **SpawnPosition**：单个 position long。
+- **帧解析**：`process_inbox` 用长度前缀 + `decode_frame`，正确处理半包/粘包与压缩阈值切换。
+- **握手完整解析** protocol/host/port/nextState，消除 `unknown state`。
+
+76 个测试全绿；`tools/probe_login_full.py` 完整解析全部 8 个包。
 

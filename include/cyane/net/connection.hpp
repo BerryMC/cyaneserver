@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
 #include "cyane/core/bytes.hpp"
 #include "cyane/crypto/cipher.hpp"
@@ -14,6 +15,7 @@
 #include "cyane/proto/frame.hpp"
 #include "cyane/proto/packet_ids.hpp"
 #include "cyane/entity/player_manager.hpp"
+#include "cyane/net/player_hub.hpp"
 #include "cyane/world/world.hpp"
 
 namespace cyane::net {
@@ -37,6 +39,7 @@ struct ConnectionContext {
     std::int32_t compression_threshold{proto::kDefaultCompressionThreshold};
     std::string disconnect_message{"CyaneServer"};
     entity::PlayerManager* player_manager{nullptr};
+    PlayerHub* hub{nullptr};
     cyane::world::World* world{nullptr};
     std::int32_t view_distance{10};
     std::int32_t max_players{20};
@@ -60,6 +63,9 @@ public:
     void send_packet(std::int32_t packet_id, ByteSpan fields);
     void disconnect(std::string_view reason);
 
+    // 由所属 reactor 线程周期调用（sweep 时）：驱动 KeepAlive 与超时检测
+    void tick(std::uint64_t now_ms);
+
     static constexpr std::size_t kReadChunk = 16 * 1024;
     static constexpr std::size_t kMaxInboxBytes = static_cast<std::size_t>(proto::kMaxFrameBytes) + kReadChunk;
     static constexpr std::size_t kOutboxHighWater = 1U << 20;
@@ -72,16 +78,31 @@ private:
     [[nodiscard]] bool handle_status(std::int32_t packet_id, ByteSpan payload);
     [[nodiscard]] bool handle_login(std::int32_t packet_id, ByteSpan payload);
     [[nodiscard]] bool handle_play(std::int32_t packet_id, ByteSpan payload);
-    [[nodiscard]] bool handle_play_keepalive();
+    [[nodiscard]] bool handle_play_keepalive(ByteSpan payload);
     [[nodiscard]] bool handle_play_position(std::int32_t packet_id, ByteSpan payload);
+    [[nodiscard]] bool handle_play_entity_action(ByteSpan payload);
     [[nodiscard]] bool handle_play_chat(ByteSpan payload);
-    [[nodiscard]] bool handle_play_chunk_request(ByteSpan payload);
-    void update_player_position(entity::Position pos);
     void send_spawn_player();
+    // 按玩家所在区块与视距，加载缺失区块、卸载出界区块
+    void update_view(world::ChunkPos center);
+    void send_chunk(world::ChunkPos pos);
+    void unload_chunk(world::ChunkPos pos);
+    // 多人可见性：广播自己、补发他人、投递收件箱
+    void broadcast_spawn();
+    void spawn_existing_players();
+    void broadcast_despawn();
+    void drain_mailbox();
     [[nodiscard]] bool handle_login_start(ByteSpan payload);
     [[nodiscard]] bool handle_encryption_response(ByteSpan payload);
     void send_encryption_request();
     void finish_login(std::string uuid_with_dashes);
+    void send_login_success(std::string uuid_with_dashes);
+    void send_join_game();
+    void send_world_state();
+    void send_initial_teleport();
+    void register_in_hub();
+    void broadcast_movement(const entity::Position& pos);
+    [[nodiscard]] entity::Position spawn_point() const noexcept;
     void enable_cipher(ByteSpan session_key);
     void flush_outbox();
     void set_writable(bool writable);
@@ -94,11 +115,32 @@ private:
     proto::State state_{proto::State::handshake};
     std::string username_;
     std::int32_t protocol_version_{0};
-    std::int32_t compression_threshold_{-1};
+    std::int32_t compression_threshold_{-1};  // 当前生效阈值，-1 表示未启用压缩
     Bytes verify_token_;
-    std::uint32_t keepalive_id_{0};
     std::int32_t teleport_id_{0};
     std::uint32_t player_id_{0};
+
+    // KeepAlive 保活：进入 play 后每 kKeepAliveIntervalMs 发一个带 id 的心跳，
+    // 客户端须在 kKeepAliveTimeoutMs 内回同一 id，否则断开。
+    std::int64_t last_keepalive_id_{0};
+    std::uint64_t last_keepalive_sent_ms_{0};
+    std::uint64_t last_keepalive_recv_ms_{0};
+    bool awaiting_keepalive_{false};
+    static constexpr std::uint64_t kKeepAliveIntervalMs = 10'000;
+    static constexpr std::uint64_t kKeepAliveTimeoutMs = 30'000;
+
+    // 玩家动作状态（潜行/疾跑），供后续移动广播与碰撞使用
+    bool sneaking_{false};
+    bool sprinting_{false};
+
+    // 已发送给客户端的区块集合，与玩家所在区块 + 视距一同维护
+    std::unordered_set<std::int64_t> loaded_chunks_;
+    world::ChunkPos last_center_{};
+    bool has_center_{false};
+
+    // 多人广播：本连接在 hub 中的条目（含收件箱），进入 play 后有效
+    std::shared_ptr<PlayerHub::Entry> hub_entry_;
+    std::array<std::uint8_t, 16> uuid_bytes_{};
     entity::Position player_pos_{};
 
     std::unique_ptr<crypto::StreamCipher> decrypt_cipher_;

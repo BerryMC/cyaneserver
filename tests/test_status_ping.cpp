@@ -130,7 +130,7 @@ CYANE_TEST(integration_handshake_status_ping_pong) {
     CYANE_CHECK_EQ(pong_reader.i64().value_or(0), 0x1122334455667788LL);
 }
 
-CYANE_TEST(integration_login_start_gets_disconnect) {
+CYANE_TEST(integration_login_start_enters_world) {
     auto server = make_server("online_mode = false\n");
     CYANE_CHECK(server != nullptr);
     if (server == nullptr || !server->ready()) {
@@ -151,6 +151,7 @@ CYANE_TEST(integration_login_start_gets_disconnect) {
     cyane::append(request, frame_with(cyane::proto::login_sb::kLoginStart, login));
     CYANE_CHECK(client->send_bytes(cyane::ByteSpan{request}));
 
+    // 首包若是 SetCompression，则读取阈值并切到压缩帧
     auto response = client->receive_packet();
     if (!response) {
         return;
@@ -171,32 +172,34 @@ CYANE_TEST(integration_login_start_gets_disconnect) {
     CYANE_CHECK_EQ(name, "Notch");
     CYANE_CHECK_EQ(uuid.size(), 36u);
 
-    // Skip play packets until Disconnect (JoinGame, SpawnPosition, PlayerInfo, UpdateHealth, etc.)
-    auto packet = client->receive_compressed_packet();
-    while (packet) {
-        cyane::ByteReader pr{*packet};
-        std::int32_t id = pr.varint().value_or(-1);
-        if (id == cyane::proto::play_cb::kJoinGame ||
-            id == cyane::proto::play_cb::kSpawnPosition ||
-            id == cyane::proto::play_cb::kPlayerInfo ||
-            id == cyane::proto::play_cb::kUpdateHealth ||
-            id == cyane::proto::play_cb::kTimeUpdate) {
-            packet = client->receive_compressed_packet();
-            continue;
-        }
-        if (id == cyane::proto::play_cb::kDisconnect) {
+    // 进入 play：应至少看到 JoinGame、ChunkData、PlayerPositionLook，且不断开
+    bool saw_join_game = false;
+    bool saw_chunk = false;
+    bool saw_position_look = false;
+    bool saw_disconnect = false;
+    for (int i = 0; i < 400; ++i) {
+        auto packet = client->receive_compressed_packet();
+        if (!packet) {
             break;
         }
-        break;
+        cyane::ByteReader pr{*packet};
+        const std::int32_t id = pr.varint().value_or(-1);
+        if (id == cyane::proto::play_cb::kJoinGame) {
+            saw_join_game = true;
+        } else if (id == cyane::proto::play_cb::kChunkData) {
+            saw_chunk = true;
+        } else if (id == cyane::proto::play_cb::kPlayerPositionLook) {
+            saw_position_look = true;
+            break;  // 位置同步是初始化序列的收尾包
+        } else if (id == cyane::proto::play_cb::kDisconnect) {
+            saw_disconnect = true;
+            break;
+        }
     }
-    CYANE_CHECK(packet.has_value());
-    if (!packet) {
-        return;
-    }
-    cyane::ByteReader dr{*packet};
-    CYANE_CHECK_EQ(dr.varint().value_or(-1), cyane::proto::play_cb::kDisconnect);
-    const std::string reason = dr.string().value_or("");
-    CYANE_CHECK(reason.find("world system not implemented") != std::string::npos);
+    CYANE_CHECK(saw_join_game);
+    CYANE_CHECK(saw_chunk);
+    CYANE_CHECK(saw_position_look);
+    CYANE_CHECK(!saw_disconnect);
 }
 
 CYANE_TEST(integration_old_protocol_gets_outdated_message) {

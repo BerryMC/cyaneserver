@@ -13,5 +13,5 @@ worker_threads = 0
 world_dir = "world"
 
 [log]
-level = "info"
+level = "debug"
 file = "logs/latest.log"

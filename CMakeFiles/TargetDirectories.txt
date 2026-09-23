@@ -1,2 +1,0 @@
-/home/cycy/code/cyaneserver/CMakeFiles/edit_cache.dir
-/home/cycy/code/cyaneserver/CMakeFiles/rebuild_cache.dir

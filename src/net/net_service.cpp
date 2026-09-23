@@ -71,6 +71,16 @@ public:
     void on_error() override {}
 
     void sweep() {
+        // 先驱动每连接的周期逻辑（KeepAlive/超时），再回收已死连接
+        const std::uint64_t now_ms = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        for (auto& connection : connections_) {
+            if (connection->alive()) {
+                connection->tick(now_ms);
+            }
+        }
         const auto removed = std::erase_if(connections_, [](const std::unique_ptr<Connection>& connection) {
             return !connection->alive();
         });

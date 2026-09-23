@@ -122,8 +122,8 @@ def describe(packet_id: int, body: bytes) -> dict:
             if after < len(body):
                 has_display = body[after]
                 info["has_display_name"] = has_display
-                if has_display != 0 && after + 1 < len(body):
-                    # Parse display name if present
+                after += 1
+                if has_display != 0 and after < len(body):
                     nl, after = parse_varint(body, after)
                     info["display_name"] = body[after : after + nl].decode("utf-8", "replace")
     elif packet_id == 0x41:  # UpdateHealth

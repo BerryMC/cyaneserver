@@ -2,9 +2,11 @@
 #include <charconv>
 #include <csignal>
 #include <cstdint>
+#include <iostream>
 #include <print>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "cyane/core/config.hpp"
 #include "cyane/core/error.hpp"
@@ -33,6 +35,57 @@ void print_usage() {
     const char* const end = begin + text.size();
     const auto [ptr, ec] = std::from_chars(begin, end, out);
     return ec == std::errc{} && ptr == end;
+}
+
+// 去掉首尾空白
+[[nodiscard]] std::string_view trim(std::string_view text) noexcept {
+    const auto first = text.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos) {
+        return {};
+    }
+    const auto last = text.find_last_not_of(" \t\r\n");
+    return text.substr(first, last - first + 1);
+}
+
+// 处理一条控制台命令，返回 false 表示需要停止服务器
+[[nodiscard]] bool handle_console_command(cyane::Server& server, std::string_view line) {
+    line = trim(line);
+    if (line.empty()) {
+        return true;
+    }
+    // 命令词 = 第一个空格前
+    const auto space = line.find(' ');
+    const std::string_view cmd = line.substr(0, space);
+    const std::string_view rest = space == std::string_view::npos ? std::string_view{} : trim(line.substr(space + 1));
+
+    if (cmd == "help") {
+        std::print("commands:\n");
+        std::print("  help          显示此帮助\n");
+        std::print("  tps           显示当前 TPS 与在线人数\n");
+        std::print("  say <消息>    以服务器身份向所有玩家广播\n");
+        std::print("  stop          停止服务器\n");
+        return true;
+    }
+    if (cmd == "tps") {
+        std::print("TPS: {:.1f} | online: {}\n", server.current_tps(), server.online_players());
+        return true;
+    }
+    if (cmd == "say") {
+        if (rest.empty()) {
+            std::print("usage: say <message>\n");
+            return true;
+        }
+        const std::string message = std::format("[Server] {}", rest);
+        server.broadcast_system_message(message);
+        std::print("{}\n", message);
+        return true;
+    }
+    if (cmd == "stop") {
+        std::print("stopping server...\n");
+        return false;
+    }
+    std::print("unknown command: {} (try 'help')\n", cmd);
+    return true;
 }
 
 }
@@ -98,8 +151,26 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
-    const int code = running->run(max_ticks);
+    // tick 循环放到后台线程，主线程读取控制台命令
+    int code = 0;
+    std::thread runner{[running, max_ticks, &code] { code = running->run(max_ticks); }};
+
+    // 仅在没有固定 tick 上限（即长期运行）时启用交互式控制台
+    if (max_ticks == 0) {
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            if (!handle_console_command(*running, line)) {
+                running->request_stop();
+                break;
+            }
+        }
+        // stdin 关闭（EOF/管道）也让服务器优雅停机
+        running->request_stop();
+    }
+
+    runner.join();
     g_server.store(nullptr, std::memory_order_relaxed);
     cyane::log::stop();
     return code;
 }
+
