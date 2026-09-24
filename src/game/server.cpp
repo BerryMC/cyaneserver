@@ -324,4 +324,8 @@ bool Server::deop_player(std::string_view name) {
     return op_manager_->deop_player(uuid_str);
 }
 
+std::vector<std::string> Server::player_names() const {
+    return hub_->all_player_names();
+}
+
 }

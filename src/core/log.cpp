@@ -34,6 +34,8 @@ struct State {
     std::mutex out_mutex;
     std::FILE* stream{nullptr};
     bool console{true};
+    void (*console_before)() noexcept {nullptr};
+    void (*console_after)() noexcept {nullptr};
     std::jthread flusher;
 };
 
@@ -84,8 +86,14 @@ void write_out(State& s, std::string& buffer) {
         std::fflush(s.stream);
     }
     if (s.console) {
+        if (s.console_before != nullptr) {
+            s.console_before();
+        }
         std::fwrite(buffer.data(), 1, buffer.size(), stdout);
         std::fflush(stdout);
+        if (s.console_after != nullptr) {
+            s.console_after();
+        }
     }
     buffer.clear();
 }
@@ -220,6 +228,16 @@ void set_thread_name(std::string_view name) noexcept {
     std::memcpy(slot.data(), name.data(), count);
     std::fill(slot.begin() + static_cast<std::ptrdiff_t>(count), slot.end(), '\0');
 }
+
+void set_console_hooks(void (*before)() noexcept, void (*after)() noexcept) noexcept {
+    State& s = state();
+    const std::lock_guard<std::mutex> lock{s.out_mutex};
+    s.console_before = before;
+    s.console_after = after;
+}
+
+void console_lock() noexcept { state().out_mutex.lock(); }
+void console_unlock() noexcept { state().out_mutex.unlock(); }
 
 void write(Level lvl, std::string_view text) noexcept {
     Record record;

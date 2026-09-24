@@ -2,12 +2,16 @@
 #include <charconv>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <print>
 #include <string>
 #include <string_view>
 #include <thread>
+
+#include <termios.h>
+#include <unistd.h>
 
 #include "cyane/core/config.hpp"
 #include "cyane/core/error.hpp"
@@ -18,6 +22,37 @@
 namespace {
 
 constexpr std::string_view kDefaultConfig = "config/server.toml";
+constexpr std::string_view kPrompt = "\033[36m> \033[0m";
+
+// ANSI 颜色
+constexpr std::string_view kReset  = "\033[0m";
+constexpr std::string_view kGreen  = "\033[32m";
+constexpr std::string_view kYellow = "\033[33m";
+constexpr std::string_view kCyan   = "\033[36m";
+constexpr std::string_view kRed    = "\033[31m";
+constexpr std::string_view kBold   = "\033[1m";
+constexpr std::string_view kGray   = "\033[90m";
+
+// 交互式行编辑器与日志刷新共享的输入行状态。
+// 所有访问都在 log::console_lock() 保护下进行（钩子由 flusher 持锁时调用）。
+std::string g_input_line;
+bool g_prompt_active = false;
+
+// 日志写出前擦除当前输入行
+void console_before_log() noexcept {
+    if (g_prompt_active) {
+        std::fputs("\r\033[K", stdout);
+    }
+}
+
+// 日志写出后重绘提示符与已输入内容
+void console_after_log() noexcept {
+    if (g_prompt_active) {
+        std::fwrite(kPrompt.data(), 1, kPrompt.size(), stdout);
+        std::fwrite(g_input_line.data(), 1, g_input_line.size(), stdout);
+        std::fflush(stdout);
+    }
+}
 
 // 确保配置目录存在；若目录创建失败则写入日志但不致命
 void ensure_config_dir(std::string_view config_path) {
@@ -70,41 +105,54 @@ void print_usage() {
     const std::string_view cmd = line.substr(0, space);
     const std::string_view rest = space == std::string_view::npos ? std::string_view{} : trim(line.substr(space + 1));
 
-    if (cmd == "help") {
-        std::print("commands:\n");
-        std::print("  help            显示此帮助\n");
-        std::print("  tps             显示当前 TPS 与在线人数\n");
-        std::print("  say <消息>      以服务器身份向所有玩家广播\n");
-        std::print("  kill <玩家名>   杀死指定在线玩家\n");
-        std::print("  gamemode <模式> <玩家名>  切换游戏模式\n");
-        std::print("  op <玩家名>     将玩家设为 OP\n");
-        std::print("  deop <玩家名>   撤销玩家 OP\n");
-        std::print("  stop            停止服务器\n");
+    if (cmd == "help" || cmd == "?") {
+        std::print("{}命令列表:{}\n", kBold, kReset);
+        std::print("  {}help{}            显示此帮助\n", kCyan, kReset);
+        std::print("  {}tps{}             显示当前 TPS 与在线人数\n", kCyan, kReset);
+        std::print("  {}list{}            显示在线玩家列表\n", kCyan, kReset);
+        std::print("  {}say{} <消息>      以服务器身份向所有玩家广播\n", kCyan, kReset);
+        std::print("  {}kill{} <玩家名>   杀死指定在线玩家\n", kCyan, kReset);
+        std::print("  {}gamemode{} <模式> <玩家名>  切换游戏模式\n", kCyan, kReset);
+        std::print("  {}op{} <玩家名>     将玩家设为 OP\n", kCyan, kReset);
+        std::print("  {}deop{} <玩家名>   撤销玩家 OP\n", kCyan, kReset);
+        std::print("  {}stop{}            停止服务器\n", kCyan, kReset);
         return true;
     }
     if (cmd == "tps") {
-        std::print("TPS: {:.1f} | online: {}\n", server.current_tps(), server.online_players());
+        std::print("{}TPS:{} {:.1f} {}|{} {}online:{} {}\n",
+                   kGreen, kReset, server.current_tps(),
+                   kGray, kReset,
+                   kGreen, kReset, server.online_players());
+        return true;
+    }
+    if (cmd == "list") {
+        const auto names = server.player_names();
+        std::print("{}online ({}):{}", kGreen, names.size(), kReset);
+        for (const auto& name : names) {
+            std::print(" {}{}{}", kCyan, name, kReset);
+        }
+        std::print("\n");
         return true;
     }
     if (cmd == "say") {
         if (rest.empty()) {
-            std::print("usage: say <message>\n");
+            std::print("{}usage:{} say <message>\n", kYellow, kReset);
             return true;
         }
         const std::string message = std::format("[Server] {}", rest);
         server.broadcast_system_message(message);
-        std::print("{}\n", message);
+        std::print("{}[Server]{} {}\n", kYellow, kReset, rest);
         return true;
     }
     if (cmd == "kill") {
         if (rest.empty()) {
-            std::print("usage: kill <player>\n");
+            std::print("{}usage:{} kill <player>\n", kYellow, kReset);
             return true;
         }
         if (server.kill_player_by_name(rest)) {
-            std::print("killed {}\n", rest);
+            std::print("{}killed{} {}\n", kRed, kReset, rest);
         } else {
-            std::print("player not found: {}\n", rest);
+            std::print("{}player not found:{} {}\n", kRed, kReset, rest);
         }
         return true;
     }
@@ -113,46 +161,121 @@ void print_usage() {
         const std::string_view mode = rest.substr(0, space2);
         const std::string_view target = space2 == std::string_view::npos ? std::string_view{} : trim(rest.substr(space2 + 1));
         if (mode.empty() || target.empty()) {
-            std::print("usage: gamemode <mode> <player>\n");
+            std::print("{}usage:{} gamemode <mode> <player>\n", kYellow, kReset);
             return true;
         }
         if (server.set_player_gamemode(target, mode)) {
-            std::print("{} 的游戏模式已切换为 {}\n", target, mode);
+            std::print("{}{}{} -> {}{}{}\n", kCyan, target, kReset, kGreen, mode, kReset);
         } else {
-            std::print("玩家不在线或模式无效: {}\n", target);
+            std::print("{}player not found or invalid mode:{} {}\n", kRed, kReset, target);
         }
         return true;
     }
     if (cmd == "op") {
         if (rest.empty()) {
-            std::print("usage: op <player>\n");
+            std::print("{}usage:{} op <player>\n", kYellow, kReset);
             return true;
         }
         if (server.op_player(rest)) {
-            std::print("已将 {} 设为 OP\n", rest);
+            std::print("{}opped{} {}\n", kGreen, kReset, rest);
         } else {
-            std::print("玩家不在线: {}\n", rest);
+            std::print("{}player not found:{} {}\n", kRed, kReset, rest);
         }
         return true;
     }
     if (cmd == "deop") {
         if (rest.empty()) {
-            std::print("usage: deop <player>\n");
+            std::print("{}usage:{} deop <player>\n", kYellow, kReset);
             return true;
         }
         if (server.deop_player(rest)) {
-            std::print("已撤销 {} 的 OP 权限\n", rest);
+            std::print("{}deopped{} {}\n", kGreen, kReset, rest);
         } else {
-            std::print("玩家不在线或不是 OP: {}\n", rest);
+            std::print("{}player not found or not op:{} {}\n", kRed, kReset, rest);
         }
         return true;
     }
     if (cmd == "stop") {
-        std::print("stopping server...\n");
+        std::print("{}stopping server...{}\n", kYellow, kReset);
         return false;
     }
-    std::print("unknown command: {} (try 'help')\n", cmd);
+    std::print("{}unknown command:{} {} {}(try 'help'){}\n", kRed, kReset, cmd, kGray, kReset);
     return true;
+}
+
+// 重绘当前输入行（调用方须持有 console_lock）
+void redraw_input_locked() noexcept {
+    std::fputs("\r\033[K", stdout);
+    std::fwrite(kPrompt.data(), 1, kPrompt.size(), stdout);
+    std::fwrite(g_input_line.data(), 1, g_input_line.size(), stdout);
+    std::fflush(stdout);
+}
+
+// 原始模式下的交互式行编辑：提示符、逐字符回显、退格；日志滚动时自动重绘
+void run_line_editor(cyane::Server& server) {
+    termios original{};
+    if (::tcgetattr(STDIN_FILENO, &original) != 0) {
+        return;
+    }
+    termios raw = original;
+    raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    ::tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+
+    cyane::log::console_lock();
+    g_prompt_active = true;
+    redraw_input_locked();
+    cyane::log::console_unlock();
+
+    char ch = 0;
+    while (::read(STDIN_FILENO, &ch, 1) == 1) {
+        if (ch == '\n' || ch == '\r') {
+            cyane::log::console_lock();
+            std::fputc('\n', stdout);
+            std::fflush(stdout);
+            std::string line = std::move(g_input_line);
+            g_input_line.clear();
+            cyane::log::console_unlock();
+
+            if (!handle_console_command(server, line)) {
+                server.request_stop();
+                break;
+            }
+            cyane::log::console_lock();
+            redraw_input_locked();
+            cyane::log::console_unlock();
+        } else if (ch == 0x7f || ch == 0x08) {  // 退格
+            cyane::log::console_lock();
+            if (!g_input_line.empty()) {
+                // 按字节回删；命令均为 ASCII，够用
+                g_input_line.pop_back();
+                redraw_input_locked();
+            }
+            cyane::log::console_unlock();
+        } else if (ch == 0x03) {  // Ctrl+C
+            server.request_stop();
+            break;
+        } else if (ch == 0x04) {  // Ctrl+D
+            if (g_input_line.empty()) {
+                server.request_stop();
+                break;
+            }
+        } else if (static_cast<unsigned char>(ch) >= 0x20) {  // 可打印字符
+            cyane::log::console_lock();
+            g_input_line.push_back(ch);
+            std::fputc(ch, stdout);
+            std::fflush(stdout);
+            cyane::log::console_unlock();
+        }
+    }
+
+    cyane::log::console_lock();
+    g_prompt_active = false;
+    std::fputs("\r\033[K", stdout);
+    std::fflush(stdout);
+    cyane::log::console_unlock();
+    ::tcsetattr(STDIN_FILENO, TCSANOW, &original);
 }
 
 }
@@ -219,11 +342,28 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
+    // 启动横幅
+    std::print("{}{}\n", kCyan, kBold);
+    std::print("   ______                       \n");
+    std::print("  / ____/_ _____ _____  ___     \n");
+    std::print(" / /   / // / _ `/ _ \\/ -_)    \n");
+    std::print(" \\____/\\_, /\\_,_/_//_/\\__/  {}CyaneServer {}{}\n",
+               "", kReset, cyane::kServerVersion);
+    std::print("{}     /___/                    {}Minecraft {} (protocol {}){}\n",
+               kCyan, kGray, cyane::generated::kMinecraftVersion,
+               cyane::generated::kProtocolVersion, kReset);
+    std::print("\n");
+
     // 交互式控制台读取放到后台线程；tick 循环留在主线程，
     // 这样 SIGINT 触发 request_stop 后 run() 立即返回并退出进程，
-    // 不会被卡在 std::getline 上的读取线程阻塞。
+    // 不会被卡在读取上的读取线程阻塞。
+    const bool interactive = max_ticks == 0 && ::isatty(STDIN_FILENO) != 0;
     std::thread console;
-    if (max_ticks == 0) {
+    if (interactive) {
+        cyane::log::set_console_hooks(console_before_log, console_after_log);
+        console = std::thread{[running] { run_line_editor(*running); }};
+    } else if (max_ticks == 0) {
+        // 非 TTY（管道/重定向）：退回逐行读取，无提示符与行编辑
         console = std::thread{[running] {
             std::string line;
             while (std::getline(std::cin, line)) {
@@ -238,7 +378,8 @@ int main(int argc, char** argv) {
     const int code = running->run(max_ticks);
 
     g_server.store(nullptr, std::memory_order_relaxed);
-    // 读取线程可能仍阻塞在 getline 上，无法唤醒，直接 detach 让进程退出
+    cyane::log::set_console_hooks(nullptr, nullptr);
+    // 读取线程可能仍阻塞在输入上，无法唤醒，直接 detach 让进程退出
     if (console.joinable()) {
         console.detach();
     }

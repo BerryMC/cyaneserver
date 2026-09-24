@@ -28,6 +28,7 @@ config/*.local.toml
 .vscode/
 .idea/
 .cache/
+.zcodeignore
 *.swp
 .DS_Store
 

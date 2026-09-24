@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "cyane/core/config.hpp"
 #include "cyane/core/error.hpp"
@@ -69,6 +70,8 @@ public:
     [[nodiscard]] bool teleport_player(std::string_view name);
     [[nodiscard]] bool op_player(std::string_view name);
     [[nodiscard]] bool deop_player(std::string_view name);
+    // 在线玩家名列表（控制台 list 命令）
+    [[nodiscard]] std::vector<std::string> player_names() const;
 
 private:
     explicit Server(ServerConfig config);

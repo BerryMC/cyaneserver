@@ -73,6 +73,13 @@ void set_level(Level level) noexcept;
 [[nodiscard]] Stats stats() noexcept;
 void set_thread_name(std::string_view name) noexcept;
 
+// 交互式控制台协调（可选）。before/after 在日志批量写 stdout 期间、持有输出锁时被调用：
+// before 擦除当前输入行，after 重绘提示符与输入缓冲。钩子内不得再产生日志。
+void set_console_hooks(void (*before)() noexcept, void (*after)() noexcept) noexcept;
+// 获取/释放输出锁，供行编辑器回显时与日志刷新串行化（不得在持锁期间产生日志）。
+void console_lock() noexcept;
+void console_unlock() noexcept;
+
 void write(Level level, std::string_view text) noexcept;
 
 template <typename... Args>
