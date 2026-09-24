@@ -20,6 +20,10 @@ java/build/
 *.jar
 !jars/.gitkeep
 
+# 运行时状态（不入库）
+config/ops.json
+config/*.local.toml
+
 # 编辑器 / 系统
 .vscode/
 .idea/

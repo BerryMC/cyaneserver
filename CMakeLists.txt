@@ -105,6 +105,7 @@ add_library(cyane::net ALIAS cyane_net)
 add_library(cyane_game
   src/game/server.cpp
   src/game/status.cpp
+  src/game/op_manager.cpp
   src/entity/entity.cpp
   "${CYANE_REGISTRY_HEADER}"
 )

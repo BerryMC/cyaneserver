@@ -129,6 +129,24 @@ std::array<std::uint8_t, 16> parse_uuid_string(std::string_view dashed) {
     return read == 16 ? out : std::array<std::uint8_t, 16>{};
 }
 
+std::string to_uuid_string(const std::array<std::uint8_t, 16>& bytes) {
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(36);
+    // 8-4-4-4-12 hex chars = 4-2-2-2-6 bytes
+    static constexpr int byte_groups[5] = {4, 2, 2, 2, 6};
+    std::size_t pos = 0;
+    for (int g = 0; g < 5; ++g) {
+        if (g > 0) out += '-';
+        for (int i = 0; i < byte_groups[g]; ++i) {
+            const std::uint8_t b = bytes[pos++];
+            out += hex[b >> 4];
+            out += hex[b & 0x0F];
+        }
+    }
+    return out;
+}
+
 Bytes random_bytes(std::size_t count) {
     Bytes out(count);
     if (RAND_bytes(reinterpret_cast<unsigned char*>(out.data()), static_cast<int>(count)) != 1) {

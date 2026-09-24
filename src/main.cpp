@@ -2,6 +2,7 @@
 #include <charconv>
 #include <csignal>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <print>
 #include <string>
@@ -16,7 +17,19 @@
 
 namespace {
 
-constexpr std::string_view kDefaultConfig = "server.toml";
+constexpr std::string_view kDefaultConfig = "config/server.toml";
+
+// 确保配置目录存在；若目录创建失败则写入日志但不致命
+void ensure_config_dir(std::string_view config_path) {
+    const std::filesystem::path p{config_path};
+    if (p.has_parent_path()) {
+        std::error_code ec;
+        std::filesystem::create_directories(p.parent_path(), ec);
+        if (ec) {
+            std::cerr << "cyane: warning: could not create config dir: " << ec.message() << "\n";
+        }
+    }
+}
 
 std::atomic<cyane::Server*> g_server{nullptr};
 
@@ -53,7 +66,6 @@ void print_usage() {
     if (line.empty()) {
         return true;
     }
-    // 命令词 = 第一个空格前
     const auto space = line.find(' ');
     const std::string_view cmd = line.substr(0, space);
     const std::string_view rest = space == std::string_view::npos ? std::string_view{} : trim(line.substr(space + 1));
@@ -64,6 +76,9 @@ void print_usage() {
         std::print("  tps             显示当前 TPS 与在线人数\n");
         std::print("  say <消息>      以服务器身份向所有玩家广播\n");
         std::print("  kill <玩家名>   杀死指定在线玩家\n");
+        std::print("  gamemode <模式> <玩家名>  切换游戏模式\n");
+        std::print("  op <玩家名>     将玩家设为 OP\n");
+        std::print("  deop <玩家名>   撤销玩家 OP\n");
         std::print("  stop            停止服务器\n");
         return true;
     }
@@ -90,6 +105,45 @@ void print_usage() {
             std::print("killed {}\n", rest);
         } else {
             std::print("player not found: {}\n", rest);
+        }
+        return true;
+    }
+    if (cmd == "gamemode") {
+        const auto space2 = rest.find(' ');
+        const std::string_view mode = rest.substr(0, space2);
+        const std::string_view target = space2 == std::string_view::npos ? std::string_view{} : trim(rest.substr(space2 + 1));
+        if (mode.empty() || target.empty()) {
+            std::print("usage: gamemode <mode> <player>\n");
+            return true;
+        }
+        if (server.set_player_gamemode(target, mode)) {
+            std::print("{} 的游戏模式已切换为 {}\n", target, mode);
+        } else {
+            std::print("玩家不在线或模式无效: {}\n", target);
+        }
+        return true;
+    }
+    if (cmd == "op") {
+        if (rest.empty()) {
+            std::print("usage: op <player>\n");
+            return true;
+        }
+        if (server.op_player(rest)) {
+            std::print("已将 {} 设为 OP\n", rest);
+        } else {
+            std::print("玩家不在线: {}\n", rest);
+        }
+        return true;
+    }
+    if (cmd == "deop") {
+        if (rest.empty()) {
+            std::print("usage: deop <player>\n");
+            return true;
+        }
+        if (server.deop_player(rest)) {
+            std::print("已撤销 {} 的 OP 权限\n", rest);
+        } else {
+            std::print("玩家不在线或不是 OP: {}\n", rest);
         }
         return true;
     }
@@ -136,6 +190,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    ensure_config_dir(config_path);
     auto config = cyane::Config::load_file(config_path);
     if (!config) {
         std::print(stderr, "cyane: {}: {}\n", cyane::to_string(config.error().code), config.error().message);

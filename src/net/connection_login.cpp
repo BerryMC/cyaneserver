@@ -129,6 +129,7 @@ void Connection::finish_login(std::string uuid_with_dashes) {
     }
     // UUID 二进制须在广播前解析，供 PlayerInfo/SpawnPlayer 复用
     uuid_bytes_ = crypto::parse_uuid_string(uuid_with_dashes);
+    uuid_str_ = uuid_with_dashes;
     send_login_success(std::move(uuid_with_dashes));
 
     state_ = proto::State::play;
@@ -170,13 +171,19 @@ void Connection::send_join_game() {
     fields.boolean(false);
     send_packet(proto::play_cb::kJoinGame, fields.data());
 
-    // 创造模式：PlayerAbilities (0x2C) 允许飞行/免疫，客户端才会进入创造交互
+    // 创造/旁观模式：PlayerAbilities (0x2C) 允许飞行
     if (context_.game_mode == proto::game_mode::kCreative) {
         cyane::ByteWriter abilities;
         abilities.u8(proto::abilities::kInvulnerable | proto::abilities::kAllowFlying |
                      proto::abilities::kCreativeMode);
         abilities.f32(0.05f);  // flying speed
         abilities.f32(0.1f);   // field of view modifier
+        send_packet(proto::play_cb::kPlayerAbilities, abilities.data());
+    } else if (context_.game_mode == proto::game_mode::kSpectator) {
+        cyane::ByteWriter abilities;
+        abilities.u8(proto::abilities::kAllowFlying | proto::abilities::kFlying);
+        abilities.f32(0.1f);   // flying speed
+        abilities.f32(0.0f);   // field of view modifier
         send_packet(proto::play_cb::kPlayerAbilities, abilities.data());
     }
 }

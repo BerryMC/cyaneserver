@@ -414,7 +414,7 @@ JVM 嵌入、`cyane-bukkit.jar` 核心子集、第三方类路径（§5.3）、�
 - [x] **M0 工程骨架**
 - [x] **M1 协议与连接（M1a + M1b：Handshake/Status/Ping/加密登录完成）**
 - [x] **M2 世界与移动（超平坦区块、移动同步、多人可见、聊天、KeepAlive、动态区块加载）**
-- [~] **M3 玩法基础（M3a 方块破坏/放置 + M3b 物品栏与窗口同步完成；容器/合成/熔炉/掉落物/生物/伤害重生待做）**
+- [~] **M3 玩法基础（M3a 方块破坏/放置 + M3b 物品栏/窗口 + M3c 真实拿放/伤害/掉落/箱子 + 命令系统/OP/Tab补全 完成；合成/熔炉/生物待做）**
 - [ ] M4 插件基座
 - [ ] M5 Bukkit API 覆盖扩展
 - [ ] M6 NMS shim
@@ -535,6 +535,36 @@ clientbound:
 
 **验证结论**：破坏/放置后写入 World 并持久化——新登入客户端读区块采样一致；放置到玩家碰撞体的格子被拒绝并回滚（修复"站在方块上右键被顶出"）；登入即收到 46 槽 WindowItems，创造改物品经 SetSlot 反映，点击有 ConfirmTransaction 回执。
 
-**M3 待做**：ClickWindow 真实拿放/堆叠语义、容器窗口（箱子/工作台/熔炉）、合成、掉落物与拾取、生物生成与 AI、伤害与重生。
+**M3 待做**：合成系统、熔炉、生物生成与 AI。
+
+### M3d 交付（命令系统 + OP + Tab 补全）
+
+```
+玩家命令（聊天输入 /command）：
+/gamemode <模式> [玩家]    切换游戏模式（自己无需 OP，他人需 OP ≥ 2）
+/tp <玩家>                 传送到指定玩家（需 OP ≥ 2）
+/kill [玩家]               自杀或杀死指定玩家（杀他人需 OP ≥ 2）
+/say <消息>                以服务器身份广播（需 OP ≥ 2）
+/op <玩家>                 授予 OP 权限（需 OP ≥ 4）
+/deop <玩家>               撤销 OP 权限（需 OP ≥ 4）
+/tps                       显示服务器 TPS
+/help                      列出可用命令
+
+控制台命令（stdin 直接输入，无需 /，权限不限）：
+help, tps, say, kill, gamemode, op, deop, stop
+```
+
+| 模块 | 内容 |
+|---|---|
+| `game/op_manager` | OP 权限管理器，`config/ops.json` 持久化 UUID→等级映射，线程安全 |
+| `config/server.toml` | 默认配置路径从根目录改为 `config/server.toml`，新增 `op_file` 选项 |
+| 命令系统 | 玩家和控制台共享同一套命令，玩家侧带 OP 等级权限检查 |
+| Tab 补全 | 处理 1.12.2 serverbound TabComplete（text + assumeCommand + 可选 lookedAtBlock），响应 `matches: string[]varint` |
+| 旁观者模式 | `/gamemode spectator` 广播 PlayerInfo UpdateGameType + PlayerAbilities |
+| `/tp` | 真实传送实现：读取目标玩家坐标 → PlayerPositionLook 包传送 |
+| 工具 | `tools/probe_commands.py`（命令验证）、`tools/probe_tab.py`（Tab 补全验证） |
+| 测试 | 83 个用例全绿 |
+
+**验证结论**：Tab 补全按 1.12.2 协议正确解析（无 transaction_id，响应不含 has_tooltip）；`/g`+Tab 补全 `/gamemode`、`/gamemode `+Tab 补全四种模式、`/tp `+Tab 补全在线玩家名；OP 权限经 ops.json 持久化，`/op`+`/deop` 正常读写；命令权限检查按等级分级。
 
 

@@ -23,6 +23,10 @@
 #include "cyane/net/player_hub.hpp"
 #include "cyane/world/world.hpp"
 
+namespace cyane::game {
+class OpManager;
+}
+
 namespace cyane::net {
 
 // 游戏层注入到网络层的能力，避免 net 反向依赖 game
@@ -47,6 +51,7 @@ struct ConnectionContext {
     PlayerHub* hub{nullptr};
     ItemDropManager* item_drops{nullptr};
     ContainerStore* containers{nullptr};
+    game::OpManager* op_manager{nullptr};
     cyane::world::World* world{nullptr};
     std::int32_t view_distance{10};
     std::int32_t max_players{20};
@@ -90,6 +95,7 @@ private:
     [[nodiscard]] bool handle_play_position(std::int32_t packet_id, ByteSpan payload);
     [[nodiscard]] bool handle_play_entity_action(ByteSpan payload);
     [[nodiscard]] bool handle_play_chat(ByteSpan payload);
+    [[nodiscard]] bool handle_tab_complete(ByteSpan payload);
     [[nodiscard]] bool handle_play_digging(ByteSpan payload);
     [[nodiscard]] bool handle_play_block_place(ByteSpan payload);
     [[nodiscard]] bool handle_play_held_item(ByteSpan payload);
@@ -101,6 +107,8 @@ private:
     void open_chest(std::int64_t chest_key);
     void apply_click(std::int16_t slot, std::uint8_t button, std::int32_t mode);
     void apply_chest_click(std::int16_t slot, std::uint8_t button, std::int32_t mode);
+    // 切换游戏模式（用于 /gamemode 命令），广播 UpdateGameMode 给所有玩家
+    void set_game_mode(std::uint8_t mode);
     // 把 moving 尽量并入 [lo,hi] 槽区间（先叠已有同类，再填空槽），就地更新剩余
     [[nodiscard]] bool merge_into_range(item::ItemStack& moving, std::size_t lo, std::size_t hi);
     void kill_player();
@@ -110,6 +118,10 @@ private:
     // 生成掉落物的两个包（SpawnObject + EntityMetadata）编码到 out_spawn/out_meta
     void encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn, ByteWriter& out_meta) const;
     void send_existing_drops();
+    // 玩家聊天命令处理
+    bool handle_player_command(std::string_view text);
+    // 发送聊天框反馈
+    void send_chat_feedback(std::string_view message);
     void collect_items(std::uint64_t now_ms);
     // 把一个堆叠尽量塞进玩家背包（热区栏优先，再主背包），返回未放下的剩余
     [[nodiscard]] item::ItemStack give_item(item::ItemStack stack);
@@ -192,6 +204,7 @@ private:
     // 多人广播：本连接在 hub 中的条目（含收件箱），进入 play 后有效
     std::shared_ptr<PlayerHub::Entry> hub_entry_;
     std::array<std::uint8_t, 16> uuid_bytes_{};
+    std::string uuid_str_{};
     entity::Position player_pos_{};
 
     std::unique_ptr<crypto::StreamCipher> decrypt_cipher_;

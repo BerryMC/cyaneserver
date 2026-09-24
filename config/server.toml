@@ -8,10 +8,13 @@ online_mode = false
 max_players = 20
 view_distance = 10
 tick_rate = 20
+# survival | creative | spectator
 game_mode = "creative"
 # 0 = 物理核数 - 1
 worker_threads = 0
 world_dir = "world"
+# OP 名单（UUID → 等级 1-4）
+op_file = "config/ops.json"
 
 [log]
 level = "debug"

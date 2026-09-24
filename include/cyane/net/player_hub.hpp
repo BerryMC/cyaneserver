@@ -106,6 +106,18 @@ public:
         return true;
     }
 
+    // 向指定玩家投递一条 play 包（由对方 reactor 线程处理）
+    bool send_to(std::uint32_t target_id, std::int32_t packet_id, ByteSpan payload) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = players_.find(target_id);
+        if (it == players_.end()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
+        it->second->mailbox.push_back(HubMessage{packet_id, Bytes{payload.begin(), payload.end()}});
+        return true;
+    }
+
     // 按玩家名查找 entity id（用于控制台 /kill 等）
     [[nodiscard]] std::uint32_t player_id_by_name(std::string_view name) const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -115,6 +127,28 @@ public:
             }
         }
         return 0;
+    }
+
+    // 按玩家名查找 UUID（用于 /op、/deop）
+    [[nodiscard]] std::optional<std::array<std::uint8_t, 16>> player_uuid_by_name(std::string_view name) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [id, entry] : players_) {
+            if (entry->snapshot.name == name) {
+                return entry->snapshot.uuid;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // 获取所有在线玩家名称（用于 Tab 补全）
+    [[nodiscard]] std::vector<std::string> all_player_names() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::string> out;
+        out.reserve(players_.size());
+        for (const auto& [id, entry] : players_) {
+            out.push_back(entry->snapshot.name);
+        }
+        return out;
     }
 
     // 只投递给所在区块与 (cx,cz) 的切比雪夫距离 ≤ radius 的玩家（方块变更等局部事件）

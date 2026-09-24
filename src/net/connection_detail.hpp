@@ -40,6 +40,15 @@ inline void write_player_info_add(ByteWriter& out, const std::array<std::uint8_t
     out.boolean(false);
 }
 
+// PlayerInfo 更新游戏模式 (action 0x01)
+inline void write_player_info_game_mode(ByteWriter& out, const std::array<std::uint8_t, 16>& uuid,
+                                        std::uint8_t game_mode) {
+    out.varint(proto::play_cb::kPlayerInfoUpdateGameType);
+    out.varint(1);
+    out.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid.data()), uuid.size()});
+    out.varint(static_cast<std::int32_t>(game_mode));
+}
+
 // NamedEntitySpawn (0x05)：varint id | uuid(16) | double x/y/z | byte yaw | byte pitch | metadata(0xff 终止)
 inline void write_named_spawn(ByteWriter& out, std::uint32_t entity_id,
                               const std::array<std::uint8_t, 16>& uuid, double x, double y, double z,

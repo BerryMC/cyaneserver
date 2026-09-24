@@ -18,6 +18,9 @@ namespace cyane::crypto {
 // 8-4-4-4-12 dashed UUID → 16 bytes
 [[nodiscard]] std::array<std::uint8_t, 16> parse_uuid_string(std::string_view dashed);
 
+// 16 bytes → 8-4-4-4-12 dashed UUID
+[[nodiscard]] std::string to_uuid_string(const std::array<std::uint8_t, 16>& bytes);
+
 // 无连字符 32 位 hex → 8-4-4-4-12
 [[nodiscard]] std::string uuid_with_dashes(std::string_view compact);
 

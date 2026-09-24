@@ -1,9 +1,11 @@
 #include "cyane/game/server.hpp"
 
 #include <format>
+#include <iostream>
 #include <thread>
 
 #include "cyane/core/log.hpp"
+#include "cyane/crypto/digest.hpp"
 #include "cyane/generated/registry_meta.hpp"
 #include "cyane/proto/json.hpp"
 #include "cyane/proto/packet_ids.hpp"
@@ -127,10 +129,16 @@ Result<ServerConfig> ServerConfig::from(const Config& config) {
     if (!game_mode) {
         return std::unexpected{std::move(game_mode.error())};
     }
-    if (*game_mode != "survival" && *game_mode != "creative") {
-        return make_error(ErrorCode::config, "server.game_mode must be 'survival' or 'creative'");
+    if (*game_mode != "survival" && *game_mode != "creative" && *game_mode != "spectator") {
+        return make_error(ErrorCode::config, "server.game_mode must be 'survival', 'creative', or 'spectator'");
     }
     out.game_mode = std::move(*game_mode);
+
+    auto op_file = string_value(config, "server.op_file", out.op_file);
+    if (!op_file) {
+        return std::unexpected{std::move(op_file.error())};
+    }
+    out.op_file = std::move(*op_file);
 
     auto log_level = string_value(config, "log.level", out.log_level);
     if (!log_level) {
@@ -170,8 +178,13 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.online_mode = server->config_.online_mode;
     context.compression_threshold = server->config_.compression_threshold;
     context.disconnect_message = "CyaneServer";
+    server->op_manager_ = std::make_unique<game::OpManager>();
+    if (const auto rc = server->op_manager_->load(server->config_.op_file); !rc) {
+        log::warn("failed to load ops file: {}", rc.error().message);
+    }
     server->player_manager_ = std::make_unique<entity::PlayerManager>();
     context.player_manager = server->player_manager_.get();
+    context.op_manager = server->op_manager_.get();
     server->hub_ = std::make_unique<net::PlayerHub>();
     context.hub = server->hub_.get();
     server->item_drops_ = std::make_unique<net::ItemDropManager>();
@@ -253,6 +266,62 @@ bool Server::kill_player_by_name(std::string_view name) {
         return false;
     }
     return hub_->send_kill(target_id);
+}
+
+bool Server::set_player_gamemode(std::string_view name, std::string_view mode) {
+    const std::uint32_t target_id = hub_->player_id_by_name(name);
+    if (target_id == 0) {
+        return false;
+    }
+    std::uint8_t gm;
+    if (mode == "survival") gm = proto::game_mode::kSurvival;
+    else if (mode == "creative") gm = proto::game_mode::kCreative;
+    else if (mode == "adventure") gm = proto::game_mode::kAdventure;
+    else if (mode == "spectator") gm = proto::game_mode::kSpectator;
+    else return false;
+    // 1.12.2 用 PlayerInfo(0x2E) action=0x01 更新游戏模式
+    ByteWriter info;
+    info.varint(proto::play_cb::kPlayerInfoUpdateGameType);
+    info.varint(1);
+    const auto uuid_opt = hub_->player_uuid_by_name(name);
+    if (!uuid_opt) return false;
+    info.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid_opt->data()), uuid_opt->size()});
+    info.varint(static_cast<std::int32_t>(gm));
+    hub_->send_to(target_id, proto::play_cb::kPlayerInfo, info.data());
+    return true;
+}
+
+bool Server::teleport_player(std::string_view name) {
+    const std::uint32_t target_id = hub_->player_id_by_name(name);
+    if (target_id == 0) {
+        return false;
+    }
+    // 发送一个 Respawn 包强制客户端重载
+    ByteWriter out;
+    out.i32(0);  // dimension
+    out.u8(proto::game_mode::kSurvival);
+    out.u8(proto::game_mode::kCreative);
+    out.string("default");
+    hub_->send_to(target_id, proto::play_cb::kRespawn, out.data());
+    return true;
+}
+
+bool Server::op_player(std::string_view name) {
+    const auto uuid_opt = hub_->player_uuid_by_name(name);
+    if (!uuid_opt) {
+        return false;
+    }
+    const std::string uuid_str = crypto::to_uuid_string(*uuid_opt);
+    return op_manager_->op_player(uuid_str, name);
+}
+
+bool Server::deop_player(std::string_view name) {
+    const auto uuid_opt = hub_->player_uuid_by_name(name);
+    if (!uuid_opt) {
+        return false;
+    }
+    const std::string uuid_str = crypto::to_uuid_string(*uuid_opt);
+    return op_manager_->deop_player(uuid_str);
 }
 
 }
