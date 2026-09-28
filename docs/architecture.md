@@ -62,10 +62,12 @@ C++23 内核：net / proto / world / entity / game
 - 光照引擎：blocklight/skylight 独立 nibble 数组；禁止每 tick 全量重算。
 - 存储：当前为内存编辑表；Anvil `.mca` 待实现。
 - 碰撞：voxel shape 索引 + AABB 扫掠。
+- 存储：超平坦 baseline + 内存编辑表；Anvil `.mca` 待实现。玩家与容器数据另有独立落盘通道。
 
 ### 实体与玩家 `src/entity/`
 
 - 玩家：库存（窗口同步 ID）、经验、附魔、药水、成就、Tab、记分板（经验/药水/成就/记分板未实现）。
+- 玩家持久化 `game/player_data.hpp`：按 UUID 落盘位置/朝向/游戏模式/血量/46 格背包（`server.player_data_dir`，登录恢复、断开保存）。
 
 ### 游戏层 `src/game/`
 
