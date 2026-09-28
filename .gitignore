@@ -24,7 +24,7 @@ java/build/
 # 运行时状态（不入库）
 config/ops.json
 config/*.local.toml
-
+player_data/*
 # 编辑器 / 系统
 .vscode/
 .idea/

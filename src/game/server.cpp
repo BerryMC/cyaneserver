@@ -1,4 +1,5 @@
 #include "cyane/game/server.hpp"
+#include "cyane/game/player_data.hpp"
 
 #include <algorithm>
 #include <format>
@@ -162,6 +163,12 @@ Result<ServerConfig> ServerConfig::from(const Config& config) {
     }
     out.log_file = std::move(*log_file);
 
+    auto player_data_dir = string_value(config, "server.player_data_dir", out.player_data_dir);
+    if (!player_data_dir) {
+        return std::unexpected{std::move(player_data_dir.error())};
+    }
+    out.player_data_dir = std::move(*player_data_dir);
+
     return out;
 }
 
@@ -216,6 +223,10 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.crafting_tables = server->crafting_tables_.get();
     server->mobs_ = std::make_unique<net::MobManager>();
     context.mobs = server->mobs_.get();
+    // 玩家数据持久化存储
+    server->player_data_store_ = std::make_unique<game::PlayerDataStore>();
+    server->player_data_store_->set_dir(server->config_.player_data_dir);
+    context.player_data_store = server->player_data_store_.get();
     if (recipes) {
         std::unordered_map<std::int16_t, std::int32_t> fuel;
         std::unordered_map<std::int16_t, std::pair<std::int16_t, std::uint8_t>> smelting;
@@ -237,6 +248,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.game_mode = server->config_.game_mode == "survival" ? proto::game_mode::kSurvival
                          : (server->config_.game_mode == "spectator" ? proto::game_mode::kSpectator
                                                                       : proto::game_mode::kCreative);
+
     // 生成出生点附近的被动生物
     server->mobs_->spawn_passive(12);
 

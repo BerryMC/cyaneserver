@@ -29,6 +29,7 @@
 #include "cyane/net/item_drop.hpp"
 #include "cyane/net/player_hub.hpp"
 #include "cyane/world/world.hpp"
+#include "cyane/game/player_data.hpp"
 
 namespace cyane::game {
 class OpManager;
@@ -68,6 +69,8 @@ struct ConnectionContext {
     std::int32_t view_distance{10};
     std::int32_t max_players{20};
     std::uint8_t game_mode{proto::game_mode::kCreative};
+    // 玩家数据持久化存储（加载/保存玩家背包、位置、游戏模式）
+    game::PlayerDataStore* player_data_store{nullptr};
 };
 
 class Connection final : public ReactorHandler {
@@ -203,6 +206,10 @@ private:
     void enable_cipher(ByteSpan session_key);
     void flush_outbox();
     void set_writable(bool writable);
+
+    // 玩家数据持久化：登录时加载、断开时保存
+    void load_player_data();
+    void save_player_data();
 
     Socket socket_;
     std::string peer_;

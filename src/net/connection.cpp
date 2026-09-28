@@ -59,6 +59,7 @@ void Connection::teardown() noexcept {
         return;
     }
     alive_ = false;
+    save_player_data();
     broadcast_despawn();
     if (context_.player_manager != nullptr && player_id_ != 0) {
         context_.player_manager->remove(player_id_);

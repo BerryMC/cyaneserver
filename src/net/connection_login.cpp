@@ -133,6 +133,7 @@ void Connection::finish_login(Uuid uuid) {
     state_ = proto::State::play;
     player_id_ = entity::allocate_entity_id();
     player_pos_ = spawn_point();
+    load_player_data();
 
     send_join_game();
     send_world_state();
