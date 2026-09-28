@@ -15,8 +15,8 @@ worker_threads = 0
 world_dir = "world"
 # 世界存档自动保存间隔（秒；0 = 关闭；停机时总是保存）
 autosave_interval = 300
-# 玩家数据持久化目录（每个 UUID 一个 JSON：位置/游戏模式/血量/46 格背包）
-player_data_dir = "player_data"
+# 玩家数据目录（对齐原版布局 <world>/playerdata/<uuid>；格式暂为 JSON，.dat NBT 兼容待做）
+player_data_dir = "world/playerdata"
 # OP 名单（UUID → 等级 1-4）
 op_file = "config/ops.json"
 # 合成配方（数据驱动）

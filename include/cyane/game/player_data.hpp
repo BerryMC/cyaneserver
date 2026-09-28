@@ -274,7 +274,7 @@ private:
         return std::filesystem::path{dir_} / (std::string{uuid_with_dashes} + ".json");
     }
 
-    std::string dir_{"player_data"};
+    std::string dir_{"world/playerdata"};
     mutable std::mutex mutex_;
 };
 

@@ -43,7 +43,7 @@ struct ServerConfig {
     std::string game_mode{"creative"};
     std::string op_file{"config/ops.json"};
     std::string recipe_file{"config/recipes.toml"};
-    std::string player_data_dir{"player_data"};
+    std::string player_data_dir{"world/playerdata"};  // 原版布局：<world>/playerdata/<uuid>.dat
     int autosave_interval{300};  // 秒；0 = 关闭
 
     [[nodiscard]] static Result<ServerConfig> from(const Config& config);

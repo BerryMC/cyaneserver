@@ -165,7 +165,7 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 
 | 模块 | 内容 |
 |---|---|
-| `game/player_data` | 按 UUID 落盘玩家位置/朝向/游戏模式/血量/46 格背包（JSON），登录恢复、断开保存 |
+| `game/player_data` | 按 UUID 落盘玩家位置/朝向/游戏模式/血量/46 格背包（`world/playerdata/<uuid>.json`，对齐原版 playerdata 布局；格式暂为 JSON），登录恢复、断开保存 |
 | `proto/frame` | `inflate_dynamic`：输出未知大小的流式解压（zlib/gzip，上限防压缩炸弹） |
 | `world/nbt` | Anvil NBT 读写器（大端、命名标签、13 类标签、保序 compound） |
 | `world/region` | `.mca` 读写重写：扇区分配/复用、位置表+时间戳、tmp+rename 原子落盘；修除原悬垂指针缺陷 |
