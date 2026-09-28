@@ -21,12 +21,15 @@ struct TransparentStringHash {
     }
 };
 
-// TOML 子集：[section]、key = value，支持字符串/整数/浮点/布尔/字符串数组与 # 注释
+// TOML 子集：[section]、[[table array]]、key = value，
+// 支持字符串/整数/浮点/布尔/字符串数组与 # 注释
 class Config {
 public:
     using Array = std::vector<std::string>;
     using Value = std::variant<std::string, std::int64_t, double, bool, Array>;
     using Map = std::unordered_map<std::string, Value, TransparentStringHash, std::equal_to<>>;
+    using Table = Map;
+    using TableArray = std::vector<Table>;
 
     [[nodiscard]] static Result<Config> load_file(const std::filesystem::path& path);
     [[nodiscard]] static Result<Config> parse(std::string_view text, std::string_view source = "<memory>");
@@ -63,8 +66,15 @@ public:
 
     [[nodiscard]] const Map& entries() const noexcept { return entries_; }
 
+    // [[name]] 表格数组；不存在返回 nullptr
+    [[nodiscard]] const TableArray* table_array(std::string_view name) const noexcept {
+        const auto it = tables_.find(std::string{name});
+        return it == tables_.end() ? nullptr : &it->second;
+    }
+
 private:
     Map entries_;
+    std::unordered_map<std::string, TableArray> tables_;
 };
 
 }

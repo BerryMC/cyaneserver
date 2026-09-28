@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <format>
 #include <string>
@@ -58,12 +59,14 @@ bool Connection::handle_play(std::int32_t packet_id, ByteSpan payload) {
     if (packet_id == proto::play_sb::kCloseWindow) {
         return handle_play_close_window(payload);
     }
+    if (packet_id == proto::play_sb::kAnimation) {
+        return handle_play_animation(payload);
+    }
     // 已知但暂无游戏逻辑的 serverbound 包：静默接受，避免日志刷屏
     switch (packet_id) {
         case proto::play_sb::kSettings:                  // 客户端设置（视距/语言/皮肤部件）
         case proto::play_sb::kPluginMessage:             // 插件通道（MC|Brand 等）
         case proto::play_sb::kAbilities:                 // 飞行能力回报
-        case proto::play_sb::kAnimation:                 // 挥手动画
         case proto::play_sb::kConfirmTransaction:        // 事务确认回执
         case proto::play_sb::kRecipeDisplayed:           // 配方书
         case proto::play_sb::kUseItem:                   // 使用物品
@@ -135,6 +138,24 @@ void Connection::broadcast_movement(const entity::Position& pos) {
     context_.hub->update_position(player_id_, pos.x, pos.y, pos.z, pos.yaw, pos.pitch);
     const std::uint8_t angle_yaw = detail::to_angle_byte(pos.yaw);
     const std::uint8_t angle_pitch = detail::to_angle_byte(pos.pitch);
+    // 位置与朝向均未变化：客户端 20Hz 常发 no-op 位移包，跳过广播避免无意义流量
+    if (has_bcast_ && pos.x == last_bcast_x_ && pos.y == last_bcast_y_ && pos.z == last_bcast_z_ &&
+        angle_yaw == last_bcast_yaw_ && angle_pitch == last_bcast_pitch_) {
+        return;
+    }
+    last_bcast_x_ = pos.x;
+    last_bcast_y_ = pos.y;
+    last_bcast_z_ = pos.z;
+    last_bcast_yaw_ = angle_yaw;
+    last_bcast_pitch_ = angle_pitch;
+    has_bcast_ = true;
+    // 只广播给同区块视距内的玩家（远端客户端看不到这个实体）
+    const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(pos.x),
+                                                   static_cast<std::int32_t>(pos.z));
+    if (!cpos) {
+        return;
+    }
+    const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
     // EntityTeleport (0x4C)：绝对坐标最稳，避免相对移动累积误差
     ByteWriter tp;
     tp.varint(static_cast<std::int32_t>(player_id_));
@@ -144,11 +165,13 @@ void Connection::broadcast_movement(const entity::Position& pos) {
     tp.u8(angle_yaw);
     tp.u8(angle_pitch);
     tp.boolean(true);
-    context_.hub->broadcast(player_id_, proto::play_cb::kEntityTeleport, tp.data());
+    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                 proto::play_cb::kEntityTeleport, tp.data());
     ByteWriter head;
     head.varint(static_cast<std::int32_t>(player_id_));
     head.u8(angle_yaw);
-    context_.hub->broadcast(player_id_, proto::play_cb::kEntityHeadLook, head.data());
+    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                 proto::play_cb::kEntityHeadLook, head.data());
 }
 
 bool Connection::handle_play_entity_action(ByteSpan payload) {
@@ -168,6 +191,37 @@ bool Connection::handle_play_entity_action(ByteSpan payload) {
         case 4: sprinting_ = false; break;
         default: break;  // 睡眠/骑乘跳/开背包/滑翔：暂不处理
     }
+    return true;
+}
+
+bool Connection::handle_play_animation(ByteSpan payload) {
+    // 0x1D PlayerAnimation：varint hand（0 主手 1 副手）。客户端每次挥臂都会发，
+    // 转发 Animation(0x06) 让附近玩家看到挥动手部（原版有 4 tick 冷却，这里 200ms 限流）
+    ByteReader reader{payload};
+    auto hand = reader.varint();
+    if (!hand) {
+        return false;
+    }
+    const auto now = now_ms_;
+    if (now - last_anim_broadcast_ms_ < 200) {
+        return true;
+    }
+    last_anim_broadcast_ms_ = now;
+    if (context_.hub == nullptr) {
+        return true;
+    }
+    const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
+                                                   static_cast<std::int32_t>(player_pos_.z));
+    if (!cpos) {
+        return true;
+    }
+    // Animation (0x06)：int entityId | byte hand
+    ByteWriter out;
+    out.i32(static_cast<std::int32_t>(player_id_));
+    out.u8(static_cast<std::uint8_t>(*hand & 0xFF));
+    const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                 proto::play_cb::kAnimation, out.data());
     return true;
 }
 
@@ -257,7 +311,7 @@ bool Connection::handle_player_command(std::string_view text) {
     if (cmd.empty()) {
         return true;
     }
-    const std::uint8_t op = context_.op_manager != nullptr ? context_.op_manager->op_level(uuid_str_) : 0;
+    const std::uint8_t op = context_.op_manager != nullptr ? context_.op_manager->op_level(uuid_.dashed()) : 0;
 
     if (cmd == "help") {
         send_chat_feedback("可用命令: /gamemode /tp /kill /op /deop /say /tps /help");
@@ -294,9 +348,15 @@ bool Connection::handle_player_command(std::string_view text) {
                 send_chat_feedback("玩家不在线: " + std::string(target_name));
                 return true;
             }
-            ByteWriter info;
-            detail::write_player_info_game_mode(info, uuid_bytes_, *mode);
-            context_.hub->broadcast_all(proto::play_cb::kPlayerInfo, info.data());
+            // 目标玩家的 uuid 广播其模式变更（Tab 栏条目按 uuid 匹配）
+            const auto target_uuid = context_.hub->player_uuid_by_name(target_name);
+            if (target_uuid) {
+                ByteWriter info;
+                detail::write_player_info_game_mode(info, *target_uuid, *mode);
+                context_.hub->broadcast_all(proto::play_cb::kPlayerInfo, info.data());
+            }
+            // 让目标连接更新自身行为判定并发 PlayerAbilities
+            context_.hub->send_gamemode(target_id, *mode);
             send_chat_feedback(std::format("{} 的游戏模式已切换为 {}", target_name, game_mode_name(*mode)));
         }
         return true;
@@ -382,7 +442,8 @@ bool Connection::handle_player_command(std::string_view text) {
         return true;
     }
     if (cmd == "tps") {
-        send_chat_feedback(std::format("TPS: {:.1f}", context_.hub != nullptr ? 20.0 : 0.0));
+        const double tps = context_.tick_stats != nullptr ? context_.tick_stats->tps() : 0.0;
+        send_chat_feedback(std::format("TPS: {:.1f}", tps));
         return true;
     }
     if (cmd == "op") {
@@ -403,7 +464,7 @@ bool Connection::handle_player_command(std::string_view text) {
             send_chat_feedback("玩家不在线: " + std::string(args[0]));
             return true;
         }
-        const std::string target_uuid = crypto::to_uuid_string(*uuid_opt);
+        const std::string target_uuid = Uuid::from_bytes(*uuid_opt).dashed();
         (void)context_.op_manager->op_player(target_uuid, args[0]);
         send_chat_feedback(std::format("已将 {} 设为 OP", args[0]));
         return true;
@@ -426,7 +487,7 @@ bool Connection::handle_player_command(std::string_view text) {
             send_chat_feedback("玩家不在线: " + std::string(args[0]));
             return true;
         }
-        const std::string target_uuid = crypto::to_uuid_string(*uuid_opt);
+        const std::string target_uuid = Uuid::from_bytes(*uuid_opt).dashed();
         (void)context_.op_manager->deop_player(target_uuid);
         send_chat_feedback(std::format("已撤销 {} 的 OP 权限", args[0]));
         return true;
@@ -437,31 +498,62 @@ bool Connection::handle_player_command(std::string_view text) {
 
 void Connection::set_game_mode(std::uint8_t mode) {
     context_.game_mode = mode;
-    // PlayerInfo (0x2E) 更新游戏模式（客户端据此显示旁观者/创造UI）
     if (context_.hub != nullptr) {
-        ByteWriter info;
-        detail::write_player_info_game_mode(info, uuid_bytes_, mode);
+        context_.hub->update_game_mode(player_id_, mode);
+    }
+    // ChangeGameState (0x1E)：byte state(3=模式变更) | float 模式值。1.12.2 客户端据此
+    // 更新本地 GameType（血条/饥饿条显隐、创造物品栏）；PlayerInfo 只更新 Tab 栏
+    ByteWriter gs;
+    gs.u8(3);
+    gs.f32(static_cast<float>(mode));
+    send_packet(proto::play_cb::kGameStateChange, gs.data());
+    // PlayerInfo (0x2E) 更新游戏模式（客户端据此显示旁观者/创造UI）
+    ByteWriter info;
+    detail::write_player_info_game_mode(info, uuid_.bytes(), mode);
+    if (context_.hub != nullptr) {
         context_.hub->broadcast_all(proto::play_cb::kPlayerInfo, info.data());
     } else {
-        ByteWriter info;
-        detail::write_player_info_game_mode(info, uuid_bytes_, mode);
         send_packet(proto::play_cb::kPlayerInfo, info.data());
     }
-    // 创造/旁观模式需要 abilities
-    if (mode == proto::game_mode::kCreative) {
-        ByteWriter abilities;
-        abilities.u8(proto::abilities::kInvulnerable | proto::abilities::kAllowFlying |
-                     proto::abilities::kCreativeMode);
-        abilities.f32(0.05f);
-        abilities.f32(0.1f);
-        send_packet(proto::play_cb::kPlayerAbilities, abilities.data());
-    } else if (mode == proto::game_mode::kSpectator) {
-        ByteWriter abilities;
-        abilities.u8(proto::abilities::kAllowFlying | proto::abilities::kFlying);
-        abilities.f32(0.1f);
-        abilities.f32(0.0f);
-        send_packet(proto::play_cb::kPlayerAbilities, abilities.data());
+    send_abilities_for(mode);
+}
+
+// 远端切换（/gamemode <他人>）：hub 投递到目标连接的 reactor 线程执行，
+// 保证目标的行为判定（挖掘/放置/飞行）与显示一并更新
+void Connection::apply_remote_gamemode(std::uint8_t mode) {
+    context_.game_mode = mode;
+    if (context_.hub != nullptr) {
+        context_.hub->update_game_mode(player_id_, mode);
     }
+    ByteWriter gs;
+    gs.u8(3);
+    gs.f32(static_cast<float>(mode));
+    send_packet(proto::play_cb::kGameStateChange, gs.data());
+    send_abilities_for(mode);
+}
+
+void Connection::send_abilities_for(std::uint8_t mode) {
+    ByteWriter abilities;
+    switch (mode) {
+        case proto::game_mode::kCreative:
+            abilities.u8(proto::abilities::kInvulnerable | proto::abilities::kAllowFlying |
+                         proto::abilities::kCreativeMode);
+            abilities.f32(0.05f);
+            abilities.f32(0.1f);
+            break;
+        case proto::game_mode::kSpectator:
+            abilities.u8(proto::abilities::kInvulnerable | proto::abilities::kAllowFlying |
+                         proto::abilities::kFlying);
+            abilities.f32(0.1f);
+            abilities.f32(0.0f);
+            break;
+        default:  // survival / adventure
+            abilities.u8(0);
+            abilities.f32(0.05f);
+            abilities.f32(0.1f);
+            break;
+    }
+    send_packet(proto::play_cb::kPlayerAbilities, abilities.data());
 }
 
 bool Connection::handle_tab_complete(ByteSpan payload) {
@@ -471,43 +563,35 @@ bool Connection::handle_tab_complete(ByteSpan payload) {
     //   lookedAtBlock?: position
     // 注意：不含 transaction_id
     ByteReader reader{payload};
-    const auto text = reader.string(256);
+    const auto text = reader.string();
     if (!text) {
         log::warn("connection {} tab complete text read failed", fd());
         return false;
     }
     const auto assume_command = reader.boolean();
     if (!assume_command) {
-        log::warn("connection {} tab complete assumeCommand false", fd());
+        log::warn("connection {} tab complete assumeCommand read failed", fd());
         return false;
     }
-
-    if (reader.remaining() >= 12) {
-        // 1.12.2 客户端在 assumeCommand=true 时可能附带 lookedAtBlock（方块位置，12 字节）
-        // 某些客户端可能省略该可选字段，剩余字节不足时跳过
-        const auto x = reader.big_endian<std::int32_t>();
-        if (!x) {
-            log::warn("connection {} tab complete lookedAtBlock x read failed", fd());
-            return false;
+    // 1.12.2：hasLookedAtBlock: bool，为 true 时随后是 8 字节打包 position
+    if (reader.remaining() > 0) {
+        const auto has_looked = reader.boolean();
+        if (has_looked && *has_looked) {
+            const auto packed = reader.i64();
+            if (packed) {
+                log::debug("connection {} tab complete lookedAtBlock: {}, {}, {}", fd(),
+                           position_x(*packed), position_y(*packed), position_z(*packed));
+            }
         }
-        const auto y = reader.big_endian<std::int32_t>();
-        if (!y) {
-            log::warn("connection {} tab complete lookedAtBlock y read failed", fd());
-            return false;
-        }
-        const auto z = reader.big_endian<std::int32_t>();
-        if (!z) {
-            log::warn("connection {} tab complete lookedAtBlock z read failed", fd());
-            return false;
-        }
-        log::debug("connection {} tab complete lookedAtBlock: {}, {}, {}", fd(), *x, *y, *z);
-    } else if (reader.remaining() > 0) {
-        log::debug("connection {} tab complete optional lookedAtBlock omitted", fd());
     }
 
     std::vector<std::string> matches;
+    // 1.12.2：视线对着方块时客户端会把 assumeCommand 置 false（仍带 lookedAtBlock），
+    // 因此命令补全以文本是否以命令符 / 开头为准，或客户端显式声明命令上下文
+    const bool command_mode =
+        *assume_command || (!text->empty() && text->at(0) == '/');
 
-    if (!text->empty() && text->at(0) == '/') {
+    if (command_mode) {
         // 命令补全
         const std::string cmd_text = text->substr(1); // 去掉 /
         // 找到命令名
@@ -550,11 +634,19 @@ bool Connection::handle_tab_complete(ByteSpan payload) {
             }
         }
     } else {
-        // 聊天玩家名补全
+        // 聊天玩家名补全（assumeCommand=false）：不区分大小写的前缀匹配
+        const std::string lower_text = [&text] {
+            std::string s{*text};
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            return s;
+        }();
         if (context_.hub != nullptr) {
-            const auto players = context_.hub->all_player_names();
-            for (const auto& name : players) {
-                if (std::string_view(name).starts_with(*text)) {
+            for (const auto& name : context_.hub->all_player_names()) {
+                std::string lower_name{name};
+                std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+                if (lower_name.starts_with(lower_text)) {
                     matches.push_back(name);
                 }
             }

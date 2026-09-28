@@ -15,7 +15,6 @@ namespace cyane::net {
 namespace {
 
 inline constexpr auto kSweepInterval = std::chrono::milliseconds{100};
-inline constexpr auto kAcceptBackoff = std::chrono::milliseconds{20};
 
 // 一个 I/O 线程一套：listener + reactor + 该线程独占的连接集合
 class Acceptor final : public ReactorHandler {
@@ -50,8 +49,9 @@ public:
             auto accepted = listener_.accept(peer);
             if (!accepted) {
                 if (errno == EMFILE || errno == ENFILE) {
-                    log::warn("file descriptor limit reached, backing off");
-                    std::this_thread::sleep_for(kAcceptBackoff);
+                    // 不在 reactor 线程内 sleep（会卡住该线程全部连接）；
+                    // EPOLLET 下新连接到达时会再次触发可读事件
+                    log::debug("file descriptor limit reached, accept backoff");
                 }
                 return;
             }

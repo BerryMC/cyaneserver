@@ -13,6 +13,9 @@
 #include "cyane/core/time.hpp"
 #include "cyane/entity/player_manager.hpp"
 #include "cyane/game/op_manager.hpp"
+#include "cyane/item/crafting.hpp"
+#include "cyane/net/crafting_table_store.hpp"
+#include "cyane/net/mob_manager.hpp"
 #include "cyane/game/status.hpp"
 #include "cyane/net/net_service.hpp"
 #include "cyane/world/world.hpp"
@@ -37,6 +40,7 @@ struct ServerConfig {
     std::string log_file{"logs/latest.log"};
     std::string game_mode{"creative"};
     std::string op_file{"config/ops.json"};
+    std::string recipe_file{"config/recipes.toml"};
 
     [[nodiscard]] static Result<ServerConfig> from(const Config& config);
 };
@@ -67,7 +71,6 @@ public:
     // OP 管理
     [[nodiscard]] const game::OpManager& op_manager() const noexcept { return *op_manager_; }
     [[nodiscard]] bool set_player_gamemode(std::string_view name, std::string_view mode);
-    [[nodiscard]] bool teleport_player(std::string_view name);
     [[nodiscard]] bool op_player(std::string_view name);
     [[nodiscard]] bool deop_player(std::string_view name);
     // 在线玩家名列表（控制台 list 命令）
@@ -84,7 +87,11 @@ private:
     std::unique_ptr<net::PlayerHub> hub_;
     std::unique_ptr<net::ItemDropManager> item_drops_;
     std::unique_ptr<net::ContainerStore> containers_;
+    std::unique_ptr<net::FurnaceStore> furnaces_;
+    std::unique_ptr<world::CraftingTableStore> crafting_tables_;
+    std::unique_ptr<net::MobManager> mobs_;
     std::unique_ptr<game::OpManager> op_manager_;
+    std::unique_ptr<item::CraftingRegistry> crafting_;
     std::unique_ptr<world::World> world_;
     std::unique_ptr<net::NetService> network_;
     std::unique_ptr<ThreadPool> workers_;

@@ -142,6 +142,10 @@ void Connection::tick(std::uint64_t now_ms) {
     drain_mailbox();
     // 检测并拾取附近掉落物
     collect_items(now_ms);
+    // 熔炉窗口打开时同步燃烧/冶炼进度条
+    sync_furnace_progress();
+    // 限流发出待发表中的区块（避免跨区块/登录时一次性灌爆 outbox）
+    send_pending_chunks(kChunkPerTick);
     // 首次进入 play：以当前时间作为存活基线
     if (last_keepalive_recv_ms_ == 0) {
         last_keepalive_recv_ms_ = now_ms;
@@ -179,6 +183,10 @@ void Connection::drain_mailbox() {
     for (const auto& msg : pending) {
         if (msg.kill_flag) {
             kill_player();
+            continue;
+        }
+        if (msg.gamemode >= 0) {
+            apply_remote_gamemode(static_cast<std::uint8_t>(msg.gamemode));
             continue;
         }
         send_packet(msg.packet_id, ByteSpan{msg.payload});

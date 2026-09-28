@@ -1,0 +1,147 @@
+# 合成配方（数据驱动，服务端启动时加载）
+# 每个 [[recipe]] 一条配方：
+#   type = "shaped"     有序配方：rows/cols 定义图案尺寸，pattern 为逐行 id 列表，0 = 空格
+#   type = "shapeless"  无序配方：pattern 为成分 id 列表，位置无关
+#   result              产物物品 id（1.12.2 物品/方块 id）
+#   count               产物数量（1..64，默认 1）
+# 物品 id 参考见 https://minecraft.wiki/w/Java_Edition_data_values（1.12）
+# 常用：4 圆石 5 木板 17 原木 50 火把 54 箱子 58 工作台 61 熔炉 263 煤炭 280 木棍
+
+[[recipe]]
+type = "shapeless"
+pattern = [17]           # 原木
+result = 5               # 木板
+count = 4
+
+[[recipe]]
+type = "shaped"
+rows = 2
+cols = 1
+pattern = [5, 5]         # 两块木板竖排
+result = 280             # 木棍
+count = 4
+
+[[recipe]]
+type = "shaped"
+rows = 2
+cols = 2
+pattern = [5, 5, 5, 5]
+result = 58              # 工作台
+
+[[recipe]]
+type = "shaped"
+rows = 3
+cols = 3
+pattern = [4, 4, 4, 4, 0, 4, 4, 4, 4]
+result = 61              # 熔炉
+
+[[recipe]]
+type = "shaped"
+rows = 3
+cols = 3
+pattern = [5, 5, 5, 5, 0, 5, 5, 5, 5]
+result = 54              # 箱子
+
+[[recipe]]
+type = "shaped"
+rows = 2
+cols = 1
+pattern = [263, 280]     # 煤炭 + 木棍
+result = 50              # 火把
+count = 4
+
+[[recipe]]
+type = "shaped"
+rows = 3
+cols = 3
+pattern = [5, 5, 5, 0, 280, 0, 0, 280, 0]
+result = 270             # 木镐
+
+[[recipe]]
+type = "shaped"
+rows = 3
+cols = 3
+pattern = [5, 5, 5, 5, 280, 0, 0, 280, 0]
+result = 271             # 木斧
+
+[[recipe]]
+type = "shaped"
+rows = 3
+cols = 1
+pattern = [5, 280, 280]
+result = 269             # 木锹
+
+[[recipe]]
+type = "shaped"
+rows = 1
+cols = 3
+pattern = [5, 5, 280]
+result = 268             # 木剑
+
+[[recipe]]
+type = "shaped"
+rows = 3
+cols = 3
+pattern = [4, 4, 4, 0, 280, 0, 0, 280, 0]
+result = 274             # 石镐
+
+[[recipe]]
+type = "shaped"
+rows = 3
+cols = 3
+pattern = [4, 4, 4, 4, 280, 0, 0, 280, 0]
+result = 275             # 石斧
+
+[[recipe]]
+type = "shaped"
+rows = 3
+cols = 1
+pattern = [4, 280, 280]
+result = 273             # 石锹
+
+[[recipe]]
+type = "shaped"
+rows = 1
+cols = 3
+pattern = [4, 4, 280]
+result = 272             # 石剑
+
+# ===== 熔炉 =====
+# [[smelting]]：input → result（每次冶炼产 1 个）
+# 常用：14 金矿 15 铁矿 4 圆石 12 沙
+[[smelting]]
+input = 15
+result = 265             # 铁矿 → 铁锭
+
+[[smelting]]
+input = 14
+result = 266             # 金矿 → 金锭
+
+[[smelting]]
+input = 4
+result = 1               # 圆石 → 石头
+
+[[smelting]]
+input = 12
+result = 20              # 沙 → 玻璃
+
+[[smelting]]
+input = 17
+result = 263             # 原木 → 木炭（damage=1 略，简化为同 id）
+
+# [[fuel]]：item = 燃烧 tick 数（1.12.2：煤炭 1600，木板/原木 300，木棍 100）
+[[fuel]]
+item = 263
+ticks = 1600
+
+[[fuel]]
+item = 5
+ticks = 300
+
+[[fuel]]
+item = 17
+ticks = 300
+
+[[fuel]]
+item = 280
+ticks = 100

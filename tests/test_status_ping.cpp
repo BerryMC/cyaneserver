@@ -172,12 +172,13 @@ CYANE_TEST(integration_login_start_enters_world) {
     CYANE_CHECK_EQ(name, "Notch");
     CYANE_CHECK_EQ(uuid.size(), 36u);
 
-    // 进入 play：应至少看到 JoinGame、ChunkData、PlayerPositionLook，且不断开
+    // 进入 play：应看到 JoinGame、ChunkData、PlayerPositionLook，且不断开。
+    // 区块按 tick 限流（2/tick @10Hz ≈ 20/s）在传送包之后陆续到达
     bool saw_join_game = false;
     bool saw_chunk = false;
     bool saw_position_look = false;
     bool saw_disconnect = false;
-    for (int i = 0; i < 400; ++i) {
+    for (int i = 0; i < 2000 && (!saw_chunk || !saw_position_look); ++i) {
         auto packet = client->receive_compressed_packet();
         if (!packet) {
             break;
@@ -190,7 +191,6 @@ CYANE_TEST(integration_login_start_enters_world) {
             saw_chunk = true;
         } else if (id == cyane::proto::play_cb::kPlayerPositionLook) {
             saw_position_look = true;
-            break;  // 位置同步是初始化序列的收尾包
         } else if (id == cyane::proto::play_cb::kDisconnect) {
             saw_disconnect = true;
             break;

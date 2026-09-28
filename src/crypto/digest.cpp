@@ -46,19 +46,6 @@ namespace {
     return out;
 }
 
-[[nodiscard]] int hex_value(char ch) {
-    if (ch >= '0' && ch <= '9') {
-        return ch - '0';
-    }
-    if (ch >= 'a' && ch <= 'f') {
-        return ch - 'a' + 10;
-    }
-    if (ch >= 'A' && ch <= 'F') {
-        return ch - 'A' + 10;
-    }
-    return -1;
-}
-
 }
 
 std::string server_id(ByteSpan shared_secret, ByteSpan public_der) {
@@ -66,85 +53,18 @@ std::string server_id(ByteSpan shared_secret, ByteSpan public_der) {
     return positive_hex(digest("SHA-1", {as_bytes(""), shared_secret, public_der}));
 }
 
-std::string offline_uuid(std::string_view username) {
+cyane::Uuid offline_uuid(std::string_view username) {
+    // Spigot/Paper 离线 UUID：md5("OfflinePlayer:"+username) → RFC 4122 version 3
     const std::string input = std::string{"OfflinePlayer:"} + std::string{username};
-    Bytes digest_bytes = digest("MD5", {as_bytes(input)});
-    std::array<std::uint8_t, 16> uuid{};
-    if (digest_bytes.size() != uuid.size()) {
+    const Bytes digest_bytes = digest("MD5", {as_bytes(input)});
+    cyane::Uuid::Bytes md5{};
+    if (digest_bytes.size() != md5.size()) {
         return {};
     }
-    for (std::size_t index = 0; index < uuid.size(); ++index) {
-        uuid[index] = std::to_integer<std::uint8_t>(digest_bytes[index]);
+    for (std::size_t index = 0; index < md5.size(); ++index) {
+        md5[index] = std::to_integer<std::uint8_t>(digest_bytes[index]);
     }
-    uuid[6] = static_cast<std::uint8_t>((uuid[6] & 0x0F) | 0x30);
-    uuid[8] = static_cast<std::uint8_t>((uuid[8] & 0x3F) | 0x80);
-
-    constexpr char kHex[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(36);
-    for (std::size_t index = 0; index < uuid.size(); ++index) {
-        if (index == 4 || index == 6 || index == 8 || index == 10) {
-            out.push_back('-');
-        }
-        out.push_back(kHex[uuid[index] >> 4]);
-        out.push_back(kHex[uuid[index] & 0x0F]);
-    }
-    return out;
-}
-
-std::string uuid_with_dashes(std::string_view compact) {
-    std::string out;
-    out.reserve(36);
-    for (std::size_t index = 0; index < compact.size(); ++index) {
-        if (index == 8 || index == 12 || index == 16 || index == 20) {
-            out.push_back('-');
-        }
-        out.push_back(compact[index]);
-    }
-    return out;
-}
-
-std::array<std::uint8_t, 16> parse_uuid_string(std::string_view dashed) {
-    std::array<std::uint8_t, 16> out{};
-    std::size_t read = 0;
-    for (std::size_t index = 0; index < dashed.size() && read < 16; ++index) {
-        const char ch = dashed[index];
-        if (ch == '-') {
-            continue;
-        }
-        const int hi = hex_value(ch);
-        if (hi < 0) {
-            return {};
-        }
-        ++index;
-        if (index >= dashed.size()) {
-            return {};
-        }
-        const int lo = hex_value(dashed[index]);
-        if (lo < 0) {
-            return {};
-        }
-        out[read++] = static_cast<std::uint8_t>((hi << 4) | lo);
-    }
-    return read == 16 ? out : std::array<std::uint8_t, 16>{};
-}
-
-std::string to_uuid_string(const std::array<std::uint8_t, 16>& bytes) {
-    static constexpr char hex[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(36);
-    // 8-4-4-4-12 hex chars = 4-2-2-2-6 bytes
-    static constexpr int byte_groups[5] = {4, 2, 2, 2, 6};
-    std::size_t pos = 0;
-    for (int g = 0; g < 5; ++g) {
-        if (g > 0) out += '-';
-        for (int i = 0; i < byte_groups[g]; ++i) {
-            const std::uint8_t b = bytes[pos++];
-            out += hex[b >> 4];
-            out += hex[b & 0x0F];
-        }
-    }
-    return out;
+    return cyane::Uuid::md5_v3(md5);
 }
 
 Bytes random_bytes(std::size_t count) {

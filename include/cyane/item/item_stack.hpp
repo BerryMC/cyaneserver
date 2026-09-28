@@ -22,6 +22,11 @@ struct ItemStack {
     [[nodiscard]] bool stacks_with(const ItemStack& other) const noexcept {
         return !empty() && !other.empty() && id == other.id && damage == other.damage;
     }
+
+    // NMS ItemStack.matches 语义：按物品类型（id+damage）比较，不含数量——游标校验用
+    [[nodiscard]] bool matches_type(const ItemStack& other) const noexcept {
+        return id == other.id && damage == other.damage;
+    }
 };
 
 // 1.12.2 绝大多数物品堆叠上限 64（工具/盔甲等为 1，本阶段统一按 64 近似）

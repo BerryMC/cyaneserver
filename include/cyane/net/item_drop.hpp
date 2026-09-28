@@ -25,6 +25,9 @@ struct PickupEvent {
     std::uint32_t item_entity_id{0};
     std::uint32_t collector_id{0};
     item::ItemStack stack;
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
 };
 
 // 线程安全的掉落物登记表。多个 reactor 线程共享：破坏方块时 spawn，
@@ -60,7 +63,7 @@ public:
             const double dz = it.z - pz;
             const bool ready = now_ms - it.spawn_ms >= kPickupDelayMs;
             if (ready && dx * dx + dy * dy + dz * dz <= kPickupRadiusSq) {
-                picked.push_back(PickupEvent{it.entity_id, collector, it.stack});
+                picked.push_back(PickupEvent{it.entity_id, collector, it.stack, it.x, it.y, it.z});
                 items_[i] = items_.back();
                 items_.pop_back();
             } else {

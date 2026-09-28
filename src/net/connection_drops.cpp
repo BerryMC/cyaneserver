@@ -95,32 +95,36 @@ void Connection::collect_items(std::uint64_t now_ms) {
     auto picked = context_.item_drops->collect_near(player_id_, player_pos_.x, player_pos_.y,
                                                     player_pos_.z, now_ms);
     for (const auto& ev : picked) {
+        // 掉落物所在区块（CollectItem/DestroyEntities 只发给附近玩家）
+        const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(ev.x),
+                                                       static_cast<std::int32_t>(ev.z));
+        const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
         // CollectItem (0x4B)：varint collectedId | varint collectorId | varint count
         ByteWriter collect;
         collect.varint(static_cast<std::int32_t>(ev.item_entity_id));
         collect.varint(static_cast<std::int32_t>(ev.collector_id));
         collect.varint(static_cast<std::int32_t>(ev.stack.count));
         send_packet(proto::play_cb::kCollectItem, collect.data());
-        if (context_.hub != nullptr) {
-            context_.hub->broadcast(player_id_, proto::play_cb::kCollectItem, collect.data());
+        if (context_.hub != nullptr && cpos) {
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kCollectItem, collect.data());
         }
         // 物品进背包；放不下的部分回吐为新的掉落物（就在玩家脚下）
-        item::ItemStack leftover = give_item(ev.stack);
-        if (!leftover.empty() && context_.item_drops != nullptr) {
-            const std::uint32_t eid = context_.item_drops->spawn(player_pos_.x, player_pos_.y,
-                                                                player_pos_.z, leftover, now_ms);
-            if (eid != 0) {
-                spawn_dropped_item(DroppedItem{eid, player_pos_.x, player_pos_.y, player_pos_.z,
-                                               leftover, now_ms});
-            }
+        const item::ItemStack leftover = give_item(ev.stack);
+        if (!leftover.empty()) {
+            const auto pcpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
+                                                            static_cast<std::int32_t>(player_pos_.z));
+            drop_stack(player_pos_.x, player_pos_.y, player_pos_.z, leftover,
+                       pcpos ? pcpos->x : 0, pcpos ? pcpos->z : 0);
         }
-        // 全员销毁该掉落物实体
+        // 销毁该掉落物实体
         ByteWriter destroy;
         destroy.varint(1);
         destroy.varint(static_cast<std::int32_t>(ev.item_entity_id));
         send_packet(proto::play_cb::kDestroyEntities, destroy.data());
-        if (context_.hub != nullptr) {
-            context_.hub->broadcast(player_id_, proto::play_cb::kDestroyEntities, destroy.data());
+        if (context_.hub != nullptr && cpos) {
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kDestroyEntities, destroy.data());
         }
     }
 }

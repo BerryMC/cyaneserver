@@ -2,12 +2,15 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 
 #include "cyane/core/bytes.hpp"
+#include "cyane/core/time.hpp"
+#include "cyane/core/uuid.hpp"
 #include "cyane/crypto/cipher.hpp"
 #include "cyane/crypto/rsa.hpp"
 #include "cyane/net/reactor.hpp"
@@ -17,8 +20,12 @@
 #include "cyane/proto/packet_ids.hpp"
 #include "cyane/proto/play_fields.hpp"
 #include "cyane/entity/player_manager.hpp"
+#include "cyane/item/crafting.hpp"
 #include "cyane/item/player_inventory.hpp"
 #include "cyane/net/container_store.hpp"
+#include "cyane/net/crafting_table_store.hpp"
+#include "cyane/net/furnace_store.hpp"
+#include "cyane/net/mob_manager.hpp"
 #include "cyane/net/item_drop.hpp"
 #include "cyane/net/player_hub.hpp"
 #include "cyane/world/world.hpp"
@@ -50,9 +57,14 @@ struct ConnectionContext {
     entity::PlayerManager* player_manager{nullptr};
     PlayerHub* hub{nullptr};
     ItemDropManager* item_drops{nullptr};
+    MobManager* mobs{nullptr};
     ContainerStore* containers{nullptr};
+    FurnaceStore* furnaces{nullptr};
+    world::CraftingTableStore* crafting_tables{nullptr};
     game::OpManager* op_manager{nullptr};
+    item::CraftingRegistry* crafting{nullptr};
     cyane::world::World* world{nullptr};
+    const cyane::TickStats* tick_stats{nullptr};
     std::int32_t view_distance{10};
     std::int32_t max_players{20};
     std::uint8_t game_mode{proto::game_mode::kCreative};
@@ -103,21 +115,57 @@ private:
     [[nodiscard]] bool handle_play_click_window(ByteSpan payload);
     [[nodiscard]] bool handle_play_close_window(ByteSpan payload);
     [[nodiscard]] bool handle_play_client_command(ByteSpan payload);
+    // 0x1D 挥臂动画：限流后转发 Animation(0x06) 给视距内玩家
+    [[nodiscard]] bool handle_play_animation(ByteSpan payload);
     // 打开箱子容器：下发 OpenWindow + 容器 WindowItems
     void open_chest(std::int64_t chest_key);
+    // 熔炉：打开窗口、点击处理、进度条同步
+    void open_furnace(std::int64_t furnace_key);
+    void apply_furnace_click(std::int16_t slot, std::uint8_t button, std::int32_t mode,
+                             const item::ItemStack& clicked);
+    void sync_furnace_progress();
+    // 熔炉进度条（WindowProperty 0/1/2/3）：force=true 时无条件全发（开窗时）
+    void send_furnace_progress(bool force);
+    // 把某熔炉槽写回权威存储（即时持久化 + 触发反应式重估）并回发该槽
+    void commit_furnace_slot(std::size_t fslot, const item::ItemStack& in_slot);
+    // 熔炉槽经权威存储更新后，立即回发三槽与进度条
+    void send_furnace_slots_now();
     void apply_click(std::int16_t slot, std::uint8_t button, std::int32_t mode);
-    void apply_chest_click(std::int16_t slot, std::uint8_t button, std::int32_t mode);
+    // 合成：读取合成格匹配配方并刷新结果槽（0）；take=true 时消耗一份材料
+    void refresh_crafting_result();
+    // 拿取合成结果：all=false 放到游标，all=true（shift）批量进背包
+    void take_craft_result(bool all);
+    void apply_chest_click(std::int16_t slot, std::uint8_t button, std::int32_t mode,
+                           const item::ItemStack& clicked);
+    // 工作台窗口（windowId=4，10 槽：0-8 格、9 结果）：打开/点击/结果计算
+    void open_crafting_table(std::int64_t table_key);
+    void apply_table_click(std::int16_t slot, std::uint8_t button, std::int32_t mode,
+                           const item::ItemStack& clicked);
+    [[nodiscard]] item::ItemStack compute_table_result() const;
+    // 结果被取走时消耗一份材料（每非空格 -1 并写回存储）
+    void consume_table_materials();
+    // 容器方块被破坏时通知客户端关窗（游标剩余落地）
+    void close_client_window(std::uint8_t window_id);
+    // 游标校验失配时的全量重同步：重发当前开窗 WindowItems + 游标 SetSlot
+    void resync_open_window();
     // 切换游戏模式（用于 /gamemode 命令），广播 UpdateGameMode 给所有玩家
     void set_game_mode(std::uint8_t mode);
+    // 按模式回发 PlayerAbilities（创造/旁观允许飞行，其余默认）
+    void send_abilities_for(std::uint8_t mode);
+    // 远端玩家经 hub 投递要求本连接切换游戏模式：更新行为 + 回发 PlayerAbilities
+    void apply_remote_gamemode(std::uint8_t mode);
     // 把 moving 尽量并入 [lo,hi] 槽区间（先叠已有同类，再填空槽），就地更新剩余
     [[nodiscard]] bool merge_into_range(item::ItemStack& moving, std::size_t lo, std::size_t hi);
     void kill_player();
     void respawn_player();
     // 掉落物：生成、给自己补发已有、拾取入包
     void spawn_dropped_item(const DroppedItem& drop);
+    // 在世界生成一个掉落物（spawn + 本地补发 + 附近玩家广播）
+    void drop_stack(double x, double y, double z, item::ItemStack stack, std::int32_t bx, std::int32_t bz);
     // 生成掉落物的两个包（SpawnObject + EntityMetadata）编码到 out_spawn/out_meta
     void encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn, ByteWriter& out_meta) const;
     void send_existing_drops();
+    void send_existing_mobs();
     // 玩家聊天命令处理
     bool handle_player_command(std::string_view text);
     // 发送聊天框反馈
@@ -130,8 +178,10 @@ private:
     // 修改一个方块：写世界 + 向自己与附近玩家广播 BlockChange
     void set_block_and_broadcast(std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state);
     void send_spawn_player();
-    // 按玩家所在区块与视距，加载缺失区块、卸载出界区块
+    // 按玩家所在区块与视距，把缺失区块排入待发队列、卸载出界区块
     void update_view(world::ChunkPos center);
+    // 从待发表取 limit 个区块发出（tick 周期调用，限制每 tick 突发量）
+    void send_pending_chunks(std::size_t limit);
     void send_chunk(world::ChunkPos pos);
     void unload_chunk(world::ChunkPos pos);
     // 多人可见性：广播自己、补发他人、投递收件箱
@@ -142,7 +192,7 @@ private:
     [[nodiscard]] bool handle_login_start(ByteSpan payload);
     [[nodiscard]] bool handle_encryption_response(ByteSpan payload);
     void send_encryption_request();
-    void finish_login(std::string uuid_with_dashes);
+    void finish_login(cyane::Uuid uuid);
     void send_login_success(std::string uuid_with_dashes);
     void send_join_game();
     void send_world_state();
@@ -191,6 +241,23 @@ private:
     std::int64_t open_chest_key_{0};
     bool chest_open_{false};
     static constexpr std::uint8_t kChestWindowId = 1;
+    // 熔炉窗口（右键熔炉方块打开）
+    std::int64_t open_furnace_key_{0};
+    bool furnace_open_{false};
+    static constexpr std::uint8_t kFurnaceWindowId = 2;
+    std::int32_t last_burn_left_{-1};
+    std::int32_t last_cook_time_{-1};
+    // 熔炉窗口打开期间已同步给客户端的三个熔炉槽（结果产出时补发 SetSlot）
+    std::array<item::ItemStack, 3> last_furnace_slots_{};
+    // 工作台窗口（右键工作台方块打开）
+    std::int64_t open_table_key_{0};
+    bool table_open_{false};
+    static constexpr std::uint8_t kCraftingTableWindowId = 4;
+    // 打开期间的 3x3 格与最近一次结果（点击就地改，同步写回 CraftingTableStore）
+    std::array<item::ItemStack, world::CraftingTableStore::kGridCells> table_grid_{};
+    item::ItemStack table_result_{};
+    // 挥臂动画广播限流（vanilla 有 4 tick 冷却）
+    std::uint64_t last_anim_broadcast_ms_{0};
 
     // 生命与死亡状态（伤害/重生）
     float health_{20.0f};
@@ -198,13 +265,24 @@ private:
 
     // 已发送给客户端的区块集合，与玩家所在区块 + 视距一同维护
     std::unordered_set<std::int64_t> loaded_chunks_;
+    // 区块限流：跨区块时入队，tick 每 tick 最多发 kChunkPerTick 个（约 20/s @10Hz sweep）
+    std::deque<world::ChunkPos> pending_chunks_;
+    std::unordered_set<std::int64_t> pending_chunk_keys_;
+    static constexpr std::size_t kChunkPerTick = 2;
     world::ChunkPos last_center_{};
     bool has_center_{false};
 
+    // 移动广播去重：位置/朝向与上次广播一致则跳过
+    double last_bcast_x_{0.0};
+    double last_bcast_y_{0.0};
+    double last_bcast_z_{0.0};
+    std::uint8_t last_bcast_yaw_{0};
+    std::uint8_t last_bcast_pitch_{0};
+    bool has_bcast_{false};
+
     // 多人广播：本连接在 hub 中的条目（含收件箱），进入 play 后有效
     std::shared_ptr<PlayerHub::Entry> hub_entry_;
-    std::array<std::uint8_t, 16> uuid_bytes_{};
-    std::string uuid_str_{};
+    Uuid uuid_;
     entity::Position player_pos_{};
 
     std::unique_ptr<crypto::StreamCipher> decrypt_cipher_;

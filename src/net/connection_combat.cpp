@@ -39,13 +39,25 @@ void Connection::respawn_player() {
     player_pos_ = spawn_point();
 
     // Respawn (0x35)：int dimension | byte difficulty | byte gameMode | string levelType
-    // 客户端收到后卸载当前世界、清空区块缓存并等待新的地形
+    // 客户端收到后卸载世界与全部实体，等待新的 JoinGame 重建
     cyane::ByteWriter respawn;
     respawn.i32(0);  // overworld
     respawn.u8(2);   // normal
     respawn.u8(context_.game_mode);
     respawn.string("default");
     send_packet(proto::play_cb::kRespawn, respawn.data());
+
+    // 1.12.2 客户端 Respawn 后要求重发 JoinGame（否则停在 loading 界面）
+    send_join_game();
+
+    // 出生点与世界时间
+    cyane::ByteWriter spawn_pos;
+    spawn_pos.position(0, 4, 0);
+    send_packet(proto::play_cb::kSpawnPosition, spawn_pos.data());
+    cyane::ByteWriter time;
+    time.i64(0);
+    time.i64(0);
+    send_packet(proto::play_cb::kTimeUpdate, time.data());
 
     // 血量恢复
     cyane::ByteWriter health;
@@ -54,8 +66,15 @@ void Connection::respawn_player() {
     health.f32(5.0f);
     send_packet(proto::play_cb::kUpdateHealth, health.data());
 
+    // 客户端实体列表已清空：补发其他玩家/生物/掉落物
+    spawn_existing_players();
+    send_existing_mobs();
+    send_existing_drops();
+
     // 重新下发出生点区块并把玩家放回去
     loaded_chunks_.clear();
+    pending_chunks_.clear();
+    pending_chunk_keys_.clear();
     has_center_ = false;
     const auto spawn_chunk = world::ChunkPos::from_world(
         static_cast<std::int32_t>(player_pos_.x), static_cast<std::int32_t>(player_pos_.z));

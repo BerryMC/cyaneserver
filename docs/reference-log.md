@@ -33,28 +33,28 @@
   - `org.bukkit` 净 API **825** 类（排除 `craftbukkit` 346 类与 shaded libs 10873 类）。
   - `net.minecraft.server.v1_12_R1` **2324** 类。聚类：`Block*` 304、`Entity*` 256、`World*` 229、`Packet*` 169、`Item*` 125、`TileEntity*` 49、`Player*` 42、`Server*` 23、`NBT*` 20、`Chunk*` 17。
   - 热点类公开成员数：`Entity` 290、`World` 250、`EntityLiving` 208、`EntityPlayer` 135、`ItemStack` 86、`WorldServer` 64、`PlayerConnection` 48、`NBTTagCompound` 43、`Container` 36。
-- 落地：`README.md` §5.1。
+- 落地：`docs/compat.md` 表面积实测。
 
 ### R-003 — NMS 命名是 MCP 与混淆的混合体
 
 - 来源：`javap` 读取 `EntityPlayer`、`Entity`
 - 结论：类名是 MCP 名（`EntityPlayer`/`WorldServer`/`PacketPlayOutChat` 均在），但成员名只有一部分被 MCP 覆盖——`EntityPlayer` 的公开成员中 **57 个是混淆短名**（`d`/`e`/`f`），77 个是 MCP 名。
 - 影响：签名清单必须由 `javap` 从 jar 机械提取，**禁止按 MCP 知识手写**，否则插件链接失败。
-- 落地：`README.md` §5.2 的 `tools/nms_manifest` 设计（M6 实施）。
+- 落地：`docs/compat.md` NMS 分层策略 的 `tools/nms_manifest` 设计（M6 实施）。
 
 ### R-004 — 公开可变字段属于 ABI
 
 - 来源：编译探针（`javac -cp spigot.jar`）+ `javap`
 - 结论：插件直接读写 `entity.locX`、`entity.motY`、`entity.dead` 这类公开字段，不经过方法调用。这类字段分布在继承链上（如 `locX` 声明在 `Entity`，`EntityPlayer` 继承）。
 - 影响：NMS shim 必须提供**镜像字段**而非纯方法委托；C++ 侧保持权威，在 tick 边界批量同步。
-- 落地：`README.md` §5.2 的镜像同步设计（M6 实施）。
+- 落地：`docs/compat.md` NMS 分层策略 的镜像同步设计（M6 实施）。
 
 ### R-005 — 第三方类路径也是兼容契约
 
 - 来源：`spigot-1.12.2` 类清单
 - 结论：Spigot 把一批库**未混淆**暴露给插件：`net.md_5.bungee.api.chat`、`org.yaml.snakeyaml`、`com.google.gson`、`com.google.common`、`io.netty`、`org.apache.commons.lang3`、`org.apache.commons.io`、`org.sqlite`、`com.mysql`、`gnu.trove`、`org.spigotmc`；fastutil 则 shaded 在 `org.bukkit.craftbukkit.libs.it.unimi.dsi.fastutil` 下。
 - 影响：内嵌 JVM 的 classpath 必须复现这一暴露面，否则大量插件 `NoClassDefFoundError`。
-- 落地：`README.md` §5.3（M4 实施）。
+- 落地：`docs/compat.md` 第三方类路径契约（M4 实施）。
 
 ### R-006 — 原版数据资产
 
@@ -88,5 +88,3 @@
   - **密文接入**：读路径解密原始缓冲后交帧解码器；写路径整帧加密后入发送队列。`Connection::alive_` 为 false 时停止加密。
   - **测试验证**：`integration_login_start_gets_disconnect` 通过，76 个测试全绿。`receive_compressed_packet` 用于 SetCompression 后的所有包。
 - 落地：`src/crypto/`（aes.hpp, rsa.hpp, sha1.hpp, session_service.hpp）、`src/net/connection.cpp`（handle_login、handle_encryption_response、finish_login）、`tests/test_status_ping.cpp`。
-
-### R-008 — 1.12.2 位置编码布局

@@ -185,6 +185,7 @@ constexpr std::string_view kWhitespace = " \t\r\n";
 Result<Config> Config::parse(std::string_view text, std::string_view source) {
     Config config;
     std::string section;
+    Config::Table* current_table = nullptr;
     std::size_t line_number = 0;
 
     for (std::size_t pos = 0; pos <= text.size();) {
@@ -202,7 +203,19 @@ Result<Config> Config::parse(std::string_view text, std::string_view source) {
             if (line.back() != ']') {
                 return make_error(ErrorCode::config, std::format("{}: malformed section header", where));
             }
-            section.assign(trim(line.substr(1, line.size() - 2)));
+            const auto header = trim(line.substr(1, line.size() - 2));
+            if (header.size() >= 2 && header.front() == '[' && header.back() == ']') {
+                // [[name]]：表格数组，开启新表
+                const auto name = trim(header.substr(1, header.size() - 2));
+                if (name.empty()) {
+                    return make_error(ErrorCode::config, std::format("{}: empty table array name", where));
+                }
+                current_table = &config.tables_[std::string{name}].emplace_back();
+                section.clear();
+                continue;
+            }
+            section.assign(header);
+            current_table = nullptr;
             continue;
         }
 
@@ -223,8 +236,12 @@ Result<Config> Config::parse(std::string_view text, std::string_view source) {
             return std::unexpected{std::move(value.error())};
         }
 
-        std::string full_key = section.empty() ? std::string{key} : std::format("{}.{}", section, key);
-        config.entries_.insert_or_assign(std::move(full_key), std::move(*value));
+        if (current_table != nullptr) {
+            current_table->insert_or_assign(std::string{key}, std::move(*value));
+        } else {
+            std::string full_key = section.empty() ? std::string{key} : std::format("{}.{}", section, key);
+            config.entries_.insert_or_assign(std::move(full_key), std::move(*value));
+        }
     }
     return config;
 }

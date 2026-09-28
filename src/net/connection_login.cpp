@@ -120,17 +120,15 @@ void Connection::send_encryption_request() {
     send_packet(proto::login_cb::kEncryptionRequest, fields.data());
 }
 
-void Connection::finish_login(std::string uuid_with_dashes) {
+void Connection::finish_login(Uuid uuid) {
     if (context_.compression_threshold >= 0) {
         cyane::ByteWriter compression_fields;
         compression_fields.varint(context_.compression_threshold);
         send_packet(proto::login_cb::kSetCompression, compression_fields.data());
         compression_threshold_ = context_.compression_threshold;
     }
-    // UUID 二进制须在广播前解析，供 PlayerInfo/SpawnPlayer 复用
-    uuid_bytes_ = crypto::parse_uuid_string(uuid_with_dashes);
-    uuid_str_ = uuid_with_dashes;
-    send_login_success(std::move(uuid_with_dashes));
+    uuid_ = uuid;
+    send_login_success(uuid.dashed());
 
     state_ = proto::State::play;
     player_id_ = entity::allocate_entity_id();
@@ -171,21 +169,9 @@ void Connection::send_join_game() {
     fields.boolean(false);
     send_packet(proto::play_cb::kJoinGame, fields.data());
 
-    // 创造/旁观模式：PlayerAbilities (0x2C) 允许飞行
-    if (context_.game_mode == proto::game_mode::kCreative) {
-        cyane::ByteWriter abilities;
-        abilities.u8(proto::abilities::kInvulnerable | proto::abilities::kAllowFlying |
-                     proto::abilities::kCreativeMode);
-        abilities.f32(0.05f);  // flying speed
-        abilities.f32(0.1f);   // field of view modifier
-        send_packet(proto::play_cb::kPlayerAbilities, abilities.data());
-    } else if (context_.game_mode == proto::game_mode::kSpectator) {
-        cyane::ByteWriter abilities;
-        abilities.u8(proto::abilities::kAllowFlying | proto::abilities::kFlying);
-        abilities.f32(0.1f);   // flying speed
-        abilities.f32(0.0f);   // field of view modifier
-        send_packet(proto::play_cb::kPlayerAbilities, abilities.data());
-    }
+    // 所有模式都发 PlayerAbilities (0x2C)：创造/旁观开飞行，生存/冒险显式清零
+    // creativeMode 位，客户端据此切换物品栏界面与血条/饥饿条显示
+    send_abilities_for(context_.game_mode);
 }
 
 void Connection::send_world_state() {
@@ -217,6 +203,7 @@ void Connection::send_world_state() {
     send_inventory();
     // 补发世界中已有的掉落物实体
     send_existing_drops();
+    send_existing_mobs();
 }
 
 void Connection::send_initial_teleport() {

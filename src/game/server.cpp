@@ -1,5 +1,6 @@
 #include "cyane/game/server.hpp"
 
+#include <algorithm>
 #include <format>
 #include <iostream>
 #include <thread>
@@ -140,6 +141,12 @@ Result<ServerConfig> ServerConfig::from(const Config& config) {
     }
     out.op_file = std::move(*op_file);
 
+    auto recipe_file = string_value(config, "server.recipe_file", out.recipe_file);
+    if (!recipe_file) {
+        return std::unexpected{std::move(recipe_file.error())};
+    }
+    out.recipe_file = std::move(*recipe_file);
+
     auto log_level = string_value(config, "log.level", out.log_level);
     if (!log_level) {
         return std::unexpected{std::move(log_level.error())};
@@ -182,21 +189,57 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     if (const auto rc = server->op_manager_->load(server->config_.op_file); !rc) {
         log::warn("failed to load ops file: {}", rc.error().message);
     }
+    server->crafting_ = std::make_unique<item::CraftingRegistry>();
+    auto recipes = Config::load_file(server->config_.recipe_file);
+    if (recipes) {
+        if (const auto rc = server->crafting_->load_config(*recipes); !rc) {
+            log::warn("failed to load recipes from {}: {}", server->config_.recipe_file, rc.error().message);
+        } else {
+            log::info("loaded {} recipes from {}", server->crafting_->size(), server->config_.recipe_file);
+        }
+    } else {
+        log::warn("cannot open recipe file {}: {}", server->config_.recipe_file, recipes.error().message);
+    }
     server->player_manager_ = std::make_unique<entity::PlayerManager>();
     context.player_manager = server->player_manager_.get();
     context.op_manager = server->op_manager_.get();
+    context.crafting = server->crafting_.get();
     server->hub_ = std::make_unique<net::PlayerHub>();
     context.hub = server->hub_.get();
     server->item_drops_ = std::make_unique<net::ItemDropManager>();
     context.item_drops = server->item_drops_.get();
     server->containers_ = std::make_unique<net::ContainerStore>();
     context.containers = server->containers_.get();
+    server->furnaces_ = std::make_unique<net::FurnaceStore>();
+    context.furnaces = server->furnaces_.get();
+    server->crafting_tables_ = std::make_unique<world::CraftingTableStore>();
+    context.crafting_tables = server->crafting_tables_.get();
+    server->mobs_ = std::make_unique<net::MobManager>();
+    context.mobs = server->mobs_.get();
+    if (recipes) {
+        std::unordered_map<std::int16_t, std::int32_t> fuel;
+        std::unordered_map<std::int16_t, std::pair<std::int16_t, std::uint8_t>> smelting;
+        if (const auto rc = server->crafting_->load_furnace_config(*recipes, fuel, smelting); !rc) {
+            log::warn("failed to load furnace tables: {}", rc.error().message);
+        } else {
+            net::FurnaceStore::SmeltMap smelt_entries;
+            for (auto& [id, entry] : smelting) {
+                smelt_entries[id] = net::FurnaceStore::SmeltEntry{entry.first, entry.second};
+            }
+            server->furnaces_->set_tables(std::move(fuel), std::move(smelt_entries));
+        }
+    }
     server->world_ = std::make_unique<world::World>();
     context.world = server->world_.get();
+    context.tick_stats = &server->stats_;
     context.view_distance = server->config_.view_distance;
     context.max_players = static_cast<std::int32_t>(server->config_.max_players);
     context.game_mode = server->config_.game_mode == "survival" ? proto::game_mode::kSurvival
-                                                                 : proto::game_mode::kCreative;
+                         : (server->config_.game_mode == "spectator" ? proto::game_mode::kSpectator
+                                                                      : proto::game_mode::kCreative);
+    // 生成出生点附近的被动生物
+    server->mobs_->spawn_passive(12);
+
     server->network_ = std::make_unique<net::NetService>(
         server->config_.bind_address, server->config_.port, server->config_.io_threads, std::move(context));
     return server;
@@ -250,6 +293,63 @@ int Server::run(std::uint64_t max_ticks) {
 
 void Server::tick() {
     status_->set_online(static_cast<std::int32_t>(network_->active()));
+    if (furnaces_ != nullptr) {
+        furnaces_->tick();
+        // 燃烧状态翻转 → 更新熔炉方块 meta 点亮位（bit 3）并广播，
+        // 客户端方块材质才会切换到烧制中的样子
+        const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
+        for (const auto& [key, lit] : furnaces_->take_lit_changes()) {
+            const std::int32_t bx = position_x(key);
+            const std::int32_t by = position_y(key);
+            const std::int32_t bz = position_z(key);
+            const std::uint16_t cur = world_->block_at(bx, by, bz);
+            if (world::block_id(cur) != world::block_id(world::kStateFurnace)) {
+                continue;
+            }
+            auto meta = world::state_meta(cur);
+            meta = static_cast<std::uint16_t>((meta & ~std::uint16_t(8)) | (lit ? 8 : 0));
+            const std::uint16_t next = static_cast<std::uint16_t>(world::block_id(cur) << 4) | meta;
+            if (next == cur) {
+                continue;
+            }
+            world_->set_block(bx, by, bz, next);
+            ByteWriter change;
+            change.position(bx, by, bz);
+            change.varint(static_cast<std::int32_t>(next));
+            const auto cpos = world::ChunkPos::from_world(bx, bz);
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kBlockChange,
+                                      change.data());
+            }
+        }
+    }
+    if (mobs_ != nullptr) {
+        const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
+        for (const auto& mob : mobs_->tick()) {
+            // 只发给生物所在区块视距内的玩家（远端客户端看不到该实体）
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(mob.pos.x),
+                                                           static_cast<std::int32_t>(mob.pos.z));
+            if (!cpos) {
+                continue;
+            }
+            // EntityTeleport (0x4C) + EntityHeadLook (0x36)
+            ByteWriter tp;
+            tp.varint(static_cast<std::int32_t>(mob.entity_id));
+            tp.f64(mob.pos.x);
+            tp.f64(mob.pos.y);
+            tp.f64(mob.pos.z);
+            tp.u8(net::angle_byte(mob.pos.yaw));
+            tp.u8(0);
+            tp.boolean(true);
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
+                                 tp.data());
+            ByteWriter head;
+            head.varint(static_cast<std::int32_t>(mob.entity_id));
+            head.u8(net::angle_byte(mob.pos.yaw));
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityHeadLook,
+                                 head.data());
+        }
+    }
 }
 
 void Server::broadcast_system_message(std::string_view message) {
@@ -279,7 +379,8 @@ bool Server::set_player_gamemode(std::string_view name, std::string_view mode) {
     else if (mode == "adventure") gm = proto::game_mode::kAdventure;
     else if (mode == "spectator") gm = proto::game_mode::kSpectator;
     else return false;
-    // 1.12.2 用 PlayerInfo(0x2E) action=0x01 更新游戏模式
+    // 1.12.2 用 PlayerInfo(0x2E) action=2 (CHANGE_GAME_MODE 序数) 更新游戏模式；
+    // 同时把切换指令投递给目标连接，使其行为判定与 PlayerAbilities 一并更新
     ByteWriter info;
     info.varint(proto::play_cb::kPlayerInfoUpdateGameType);
     info.varint(1);
@@ -287,23 +388,8 @@ bool Server::set_player_gamemode(std::string_view name, std::string_view mode) {
     if (!uuid_opt) return false;
     info.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid_opt->data()), uuid_opt->size()});
     info.varint(static_cast<std::int32_t>(gm));
-    hub_->send_to(target_id, proto::play_cb::kPlayerInfo, info.data());
-    return true;
-}
-
-bool Server::teleport_player(std::string_view name) {
-    const std::uint32_t target_id = hub_->player_id_by_name(name);
-    if (target_id == 0) {
-        return false;
-    }
-    // 发送一个 Respawn 包强制客户端重载
-    ByteWriter out;
-    out.i32(0);  // dimension
-    out.u8(proto::game_mode::kSurvival);
-    out.u8(proto::game_mode::kCreative);
-    out.string("default");
-    hub_->send_to(target_id, proto::play_cb::kRespawn, out.data());
-    return true;
+    hub_->broadcast_all(proto::play_cb::kPlayerInfo, info.data());
+    return hub_->send_gamemode(target_id, gm);
 }
 
 bool Server::op_player(std::string_view name) {
@@ -311,7 +397,7 @@ bool Server::op_player(std::string_view name) {
     if (!uuid_opt) {
         return false;
     }
-    const std::string uuid_str = crypto::to_uuid_string(*uuid_opt);
+    const std::string uuid_str = Uuid::from_bytes(*uuid_opt).dashed();
     return op_manager_->op_player(uuid_str, name);
 }
 
@@ -320,7 +406,7 @@ bool Server::deop_player(std::string_view name) {
     if (!uuid_opt) {
         return false;
     }
-    const std::string uuid_str = crypto::to_uuid_string(*uuid_opt);
+    const std::string uuid_str = Uuid::from_bytes(*uuid_opt).dashed();
     return op_manager_->deop_player(uuid_str);
 }
 

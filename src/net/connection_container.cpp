@@ -10,15 +10,12 @@ namespace cyane::net {
 
 namespace {
 // 单箱窗口布局：0..26 箱子槽，27..53 主背包(玩家 9..35)，54..62 热区栏(玩家 36..44)
-constexpr std::int16_t kChestSlots = 27;
-constexpr std::int16_t kChestWindowSlots = 63;
+using detail::kChestSlots;
+using detail::kChestWindowSlots;
 
 // 窗口槽 → 玩家背包槽（仅当 >=27 时有效）
 [[nodiscard]] std::size_t window_to_player_slot(std::int16_t win_slot) noexcept {
-    if (win_slot < 27 + 27) {
-        return 9 + static_cast<std::size_t>(win_slot - 27);  // 主背包
-    }
-    return 36 + static_cast<std::size_t>(win_slot - 54);  // 热区栏
+    return detail::container_window_to_player_slot(win_slot, kChestSlots);
 }
 }
 
@@ -51,24 +48,59 @@ void Connection::open_chest(std::int64_t chest_key) {
     send_packet(proto::play_cb::kWindowItems, items.data());
 }
 
+void Connection::close_client_window(std::uint8_t window_id) {
+    ByteWriter out;
+    out.u8(window_id);
+    send_packet(proto::play_cb::kCloseWindow, out.data());
+    // 关窗前游标上的物品退回背包，放不下则落地
+    if (!cursor_item_.empty()) {
+        const item::ItemStack leftover = give_item(cursor_item_);
+        if (!leftover.empty()) {
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
+                                                           static_cast<std::int32_t>(player_pos_.z));
+            drop_stack(player_pos_.x, player_pos_.y, player_pos_.z, leftover,
+                       cpos ? cpos->x : 0, cpos ? cpos->z : 0);
+        }
+        cursor_item_ = item::ItemStack::air();
+    }
+}
+
 bool Connection::handle_play_close_window(ByteSpan payload) {
-    // CloseWindow (sb 0x08)：byte windowId。客户端关闭箱子窗口时发。
     (void)payload;
+    // CloseWindow (sb 0x08)：byte windowId。客户端关闭箱子/熔炉/工作台窗口时发。
+    if (furnace_open_ && context_.furnaces != nullptr && open_furnace_key_ != 0) {
+        // 关闭熔炉窗口前，确保炉灶状态已同步到存储（FurnaceStore 已在点击时即时更新）
+        // 此处仅重置连接状态，不清除 FurnaceStore 数据
+    }
     chest_open_ = false;
     open_chest_key_ = 0;
-    // 关窗时游标物品退回背包，放不下则丢弃（本阶段不回吐掉落物）
+    furnace_open_ = false;
+    open_furnace_key_ = 0;
+    table_open_ = false;
+    open_table_key_ = 0;
+    // 关窗时游标物品退回背包，放不下的部分生成掉落物（避免物品凭空消失）
     if (!cursor_item_.empty()) {
-        cursor_item_ = give_item(cursor_item_);
+        const item::ItemStack leftover = give_item(cursor_item_);
+        if (!leftover.empty()) {
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
+                                                           static_cast<std::int32_t>(player_pos_.z));
+            drop_stack(player_pos_.x, player_pos_.y, player_pos_.z, leftover,
+                       cpos ? cpos->x : 0, cpos ? cpos->z : 0);
+        }
         cursor_item_ = item::ItemStack::air();
     }
     return true;
 }
 
-void Connection::apply_chest_click(std::int16_t slot, std::uint8_t button, std::int32_t mode) {
+void Connection::apply_chest_click(std::int16_t slot, std::uint8_t button, std::int32_t mode,
+                                   const item::ItemStack& clicked) {
     if (context_.containers == nullptr || !chest_open_) {
         return;
     }
-    (void)mode;  // 箱子窗口本阶段仅支持普通左/右键，不做 shift 转移
+    // 创造模式：客户端经 clickedItem 声明创造选择器取出的物品；服务端游标为空时采信
+    if (context_.game_mode == proto::game_mode::kCreative && cursor_item_.empty() && !clicked.empty()) {
+        cursor_item_ = clicked;
+    }
     if (slot < 0 || slot >= kChestWindowSlots) {
         // 窗口外：丢弃游标
         if (slot < 0) {
@@ -77,6 +109,39 @@ void Connection::apply_chest_click(std::int16_t slot, std::uint8_t button, std::
         return;
     }
     const bool is_chest = slot < kChestSlots;
+
+    if (mode == 1) {
+        // shift 快速转移：箱子槽 → 主背包再热区栏（余量留原槽）；玩家槽 → 热区栏↔主背包
+        if (is_chest) {
+            auto moving = context_.containers->slot(open_chest_key_, static_cast<std::size_t>(slot));
+            if (moving.empty()) {
+                return;
+            }
+            (void)merge_into_range(moving, 9, 35);
+            if (!moving.empty()) {
+                (void)merge_into_range(moving, 36, 44);
+            }
+            context_.containers->set_slot(open_chest_key_, static_cast<std::size_t>(slot), moving);
+            send_slot(kChestWindowId, slot, moving);
+            send_inventory();
+            return;
+        }
+        const std::size_t pidx = window_to_player_slot(slot);
+        auto moving = inventory_.slot(pidx);
+        if (moving.empty()) {
+            return;
+        }
+        if (pidx >= 36) {
+            (void)merge_into_range(moving, 9, 35);
+        } else {
+            (void)merge_into_range(moving, 36, 44);
+        }
+        inventory_.set_slot(pidx, moving);
+        send_slot(kChestWindowId, slot, moving);
+        send_inventory();
+        return;
+    }
+
     // 读取被点槽当前物品
     item::ItemStack in_slot = is_chest
         ? context_.containers->slot(open_chest_key_, static_cast<std::size_t>(slot))

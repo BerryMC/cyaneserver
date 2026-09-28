@@ -118,9 +118,11 @@ class Client:
         except (TimeoutError, EOFError, OSError):
             pass
 
-    def tab_complete(self, text, tx=1):
-        body = write_string(text) + bytes([1])  # assumeCommand: true
-        body += struct.pack(">iii", 0, 63, 0)  # lookedAtBlock: optional position
+    def tab_complete(self, text, tx=1, assume_command=True):
+        # 1.12.2 sb TabComplete：string text | bool assumeCommand |
+        # [bool hasLookedAtBlock + position(打包 i64)]（无 transaction_id）
+        body = write_string(text) + bytes([1 if assume_command else 0])
+        body += bytes([1]) + struct.pack(">q", 0)  # hasLookedAtBlock=true, position=0
         send_packet(self.sock, 0x01, body, self.threshold)
 
     def _string(self, s):

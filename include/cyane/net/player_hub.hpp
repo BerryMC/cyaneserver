@@ -24,6 +24,7 @@ struct PlayerSnapshot {
     double z{0.0};
     float yaw{0.0f};
     float pitch{0.0f};
+    std::uint8_t game_mode{0};
 };
 
 // 待投递给某连接的逻辑消息（未编码），由目标连接在自己的 reactor 线程取出后
@@ -32,6 +33,7 @@ struct HubMessage {
     std::int32_t packet_id{0};
     Bytes payload;
     bool kill_flag{false};  // true：要求目标连接自杀（用于控制台 /kill）
+    std::int32_t gamemode{-1};  // ≥0：要求目标连接切换游戏模式（更新行为并回发 PlayerAbilities）
 };
 
 // 线程安全的多人广播中心：连接跨 reactor 线程时也安全。
@@ -118,6 +120,19 @@ public:
         return true;
     }
 
+    // 向指定玩家投递切换游戏模式指令，同时更新其快照（新玩家补发 PlayerInfo 用）
+    bool send_gamemode(std::uint32_t target_id, std::uint8_t mode) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = players_.find(target_id);
+        if (it == players_.end()) {
+            return false;
+        }
+        it->second->snapshot.game_mode = mode;
+        std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
+        it->second->mailbox.push_back(HubMessage{0, Bytes{}, false, static_cast<std::int32_t>(mode)});
+        return true;
+    }
+
     // 按玩家名查找 entity id（用于控制台 /kill 等）
     [[nodiscard]] std::uint32_t player_id_by_name(std::string_view name) const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -185,6 +200,14 @@ public:
             s.z = z;
             s.yaw = yaw;
             s.pitch = pitch;
+        }
+    }
+
+    // 更新玩家快照中的游戏模式（本连接切换模式后调用，供新玩家补发 PlayerInfo 用）
+    void update_game_mode(std::uint32_t entity_id, std::uint8_t mode) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (auto it = players_.find(entity_id); it != players_.end()) {
+            it->second->snapshot.game_mode = mode;
         }
     }
 

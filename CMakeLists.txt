@@ -65,6 +65,7 @@ add_library(cyane_core
   src/core/log.cpp
   src/core/config.cpp
   src/core/thread_pool.cpp
+  src/core/uuid.cpp
 )
 target_include_directories(cyane_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(cyane_core PUBLIC cyane_flags cyane::deps)
@@ -95,6 +96,10 @@ add_library(cyane_net
   src/net/connection_combat.cpp
   src/net/connection_drops.cpp
   src/net/connection_container.cpp
+  src/net/connection_furnace.cpp
+  src/net/connection_table.cpp
+  src/net/connection_mobs.cpp
+  src/net/mob_manager.cpp
   src/net/net_service.cpp
   src/net/session_service.cpp
 )
@@ -106,7 +111,8 @@ add_library(cyane_game
   src/game/server.cpp
   src/game/status.cpp
   src/game/op_manager.cpp
-  src/entity/entity.cpp
+  src/item/crafting.cpp
+  
   "${CYANE_REGISTRY_HEADER}"
 )
 target_include_directories(cyane_game PUBLIC
@@ -141,6 +147,8 @@ if(CYANE_BUILD_TESTS)
     tests/test_status.cpp
     tests/test_status_ping.cpp
     tests/test_item.cpp
+    tests/test_crafting.cpp
+    tests/test_furnace.cpp
   )
   target_include_directories(cyane_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
   target_link_libraries(cyane_tests PRIVATE cyane::game)

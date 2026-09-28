@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "connection_detail.hpp"
+#include "cyane/core/log.hpp"
 #include "cyane/world/chunk_codec.hpp"
 
 namespace cyane::net {
@@ -37,67 +38,151 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     if (!status || !packed || !face) {
         return false;
     }
-    // 创造模式左键即刻破坏(status 0)；生存模式挖掘完成(status 2)才破坏
+    // 创造模式左键即刻破坏(status 0)；生存模式挖掘完成(status 2)才破坏；旁观不可破坏
     const bool creative = context_.game_mode == proto::game_mode::kCreative;
-    const bool destroy = creative ? (*status == 0) : (*status == 2);
-    if (!destroy) {
-        return true;
-    }
+    const bool spectator = context_.game_mode == proto::game_mode::kSpectator;
+    const bool destroy = !spectator && (creative ? (*status == 0) : (*status == 2));
     const std::int32_t bx = position_x(*packed);
     const std::int32_t by = position_y(*packed);
     const std::int32_t bz = position_z(*packed);
+    // 生存模式：START(0) 出现裂纹、ABORT(1) 清除裂纹，让附近玩家看到挖掘过程
+    if (!creative && (*status == 0 || *status == 1) && context_.hub != nullptr) {
+        const auto cpos = world::ChunkPos::from_world(bx, bz);
+        if (cpos) {
+            // BlockBreakAnimation (0x08)：int entityId | position | byte progress
+            ByteWriter out;
+            out.i32(static_cast<std::int32_t>(player_id_));
+            out.position(bx, by, bz);
+            out.u8(*status == 0 ? 0 : 0xFF);
+            const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kBlockBreakAnimation, out.data());
+        }
+    }
+    if (!destroy) {
+        return true;
+    }
     // 破坏前记录原方块，用于生成掉落物（生存模式且非空气）
     const std::uint16_t prev = context_.world != nullptr ? context_.world->block_at(bx, by, bz)
                                                          : world::kStateAir;
+    const std::int64_t bkey = detail::block_key(bx, by, bz);
+    // 容器方块（箱子/熔炉）：破坏时内容必须掉落并从存储移除，
+    // 否则旧条目会随同位置新方块"复活"（幽灵物品/幽灵熔炉）
+    if (context_.item_drops != nullptr && prev != world::kStateAir) {
+        const auto prev_id = world::block_id(prev);
+        if (context_.containers != nullptr && prev_id == world::block_id(world::kStateChest)) {
+            const auto chest = context_.containers->snapshot(bkey);
+            context_.containers->remove(bkey);
+            for (const auto& stack : chest) {
+                if (!stack.empty()) {
+                    drop_stack(bx + 0.5, by + 0.25, bz + 0.5, stack, bx, bz);
+                }
+            }
+        }
+        if (context_.furnaces != nullptr && prev_id == world::block_id(world::kStateFurnace)) {
+            const auto state = context_.furnaces->snapshot(bkey);
+            context_.furnaces->remove(bkey);
+            for (const auto& stack : {state.input, state.fuel, state.output}) {
+                if (!stack.empty()) {
+                    drop_stack(bx + 0.5, by + 0.25, bz + 0.5, stack, bx, bz);
+                }
+            }
+            if (furnace_open_ && open_furnace_key_ == bkey) {
+                furnace_open_ = false;
+                open_furnace_key_ = 0;
+                close_client_window(kFurnaceWindowId);
+            }
+        }
+        if (context_.crafting_tables != nullptr &&
+            prev_id == world::block_id(world::kStateCraftingTable)) {
+            const auto grid = context_.crafting_tables->cells(bkey);
+            context_.crafting_tables->remove(bkey);
+            for (const auto& stack : grid) {
+                if (!stack.empty()) {
+                    drop_stack(bx + 0.5, by + 0.25, bz + 0.5, stack, bx, bz);
+                }
+            }
+            if (table_open_ && open_table_key_ == bkey) {
+                table_open_ = false;
+                open_table_key_ = 0;
+                close_client_window(kCraftingTableWindowId);
+            }
+        }
+        if (chest_open_ && open_chest_key_ == bkey) {
+            chest_open_ = false;
+            open_chest_key_ = 0;
+            close_client_window(kChestWindowId);
+        }
+    }
     set_block_and_broadcast(bx, by, bz, world::kStateAir);
     if (!creative && context_.item_drops != nullptr && prev != world::kStateAir) {
         // 方块 → 掉落物：1.12.2 方块 id<256 与物品 id 同值，meta 作 damage
         const std::int16_t item_id = static_cast<std::int16_t>(world::block_id(prev));
         const std::int16_t dmg = static_cast<std::int16_t>(world::state_meta(prev));
-        const double dx = bx + 0.5;
-        const double dy = by + 0.25;
-        const double dz = bz + 0.5;
-        const item::ItemStack stack{item_id, 1, dmg};
-        const std::uint32_t eid = context_.item_drops->spawn(dx, dy, dz, stack, now_ms_);
-        if (eid != 0) {
-            const DroppedItem drop{eid, dx, dy, dz, stack, now_ms_};
-            spawn_dropped_item(drop);
-            // 向附近其他玩家广播掉落物（SpawnObject + EntityMetadata 二连）
-            if (context_.hub != nullptr) {
-                const auto cpos = world::ChunkPos::from_world(bx, bz);
-                if (cpos) {
-                    const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
-                    ByteWriter spawn;
-                    ByteWriter meta;
-                    encode_dropped_item(drop, spawn, meta);
-                    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
-                                                 proto::play_cb::kSpawnObject, spawn.data());
-                    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
-                                                 proto::play_cb::kEntityMetadata, meta.data());
-                }
-            }
-        }
+        drop_stack(bx + 0.5, by + 0.25, bz + 0.5, item::ItemStack{item_id, 1, dmg}, bx, bz);
     }
     return true;
 }
 
+void Connection::drop_stack(double x, double y, double z, item::ItemStack stack, std::int32_t bx,
+                            std::int32_t bz) {
+    if (context_.item_drops == nullptr || stack.empty()) {
+        return;
+    }
+    const std::uint32_t eid = context_.item_drops->spawn(x, y, z, stack, now_ms_);
+    if (eid == 0) {
+        return;
+    }
+    const DroppedItem drop{eid, x, y, z, stack, now_ms_};
+    spawn_dropped_item(drop);
+    if (context_.hub == nullptr) {
+        return;
+    }
+    const auto cpos = world::ChunkPos::from_world(bx, bz);
+    if (!cpos) {
+        return;
+    }
+    const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+    ByteWriter spawn;
+    ByteWriter meta;
+    encode_dropped_item(drop, spawn, meta);
+    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                 proto::play_cb::kSpawnObject, spawn.data());
+    context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                 proto::play_cb::kEntityMetadata, meta.data());
+}
+
 bool Connection::handle_play_block_place(ByteSpan payload) {
-    // PlayerBlockPlacement (0x1F)：position(i64) | varint face | varint hand
-    //                             | float cursorX/Y/Z
+    // PlayerBlockPlacement (0x1F)：position(i64) | byte face(-1..5) | 其后字段本阶段忽略
     ByteReader reader{payload};
     auto packed = reader.i64();
-    auto face = reader.varint();
+    auto face = reader.u8();
     if (!packed || !face) {
         return false;
     }
     const std::int32_t cx = position_x(*packed);
     const std::int32_t cy = position_y(*packed);
     const std::int32_t cz = position_z(*packed);
-    // 右键点到已有箱子：打开容器窗口而非放置
-    if (context_.world != nullptr && context_.containers != nullptr &&
-        world::block_id(context_.world->block_at(cx, cy, cz)) == world::block_id(world::kStateChest)) {
-        open_chest(detail::block_key(cx, cy, cz));
+    // 旁观模式无法与方块交互
+    if (context_.game_mode == proto::game_mode::kSpectator) {
         return true;
+    }
+    // 右键点到已有箱子/熔炉/工作台：打开对应窗口而非放置
+    if (context_.world != nullptr) {
+        const auto clicked = world::block_id(context_.world->block_at(cx, cy, cz));
+        if (context_.containers != nullptr && clicked == world::block_id(world::kStateChest)) {
+            open_chest(detail::block_key(cx, cy, cz));
+            return true;
+        }
+        if (context_.furnaces != nullptr && clicked == world::block_id(world::kStateFurnace)) {
+            open_furnace(detail::block_key(cx, cy, cz));
+            return true;
+        }
+        if (context_.crafting_tables != nullptr &&
+            clicked == world::block_id(world::kStateCraftingTable)) {
+            open_crafting_table(detail::block_key(cx, cy, cz));
+            return true;
+        }
     }
     const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
     const std::uint16_t state = world::block_state_from_item(held.id, held.damage);
@@ -108,22 +193,34 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
     const std::int32_t tx = cx + delta.dx;
     const std::int32_t ty = cy + delta.dy;
     const std::int32_t tz = cz + delta.dz;
-    // 原版会取消放置到会挤压任意玩家（含自己）的格子：把方块放进玩家碰撞体 → 直接踢出
-    if (context_.hub != nullptr && context_.hub->block_intersects_any_player(tx, ty, tz)) {
-        // 向放置者回发当前方块状态，让客户端回滚预测
+    // 原版语义：目标格必须为空（本阶段不支持替换型方块），拒绝时回滚且不消耗物品。
+    // face=-1（点击点在方块内部）时目标格即被点方块本身，天然被此检查拦住。
+    const std::uint16_t target = context_.world != nullptr ? context_.world->block_at(tx, ty, tz)
+                                                            : world::kStateAir;
+    if (target != world::kStateAir) {
         ByteWriter rollback;
         rollback.position(tx, ty, tz);
-        rollback.varint(static_cast<std::int32_t>(context_.world != nullptr
-                                                      ? context_.world->block_at(tx, ty, tz)
-                                                      : world::kStateAir));
+        rollback.varint(static_cast<std::int32_t>(target));
+        send_packet(proto::play_cb::kBlockChange, rollback.data());
+        return true;
+    }
+    // 原版会取消放置到会挤压任意玩家（含自己）的格子：把方块放进玩家碰撞体 → 直接踢出
+    if (context_.hub != nullptr && context_.hub->block_intersects_any_player(tx, ty, tz)) {
+        ByteWriter rollback;
+        rollback.position(tx, ty, tz);
+        rollback.varint(static_cast<std::int32_t>(target));
         send_packet(proto::play_cb::kBlockChange, rollback.data());
         return true;
     }
     set_block_and_broadcast(tx, ty, tz, state);
-    // 放下的是箱子：在容器存储登记一个空箱
+    // 放下的是箱子/熔炉：登记对应容器状态
     if (context_.containers != nullptr &&
         world::block_id(state) == world::block_id(world::kStateChest)) {
         context_.containers->ensure(detail::block_key(tx, ty, tz));
+    }
+    if (context_.furnaces != nullptr &&
+        world::block_id(state) == world::block_id(world::kStateFurnace)) {
+        context_.furnaces->ensure(detail::block_key(tx, ty, tz));
     }
     // 生存模式消耗一个手持方块并回发该槽（创造模式无限）
     if (context_.game_mode != proto::game_mode::kCreative) {
@@ -143,25 +240,44 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
 
 void Connection::send_chunk(world::ChunkPos pos) {
     world::Chunk chunk = context_.world != nullptr ? context_.world->build_chunk(pos)
-                                                    : world::make_flat_chunk(pos);
+                                                   : world::make_flat_chunk(pos);
     cyane::ByteWriter fields;
     world::write_full_chunk(fields, chunk);
     send_packet(proto::play_cb::kChunkData, fields.data());
     loaded_chunks_.insert(detail::chunk_key(pos));
 }
 
+void Connection::send_pending_chunks(std::size_t limit) {
+    while (limit != 0 && !pending_chunks_.empty()) {
+        const auto pos = pending_chunks_.front();
+        pending_chunks_.pop_front();
+        pending_chunk_keys_.erase(detail::chunk_key(pos));
+        send_chunk(pos);
+        --limit;
+    }
+}
+
 void Connection::unload_chunk(world::ChunkPos pos) {
+    const std::int64_t key = detail::chunk_key(pos);
+    // 尚未发出的待发现块：直接从待发表移除，不发 UnloadChunk（客户端没见过它）
+    if (!loaded_chunks_.contains(key)) {
+        pending_chunk_keys_.erase(key);
+        std::erase_if(pending_chunks_, [&](const world::ChunkPos& p) {
+            return detail::chunk_key(p) == key;
+        });
+        return;
+    }
     // UnloadChunk (0x1D)：int chunkX | int chunkZ
     cyane::ByteWriter fields;
     fields.i32(pos.x);
     fields.i32(pos.z);
     send_packet(proto::play_cb::kUnloadChunk, fields.data());
-    loaded_chunks_.erase(detail::chunk_key(pos));
+    loaded_chunks_.erase(key);
 }
 
 void Connection::update_view(world::ChunkPos center) {
     const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
-    // 先加载视距内缺失的区块（由近及远）
+    // 先入队视距内缺失的区块（由近及远），由 tick 限流发出
     for (std::int32_t r = 0; r <= radius; ++r) {
         for (std::int32_t cx = center.x - r; cx <= center.x + r; ++cx) {
             for (std::int32_t cz = center.z - r; cz <= center.z + r; ++cz) {
@@ -171,17 +287,23 @@ void Connection::update_view(world::ChunkPos center) {
                     continue;
                 }
                 const world::ChunkPos pos{cx, cz};
-                if (!loaded_chunks_.contains(detail::chunk_key(pos))) {
-                    send_chunk(pos);
+                const std::int64_t key = detail::chunk_key(pos);
+                if (!loaded_chunks_.contains(key) && pending_chunk_keys_.insert(key).second) {
+                    pending_chunks_.push_back(pos);
                 }
             }
         }
     }
-    // 再卸载超出视距的区块
+    // 再卸载超出视距的区块（含尚未发出的待发现块）
     std::vector<world::ChunkPos> stale;
     for (const std::int64_t key : loaded_chunks_) {
         const world::ChunkPos pos{static_cast<std::int32_t>(key >> 32),
                                   static_cast<std::int32_t>(static_cast<std::uint32_t>(key))};
+        if (std::max(std::abs(pos.x - center.x), std::abs(pos.z - center.z)) > radius) {
+            stale.push_back(pos);
+        }
+    }
+    for (const world::ChunkPos pos : pending_chunks_) {
         if (std::max(std::abs(pos.x - center.x), std::abs(pos.z - center.z)) > radius) {
             stale.push_back(pos);
         }

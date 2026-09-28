@@ -120,31 +120,31 @@ class Client:
                         self.chat.append(msg)
                 elif pid == 0x2E:  # PlayerInfo
                     action, off = parse_varint(body, 0)
-                    if action == 0x01:  # update game mode
+                    if action == 0x02:  # CHANGE_GAME_MODE (1.12.2 序数)
                         with self.lock:
                             self.game_modes.append(body.hex())
                 elif pid == 0x2C:  # PlayerAbilities
                     with self.lock:
                         self.abilities.append(body[0])
-                elif pid == 0x0E:  # TabComplete
-                    tx, off = parse_varint(body, 0)
-                    count, off = parse_varint(body, off)
+                elif pid == 0x0E:  # TabComplete (1.12.2：仅 matches 数组，无 transaction_id/has_tooltip)
+                    count, off = parse_varint(body, 0)
                     matches = []
                     for _ in range(count):
                         n, off = parse_varint(body, off)
                         matches.append(body[off:off + n].decode("utf-8", "replace"))
                         off += n
-                        off += 1  # skip has_tooltip boolean
                     with self.lock:
-                        self.tab_results.append({"tx": tx, "matches": matches})
-        except (TimeoutError, EOFError, OSError):
+                        self.tab_results.append({"matches": matches})
+        except (TimeoutError, EOFError, OSError, IndexError):
             pass
 
     def chat_cmd(self, text):
         send_packet(self.sock, 0x02, self._string(text), self.threshold)
 
-    def tab_complete(self, text, tx=1):
-        send_packet(self.sock, 0x01, write_varint(tx) + self._string(text), self.threshold)
+    def tab_complete(self, text, assume_command=True):
+        # 1.12.2 sb TabComplete：string text | bool assumeCommand（无 transaction_id）
+        body = self._string(text) + bytes([1 if assume_command else 0])
+        send_packet(self.sock, 0x01, body, self.threshold)
 
     def _string(self, s):
         b = s.encode("utf-8")
@@ -168,9 +168,9 @@ def main() -> int:
     time.sleep(1.2)
 
     # Tab 补全：/gamemode 的参数
-    c.tab_complete("/gamemode ", tx=1)
+    c.tab_complete("/gamemode ")
     time.sleep(0.4)
-    c.tab_complete("/gam", tx=2)
+    c.tab_complete("/gam")
     time.sleep(0.4)
 
     # 命令：/help

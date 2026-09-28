@@ -222,11 +222,12 @@ bool OpManager::op_player(std::string_view uuid, std::string_view name, std::uin
     std::string n{name};
     std::transform(n.begin(), n.end(), n.begin(),
                    [](unsigned char c) { return std::tolower(c); });
-    const bool new_op = levels_.find(u) == levels_.end();
     if (level < 1) level = 1;
     if (level > 4) level = 4;
+    bool new_op = true;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        new_op = levels_.find(u) == levels_.end();
         levels_[u] = level;
         uuids_[n] = u;
     }

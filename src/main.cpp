@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cerrno>
 #include <charconv>
 #include <csignal>
 #include <cstdint>
@@ -10,8 +11,11 @@
 #include <string_view>
 #include <thread>
 
+#include <poll.h>
 #include <termios.h>
 #include <unistd.h>
+
+#include <sys/eventfd.h>
 
 #include "cyane/core/config.hpp"
 #include "cyane/core/error.hpp"
@@ -67,10 +71,19 @@ void ensure_config_dir(std::string_view config_path) {
 }
 
 std::atomic<cyane::Server*> g_server{nullptr};
+// 交互式控制台唤醒事件：SIGINT 时写入，让阻塞在 poll 的行编辑线程退出并恢复终端模式
+std::atomic<int> g_console_wake_fd{-1};
 
 extern "C" void on_signal(int) {
     if (auto* server = g_server.load(std::memory_order_relaxed); server != nullptr) {
         server->request_stop();
+    }
+    // eventfd 写是异步信号安全的；线程醒来后自行恢复 termios 并退出
+    const int fd = g_console_wake_fd.load(std::memory_order_relaxed);
+    if (fd >= 0) {
+        const std::uint64_t one{1};
+        const auto written = ::write(fd, &one, sizeof(one));
+        (void)written;
     }
 }
 
@@ -228,8 +241,40 @@ void run_line_editor(cyane::Server& server) {
     redraw_input_locked();
     cyane::log::console_unlock();
 
-    char ch = 0;
-    while (::read(STDIN_FILENO, &ch, 1) == 1) {
+    // stdin + 唤醒事件 fd：Ctrl+C/SIGTERM 写事件 fd 使 poll 返回，
+    // 线程得以走完 termios 恢复再退出（阻塞态直接 detach 会把终端留在 raw 模式）
+    const int wake_fd = g_console_wake_fd.load(std::memory_order_relaxed);
+    const nfds_t nfds = wake_fd >= 0 ? 2 : 1;
+    pollfd pfds[2]{};
+    pfds[0].fd = STDIN_FILENO;
+    pfds[0].events = POLLIN;
+    if (wake_fd >= 0) {
+        pfds[1].fd = wake_fd;
+        pfds[1].events = POLLIN;
+    }
+
+    while (true) {
+        const int ready = ::poll(pfds, nfds, -1);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (wake_fd >= 0 && (pfds[1].revents & POLLIN) != 0) {
+            // 信号触发的唤醒：退出循环并恢复终端
+            std::uint64_t drained = 0;
+            while (::read(wake_fd, &drained, sizeof(drained)) > 0) {
+            }
+            break;
+        }
+        if ((pfds[0].revents & POLLIN) == 0) {
+            continue;
+        }
+        char ch = 0;
+        if (::read(STDIN_FILENO, &ch, 1) != 1) {
+            break;
+        }
         if (ch == '\n' || ch == '\r') {
             cyane::log::console_lock();
             std::fputc('\n', stdout);
@@ -253,7 +298,7 @@ void run_line_editor(cyane::Server& server) {
                 redraw_input_locked();
             }
             cyane::log::console_unlock();
-        } else if (ch == 0x03) {  // Ctrl+C
+        } else if (ch == 0x03) {  // 个别终端未启用 ISIG 时 ^C 作为字节到达
             server.request_stop();
             break;
         } else if (ch == 0x04) {  // Ctrl+D
@@ -355,12 +400,13 @@ int main(int argc, char** argv) {
     std::print("\n");
 
     // 交互式控制台读取放到后台线程；tick 循环留在主线程，
-    // 这样 SIGINT 触发 request_stop 后 run() 立即返回并退出进程，
-    // 不会被卡在读取上的读取线程阻塞。
+    // 这样 SIGINT 触发 request_stop 后 run() 立即返回并退出进程。
     const bool interactive = max_ticks == 0 && ::isatty(STDIN_FILENO) != 0;
     std::thread console;
     if (interactive) {
         cyane::log::set_console_hooks(console_before_log, console_after_log);
+        const int wake_fd = ::eventfd(0, EFD_NONBLOCK);
+        g_console_wake_fd.store(wake_fd, std::memory_order_relaxed);
         console = std::thread{[running] { run_line_editor(*running); }};
     } else if (max_ticks == 0) {
         // 非 TTY（管道/重定向）：退回逐行读取，无提示符与行编辑
@@ -379,9 +425,9 @@ int main(int argc, char** argv) {
 
     g_server.store(nullptr, std::memory_order_relaxed);
     cyane::log::set_console_hooks(nullptr, nullptr);
-    // 读取线程可能仍阻塞在输入上，无法唤醒，直接 detach 让进程退出
+    // 交互式线程经 eventfd 唤醒后自行恢复终端模式并退出，可安全 join
     if (console.joinable()) {
-        console.detach();
+        console.join();
     }
     cyane::log::stop();
     return code;
