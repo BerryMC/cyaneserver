@@ -128,6 +128,7 @@ void print_usage() {
         std::print("  {}gamemode{} <模式> <玩家名>  切换游戏模式\n", kCyan, kReset);
         std::print("  {}op{} <玩家名>     将玩家设为 OP\n", kCyan, kReset);
         std::print("  {}deop{} <玩家名>   撤销玩家 OP\n", kCyan, kReset);
+        std::print("  {}save{}            立即保存世界存档\n", kCyan, kReset);
         std::print("  {}stop{}            停止服务器\n", kCyan, kReset);
         return true;
     }
@@ -206,6 +207,11 @@ void print_usage() {
         } else {
             std::print("{}player not found or not op:{} {}\n", kRed, kReset, rest);
         }
+        return true;
+    }
+    if (cmd == "save") {
+        server.save_world_now();
+        std::print("{}world saved{}\n", kGreen, kReset);
         return true;
     }
     if (cmd == "stop") {

@@ -87,6 +87,15 @@ target_include_directories(cyane_proto PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_link_libraries(cyane_proto PUBLIC cyane::core)
 add_library(cyane::proto ALIAS cyane_proto)
 
+add_library(cyane_world
+  src/world/nbt.cpp
+  src/world/region.cpp
+  src/world/anvil.cpp
+)
+target_include_directories(cyane_world PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(cyane_world PUBLIC cyane::core cyane::proto)
+add_library(cyane::world ALIAS cyane_world)
+
 add_library(cyane_net
   src/net/connection.cpp
   src/net/connection_login.cpp
@@ -105,15 +114,16 @@ add_library(cyane_net
   src/net/session_service.cpp
 )
 target_include_directories(cyane_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(cyane_net PUBLIC cyane::crypto cyane::proto)
+target_link_libraries(cyane_net PUBLIC cyane::crypto cyane::proto cyane::world)
 add_library(cyane::net ALIAS cyane_net)
 
 add_library(cyane_game
   src/game/server.cpp
   src/game/status.cpp
   src/game/op_manager.cpp
+  src/game/world_persistence.cpp
   src/item/crafting.cpp
-  
+
   "${CYANE_REGISTRY_HEADER}"
 )
 target_include_directories(cyane_game PUBLIC
@@ -150,6 +160,8 @@ if(CYANE_BUILD_TESTS)
     tests/test_item.cpp
     tests/test_crafting.cpp
     tests/test_furnace.cpp
+    tests/test_nbt.cpp
+    tests/test_anvil.cpp
   )
   target_include_directories(cyane_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
   target_link_libraries(cyane_tests PRIVATE cyane::game)

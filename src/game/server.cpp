@@ -169,6 +169,12 @@ Result<ServerConfig> ServerConfig::from(const Config& config) {
     }
     out.player_data_dir = std::move(*player_data_dir);
 
+    auto autosave = int_value(config, "server.autosave_interval", out.autosave_interval, 0, 86'400);
+    if (!autosave) {
+        return std::unexpected{std::move(autosave.error())};
+    }
+    out.autosave_interval = static_cast<int>(*autosave);
+
     return out;
 }
 
@@ -249,6 +255,15 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
                          : (server->config_.game_mode == "spectator" ? proto::game_mode::kSpectator
                                                                       : proto::game_mode::kCreative);
 
+    // 世界存档：载入 region/*.mca（方块编辑 + 箱子/熔炉方块实体）
+    server->persistence_ = std::make_unique<game::WorldPersistence>(
+        *server->world_, *server->containers_, *server->furnaces_, server->config_.world_dir);
+    if (auto loaded = server->persistence_->load(); !loaded) {
+        log::warn("world load failed: {}", loaded.error().message);
+    } else if (*loaded > 0) {
+        log::info("loaded {} chunks from {}", *loaded, server->config_.world_dir);
+    }
+
     // 生成出生点附近的被动生物
     server->mobs_->spawn_passive(12);
 
@@ -299,12 +314,36 @@ int Server::run(std::uint64_t max_ticks) {
               workers.rejected,
               accepted);
     network_->stop();
+    // 停机前落盘世界（方块编辑 + 箱子/熔炉）
+    save_world_now();
     workers_->shutdown();
     return 0;
 }
 
+void Server::save_world_now() {
+    if (persistence_ == nullptr) {
+        return;
+    }
+    if (auto saved = persistence_->save(); !saved) {
+        log::warn("world save failed: {}", saved.error().message);
+    } else {
+        log::info("saved {} chunks to {}", *saved, config_.world_dir);
+    }
+}
+
 void Server::tick() {
     status_->set_online(static_cast<std::int32_t>(network_->active()));
+    // 周期性世界存档（autosave_interval 秒，0 = 关闭）
+    if (persistence_ != nullptr && config_.autosave_interval > 0 &&
+        ++ticks_since_save_ >= static_cast<std::uint64_t>(config_.autosave_interval) *
+                                   static_cast<std::uint64_t>(config_.tick_rate)) {
+        ticks_since_save_ = 0;
+        if (auto saved = persistence_->save(); !saved) {
+            log::warn("autosave failed: {}", saved.error().message);
+        } else if (*saved > 0) {
+            log::debug("autosaved {} chunks", *saved);
+        }
+    }
     if (furnaces_ != nullptr) {
         furnaces_->tick();
         // 燃烧状态翻转 → 更新熔炉方块 meta 点亮位（bit 3）并广播，

@@ -1,5 +1,9 @@
 #pragma once
 
+#include <array>
+#include <memory>
+#include <optional>
+
 #include "cyane/core/bytes.hpp"
 #include "cyane/core/error.hpp"
 
@@ -23,5 +27,8 @@ void encode_frame(Bytes& out, std::int32_t packet_id, ByteSpan fields, std::int3
 
 [[nodiscard]] Result<Bytes> deflate(ByteSpan input, int level);
 [[nodiscard]] Result<Bytes> inflate(ByteSpan input, std::size_t output_size);
+// 输出大小未知的流式解压（Anvil 区块）：gzip=true 处理版本字节 1 的 gzip 载荷，
+// 否则按 zlib 载荷（版本字节 2）。max_output 上限防压缩炸弹。
+[[nodiscard]] Result<Bytes> inflate_dynamic(ByteSpan input, std::size_t max_output, bool gzip = false);
 
 }

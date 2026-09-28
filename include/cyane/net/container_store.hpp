@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "cyane/item/item_stack.hpp"
 
@@ -54,6 +56,12 @@ public:
         if (auto it = chests_.find(pos_key); it != chests_.end() && index < kChestSlots) {
             it->second[index] = item;
         }
+    }
+
+    // 全量快照（存档：按区块归组写 TileEntities）
+    [[nodiscard]] std::vector<std::pair<std::int64_t, Chest>> all() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return {chests_.begin(), chests_.end()};
     }
 
 private:

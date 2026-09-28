@@ -2,8 +2,12 @@
 
 #include <cstdint>
 #include <mutex>
+#include <span>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "cyane/world/blocks.hpp"
 #include "cyane/world/chunk.hpp"
 #include "cyane/world/chunk_codec.hpp"
 
@@ -57,6 +61,41 @@ public:
         return chunk;
     }
 
+    // ---- 持久化接口（Anvil 存档）----
+
+    // 拷出某区块的全部编辑（local 索引 → 状态）
+    [[nodiscard]] std::vector<std::pair<std::uint32_t, std::uint16_t>>
+    chunk_edits(ChunkPos pos) const {
+        std::lock_guard<std::mutex> lock{mutex_};
+        if (auto it = edits_.find(chunk_key(pos)); it != edits_.end()) {
+            return {it->second.begin(), it->second.end()};
+        }
+        return {};
+    }
+
+    // 合并存档加载来的编辑（同 local 覆盖）
+    void merge_edits(ChunkPos pos, std::span<const std::pair<std::uint32_t, std::uint16_t>> edits) {
+        std::lock_guard<std::mutex> lock{mutex_};
+        auto& target = edits_[chunk_key(pos)];
+        for (const auto& [local, state] : edits) {
+            target.insert_or_assign(local, state);
+        }
+    }
+
+    // 有编辑的区块列表（保存时逐区块写 region）
+    [[nodiscard]] std::vector<ChunkPos> edited_chunks() const {
+        std::vector<ChunkPos> out;
+        std::lock_guard<std::mutex> lock{mutex_};
+        out.reserve(edits_.size());
+        for (const auto& [key, edits] : edits_) {
+            if (!edits.empty()) {
+                out.push_back(ChunkPos{static_cast<std::int32_t>(key >> 32),
+                                       static_cast<std::int32_t>(key & 0xFFFFFFFFll)});
+            }
+        }
+        return out;
+    }
+
 private:
     // 区块内线性索引：y<<8 | z<<4 | x
     [[nodiscard]] static std::uint32_t local_index(ChunkPos pos, std::int32_t wx, std::int32_t wy,
@@ -68,16 +107,6 @@ private:
 
     [[nodiscard]] static std::int64_t chunk_key(ChunkPos pos) noexcept {
         return (static_cast<std::int64_t>(pos.x) << 32) | static_cast<std::uint32_t>(pos.z);
-    }
-
-    [[nodiscard]] static std::uint16_t flat_baseline(std::int32_t wy) noexcept {
-        switch (wy) {
-            case 0: return kStateBedrock;
-            case 1:
-            case 2: return kStateDirt;
-            case 3: return kStateGrass;
-            default: return kStateAir;
-        }
     }
 
     mutable std::mutex mutex_;

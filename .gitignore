@@ -25,6 +25,8 @@ java/build/
 config/ops.json
 config/*.local.toml
 player_data/*
+/world/
+world/*
 # 编辑器 / 系统
 .vscode/
 .idea/

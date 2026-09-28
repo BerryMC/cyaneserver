@@ -123,6 +123,19 @@ public:
         smelting_ = std::move(smelting);
     }
 
+    // 恢复存档状态（不做 refill 重估，lit_synced 归零由 tick 重新同步点亮位）
+    void restore(std::int64_t pos_key, FurnaceState state) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state.lit_synced = false;
+        furnaces_[pos_key] = std::move(state);
+    }
+
+    // 全量快照（存档）
+    [[nodiscard]] std::vector<std::pair<std::int64_t, FurnaceState>> all() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return {furnaces_.begin(), furnaces_.end()};
+    }
+
     // 推进所有熔炉一个 tick（20Hz 调用）
     void tick() {
         std::lock_guard<std::mutex> lock(mutex_);

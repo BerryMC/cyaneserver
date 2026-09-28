@@ -58,4 +58,39 @@ inline constexpr std::size_t kLightArrayBytes = kSectionBlockCount / 2;
     return (y << 8) | (z << 4) | x;
 }
 
+// 方块世界坐标打包成 64 位键（26 位 x | 12 位 y | 26 位 z），容器/方块实体统一索引
+struct BlockKeyPos {
+    std::int32_t x{0};
+    std::int32_t y{0};
+    std::int32_t z{0};
+};
+
+[[nodiscard]] constexpr std::int64_t pack_block_pos(std::int32_t x, std::int32_t y,
+                                                    std::int32_t z) noexcept {
+    return (static_cast<std::int64_t>(x & 0x3FFFFFF) << 38) |
+           (static_cast<std::int64_t>(y & 0xFFF) << 26) |
+           static_cast<std::int64_t>(z & 0x3FFFFFF);
+}
+
+[[nodiscard]] constexpr BlockKeyPos unpack_block_pos(std::int64_t key) noexcept {
+    const auto extend = [](std::uint64_t value, int bits) noexcept {
+        const std::uint64_t mask = (1ull << bits) - 1;
+        const std::uint64_t sign = 1ull << (bits - 1);
+        return static_cast<std::int32_t>(((value & mask) ^ sign) - sign);
+    };
+    const auto raw = static_cast<std::uint64_t>(key);
+    return {extend(raw >> 38, 26), extend(raw >> 26, 12), extend(raw, 26)};
+}
+
+// 超平坦 baseline（世界层公共契约；持久化编解码据此剔除冗余状态）
+[[nodiscard]] constexpr std::uint16_t flat_baseline(std::int32_t wy) noexcept {
+    switch (wy) {
+        case 0: return kStateBedrock;
+        case 1:
+        case 2: return kStateDirt;
+        case 3: return kStateGrass;
+        default: return kStateAir;
+    }
+}
+
 }

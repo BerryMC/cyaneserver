@@ -49,6 +49,48 @@ Result<Bytes> inflate(ByteSpan input, std::size_t output_size) {
 #endif
 }
 
+Result<Bytes> inflate_dynamic(ByteSpan input, std::size_t max_output, bool gzip) {
+#if CYANE_HAVE_ZLIB
+    z_stream stream{};
+    // 窗口位 15；gzip 载荷（Anvil 版本字节 1）需 +16，zlib 载荷（版本字节 2）用 15
+    if (inflateInit2(&stream, gzip ? 15 + 16 : 15) != Z_OK) {
+        return make_error(ErrorCode::protocol, "inflate_dynamic: init failed");
+    }
+    const std::unique_ptr<z_stream, decltype(&inflateEnd)> guard{&stream, inflateEnd};
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<std::byte*>(input.data()));
+    stream.avail_in = static_cast<uInt>(input.size());
+    Bytes output;
+    std::array<std::byte, 65536> chunk{};
+    while (true) {
+        stream.next_out = reinterpret_cast<Bytef*>(chunk.data());
+        stream.avail_out = static_cast<uInt>(chunk.size());
+        const int status = inflate(&stream, Z_NO_FLUSH);
+        const auto produced = chunk.size() - stream.avail_out;
+        if (produced > 0) {
+            if (output.size() + produced > max_output) {
+                return make_error(ErrorCode::protocol,
+                                  std::format("inflate_dynamic output exceeds limit {}", max_output));
+            }
+            output.insert(output.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(produced));
+        }
+        if (status == Z_STREAM_END) {
+            return output;
+        }
+        if (status != Z_OK) {
+            return make_error(ErrorCode::protocol, std::format("inflate_dynamic failed with zlib status {}", status));
+        }
+        if (stream.avail_in == 0 && produced == 0) {
+            return make_error(ErrorCode::protocol, "inflate_dynamic: truncated stream");
+        }
+    }
+#else
+    (void)input;
+    (void)max_output;
+    (void)gzip;
+    return make_error(ErrorCode::protocol, "built without zlib-ng, compression unavailable");
+#endif
+}
+
 Result<DecodedFrame> decode_frame(ByteSpan body, Bytes& scratch, std::int32_t threshold) {
     ByteReader reader{body};
     if (threshold < 0) {

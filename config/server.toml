@@ -13,6 +13,8 @@ game_mode = "creative"
 # 0 = 物理核数 - 1
 worker_threads = 0
 world_dir = "world"
+# 世界存档自动保存间隔（秒；0 = 关闭；停机时总是保存）
+autosave_interval = 300
 # 玩家数据持久化目录（每个 UUID 一个 JSON：位置/游戏模式/血量/46 格背包）
 player_data_dir = "player_data"
 # OP 名单（UUID → 等级 1-4）

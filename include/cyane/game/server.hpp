@@ -14,6 +14,7 @@
 #include "cyane/entity/player_manager.hpp"
 #include "cyane/game/op_manager.hpp"
 #include "cyane/game/player_data.hpp"
+#include "cyane/game/world_persistence.hpp"
 #include "cyane/item/crafting.hpp"
 #include "cyane/net/crafting_table_store.hpp"
 #include "cyane/net/mob_manager.hpp"
@@ -43,6 +44,7 @@ struct ServerConfig {
     std::string op_file{"config/ops.json"};
     std::string recipe_file{"config/recipes.toml"};
     std::string player_data_dir{"player_data"};
+    int autosave_interval{300};  // 秒；0 = 关闭
 
     [[nodiscard]] static Result<ServerConfig> from(const Config& config);
 };
@@ -92,6 +94,8 @@ public:
     }
     // 获取玩家数据存储引用（供连接层访问）
     [[nodiscard]] const game::PlayerDataStore& player_data_store() const noexcept { return *player_data_store_; }
+    // 世界存档：立即把方块编辑与箱子/熔炉落盘（控制台 save 命令）
+    void save_world_now();
 
 private:
     explicit Server(ServerConfig config);
@@ -110,11 +114,13 @@ private:
     std::unique_ptr<game::OpManager> op_manager_;
     std::unique_ptr<item::CraftingRegistry> crafting_;
     std::unique_ptr<world::World> world_;
+    std::unique_ptr<game::WorldPersistence> persistence_;
     std::unique_ptr<net::NetService> network_;
     std::unique_ptr<ThreadPool> workers_;
     TickStats stats_;
     std::atomic<bool> running_{true};
     std::unique_ptr<game::PlayerDataStore> player_data_store_;
+    std::uint64_t ticks_since_save_{0};
 };
 
 }

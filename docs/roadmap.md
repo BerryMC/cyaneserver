@@ -62,7 +62,7 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 |---|---|---|
 | **Protocol** 握手/状态/登录/压缩/加密 | `net/connection_login` `proto/frame` `crypto` | ✅ |
 | **Protocol** Play 包收发、移动、Tab、命令 | `net/connection_play` `connection_inventory` | ✅ |
-| **WorldStorage** 区块读写 | 超平坦 `make_flat_chunk` + 内存编辑表（无 Anvil） | 🟡 |
+| **WorldStorage** 区块读写 | 超平坦 `make_flat_chunk` + 内存编辑表 + **Anvil 编辑区块存档**（`world/region` `world/anvil`，停机/自动/手动落盘） | 🟡 编辑持久化完成，无原生地形 |
 | **Blocks** 破坏/放置/碰撞/回滚 | `net/connection_world` `world/blocks` `world/world` | ✅ |
 | **BlockEntities** 箱子 | `net/container_store` `connection_container` | ✅ |
 | **BlockEntities** 工作台 | `net/crafting_table_store` `connection_table` | ✅ |
@@ -85,13 +85,13 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 
 按"玩家可玩性收益 / 实现成本"排序：
 
-1. **Anvil 存档** — 读写 `.mca`，让世界/方块/容器跨重启保留（当前只有玩家数据与容器内存态落盘）。
-2. **高级 AI 与敌对生物** — 参考 `Mobs/Monster.cpp` 的目标选择与寻路。
-3. **物理与重力** — AABB 重叠分离、实体推动、活塞。
-4. **更多方块实体** — 附魔台、铁砧、酿造台、告示牌、唱片机、发射器。
-5. **统一窗口抽象** — 抽出 `Window`/`SlotArea` 思路，降低新容器接入成本。
-6. **世界生成** — 噪声地形、生物群系、洞穴、村庄。
-7. **经验与附魔** — 经验球/附魔台/药水效果，物品 NBT 支持。
+1. **高级 AI 与敌对生物** — 参考 `Mobs/Monster.cpp` 的目标选择与寻路。
+2. **物理与重力** — AABB 重叠分离、实体推动、活塞。
+3. **更多方块实体** — 附魔台、铁砧、酿造台、告示牌、唱片机、发射器。
+4. **统一窗口抽象** — 抽出 `Window`/`SlotArea` 思路，降低新容器接入成本。
+5. **世界生成** — 噪声地形、生物群系、洞穴、村庄（依赖 Anvil 读写，已就绪）。
+6. **经验与附魔** — 经验球/附魔台/药水效果，物品 NBT 支持。
+7. **容器方块实体完善** — 工作台 3×3 格当前不落盘（vanilla 亦不持久化），评估是否入档。
 
 ## 交付记录
 
@@ -160,6 +160,21 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 | 测试 | 98 个用例全绿 |
 
 **验证结论**：熔炉合成全链路（煤炭+铁矿 → 铁锭）、容器 shift-click 转移、工作台 3×3、命令与 Tab 补全均经真实 1.12.2 客户端验证。
+
+### M3b 交付（玩家持久化 + Anvil 存档）
+
+| 模块 | 内容 |
+|---|---|
+| `game/player_data` | 按 UUID 落盘玩家位置/朝向/游戏模式/血量/46 格背包（JSON），登录恢复、断开保存 |
+| `proto/frame` | `inflate_dynamic`：输出未知大小的流式解压（zlib/gzip，上限防压缩炸弹） |
+| `world/nbt` | Anvil NBT 读写器（大端、命名标签、13 类标签、保序 compound） |
+| `world/region` | `.mca` 读写重写：扇区分配/复用、位置表+时间戳、tmp+rename 原子落盘；修除原悬垂指针缺陷 |
+| `world/anvil` | 区块 ↔ 1.12.2 NBT（Blocks/Data/Add per-section 基线填充 + TileEntities：箱子 Items、熔炉 Items/BurnTime/CookTime/CookTimeTotal） |
+| `game/world_persistence` | 编排：编辑区块 ∪ 实体区块 → region；载入合并编辑并恢复箱子/熔炉存储 |
+| Server 接线 | 启动载入、停机保存、`server.autosave_interval` 自动保存、控制台 `save` 命令 |
+| 测试 | +7 用例（NBT 往返、区块往返、region 往返、持久化端到端），105 全绿 |
+
+**验证结论**：真实客户端挖方块 → SIGTERM 停机落盘 `world/region/r.0.0.mca` → 重启日志 `loaded 1 chunks` → 再次停机 `saved 1 chunks`；区块级还原由 `persistence_world_round_trip` 覆盖（跨 region 负坐标、baseline 剔除、箱子/熔炉内容与进度）。
 
 ## 性能目标（M8 验收基线）
 

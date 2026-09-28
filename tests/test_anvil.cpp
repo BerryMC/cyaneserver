@@ -1,0 +1,203 @@
+#include <algorithm>
+#include <filesystem>
+
+#include "cyane/game/world_persistence.hpp"
+#include "cyane/net/furnace_store.hpp"
+#include "cyane/world/anvil.hpp"
+#include "cyane/world/blocks.hpp"
+#include "cyane/world/nbt.hpp"
+#include "cyane/world/region.hpp"
+#include "test_framework.hpp"
+
+using namespace cyane;
+using world::ChunkPos;
+
+namespace {
+constexpr std::int16_t kApple = 260;  // 物品 id
+
+[[nodiscard]] std::uint32_t chunk_local(std::int32_t wx, std::int32_t wy, std::int32_t wz,
+                                        ChunkPos pos) {
+    return (static_cast<std::uint32_t>(wy) << 8) |
+           (static_cast<std::uint32_t>(wz - pos.world_z()) << 4) |
+           static_cast<std::uint32_t>(wx - pos.world_x());
+}
+} // namespace
+
+CYANE_TEST(anvil_chunk_round_trip_with_entities) {
+    const ChunkPos pos{3, -2};
+    // 编辑：石头塔 + 负坐标区块（local 索引按世界坐标折算）
+    std::vector<std::pair<std::uint32_t, std::uint16_t>> edits;
+    edits.emplace_back(chunk_local(pos.world_x() + 0, 4, pos.world_z() + 5, pos),
+                       world::kStateStone);
+    edits.emplace_back(chunk_local(pos.world_x() + 15, 9, pos.world_z() + 15, pos),
+                       static_cast<std::uint16_t>(world::kStateFurnace | 8));  // 点亮位 meta
+    edits.emplace_back(chunk_local(pos.world_x() + 2, 4, pos.world_z() + 2, pos),
+                       world::kStateChest);
+    // baseline 状态不应被编码
+    edits.emplace_back(chunk_local(pos.world_x() + 3, 3, pos.world_z() + 3, pos),
+                       world::kStateGrass);
+
+    world::ChunkEntities entities;
+    world::StoredChest chest{};
+    chest[0] = item::ItemStack{kApple, 5, 0};
+    chest[26] = item::ItemStack{std::int16_t{1}, 1, 3};
+    entities.chests.emplace_back(world::pack_block_pos(pos.world_x() + 2, 4, pos.world_z() + 2),
+                                 chest);
+    world::StoredFurnace furnace;
+    furnace.input = item::ItemStack{15, 3, 0};   // 铁矿
+    furnace.output = item::ItemStack{265, 1, 0}; // 铁锭
+    furnace.burn_left = 1200;
+    furnace.burn_total = 1600;
+    furnace.cook_time = 55;
+    entities.furnaces.emplace_back(world::pack_block_pos(pos.world_x() + 15, 9, pos.world_z() + 15),
+                                   furnace);
+
+    auto encoded = world::encode_chunk(pos, edits, entities);
+    CYANE_CHECK(encoded.has_value());
+    auto decoded = world::decode_chunk(ByteSpan{*encoded});
+    CYANE_CHECK(decoded.has_value());
+
+    // 编辑逐一还原（baseline 条目被剔除）
+    CYANE_CHECK_EQ(decoded->edits.size(), std::size_t{3});
+    for (const auto& [local, state] : decoded->edits) {
+        const bool found = std::any_of(edits.begin(), edits.end(), [&](const auto& pair) {
+            return pair.first == local && pair.second == state;
+        });
+        CYANE_CHECK(found);
+    }
+
+    CYANE_CHECK_EQ(decoded->entities.chests.size(), std::size_t{1});
+    CYANE_CHECK_EQ(decoded->entities.chests[0].first,
+                   world::pack_block_pos(pos.world_x() + 2, 4, pos.world_z() + 2));
+    CYANE_CHECK_EQ(decoded->entities.chests[0].second[0].id, kApple);
+    CYANE_CHECK_EQ(decoded->entities.chests[0].second[0].count, std::uint8_t{5});
+    CYANE_CHECK_EQ(decoded->entities.chests[0].second[26].damage, std::int16_t{3});
+    CYANE_CHECK(decoded->entities.chests[0].second[1].empty());
+
+    CYANE_CHECK_EQ(decoded->entities.furnaces.size(), std::size_t{1});
+    const auto& restored = decoded->entities.furnaces[0].second;
+    CYANE_CHECK_EQ(restored.input.id, std::int16_t{15});
+    CYANE_CHECK_EQ(restored.input.count, std::uint8_t{3});
+    CYANE_CHECK_EQ(restored.output.id, std::int16_t{265});
+    CYANE_CHECK_EQ(restored.burn_left, 1200);
+    CYANE_CHECK_EQ(restored.burn_total, 1600);
+    CYANE_CHECK_EQ(restored.cook_time, 55);
+}
+
+CYANE_TEST(anvil_refuses_unedited_chunk) {
+    const ChunkPos pos{0, 0};
+    auto encoded = world::encode_chunk(pos, {}, world::ChunkEntities{});
+    CYANE_CHECK(!encoded.has_value());
+}
+
+CYANE_TEST(region_write_read_round_trip) {
+    const auto dir = std::filesystem::temp_directory_path() / "cyane_test_region";
+    std::filesystem::remove_all(dir);
+    const auto path = dir / "r.0.0.mca";
+
+    world::RegionFile file;
+    const Bytes small(64, std::byte{0x11});
+    const Bytes big(70000, std::byte{0x22});  // 跨多扇区
+    auto w1 = file.write_chunk(0, 0, ByteSpan{small});
+    auto w2 = file.write_chunk(31, 31, ByteSpan{big});
+    auto w3 = file.write_chunk(-1, 0, ByteSpan{small});  // 负坐标折算到 in-region (31,0)
+    CYANE_CHECK(w1.has_value() && w2.has_value() && w3.has_value());
+    CYANE_CHECK(file.dirty());
+
+    CYANE_CHECK(file.save(path).has_value());
+
+    auto reloaded = world::RegionFile::load(path);
+    CYANE_CHECK(reloaded.has_value());
+    auto r1 = reloaded->read_chunk(0, 0);
+    CYANE_CHECK(r1.has_value() && r1->has_value());
+    CYANE_CHECK_EQ((*r1)->size(), small.size());
+    auto r2 = reloaded->read_chunk(31, 31);
+    CYANE_CHECK(r2.has_value() && r2->has_value());
+    CYANE_CHECK_EQ((*r2)->size(), big.size());
+    auto r3 = reloaded->read_chunk(31, 0);
+    CYANE_CHECK(r3.has_value() && r3->has_value());
+    CYANE_CHECK_EQ((*r3)->size(), small.size());
+    // 未写区块不存在
+    auto r4 = reloaded->read_chunk(5, 5);
+    CYANE_CHECK(r4.has_value() && !r4->has_value());
+
+    // 覆写为更大载荷后再读
+    const Bytes bigger(120000, std::byte{0x33});
+    CYANE_CHECK(reloaded->write_chunk(0, 0, ByteSpan{bigger}).has_value());
+    CYANE_CHECK(reloaded->save(path).has_value());
+    auto again = world::RegionFile::load(path);
+    CYANE_CHECK(again.has_value());
+    auto r5 = again->read_chunk(0, 0);
+    CYANE_CHECK(r5.has_value() && r5->has_value());
+    CYANE_CHECK_EQ((*r5)->size(), bigger.size());
+
+    std::filesystem::remove_all(dir);
+}
+
+CYANE_TEST(persistence_world_round_trip) {
+    const auto dir = std::filesystem::temp_directory_path() / "cyane_test_world";
+    std::filesystem::remove_all(dir);
+
+    world::World source_world;
+    net::ContainerStore source_chests;
+    net::FurnaceStore source_furnaces;
+    source_furnaces.set_tables({}, {});
+
+    // 编辑两个区块：石头平台 + 箱子 + 熔炉（跨 region：区块 0,0 与 -1,-1）
+    source_world.set_block(1, 4, 1, world::kStateStone);
+    source_world.set_block(2, 5, 2, world::kStateChest);
+    source_world.set_block(-1, 6, -1, world::kStateFurnace);
+    const std::int64_t chest_key = world::pack_block_pos(2, 5, 2);
+    source_chests.ensure(chest_key);
+    source_chests.set_slot(chest_key, 3, item::ItemStack{kApple, 12, 0});
+    const std::int64_t furnace_key = world::pack_block_pos(-1, 6, -1);
+    source_furnaces.ensure(furnace_key);
+    source_furnaces.restore(furnace_key, [&] {
+        net::FurnaceState state;
+        state.input = item::ItemStack{15, 2, 0};
+        state.cook_time = 100;
+        state.burn_total = 1600;
+        return state;
+    }());
+
+    {
+        game::WorldPersistence saver(source_world, source_chests, source_furnaces, dir.string());
+        auto saved = saver.save();
+        CYANE_CHECK(saved.has_value());
+        CYANE_CHECK_EQ(*saved, std::size_t{2});
+        CYANE_CHECK(std::filesystem::exists(dir / "region" / "r.0.0.mca"));
+        CYANE_CHECK(std::filesystem::exists(dir / "region" / "r.-1.-1.mca"));
+    }
+
+    // 全新内存态重新载入
+    world::World loaded_world;
+    net::ContainerStore loaded_chests;
+    net::FurnaceStore loaded_furnaces;
+    loaded_furnaces.set_tables({}, {});
+    game::WorldPersistence loader(loaded_world, loaded_chests, loaded_furnaces, dir.string());
+    auto loaded = loader.load();
+    CYANE_CHECK(loaded.has_value());
+    CYANE_CHECK_EQ(*loaded, std::size_t{2});
+
+    CYANE_CHECK_EQ(loaded_world.block_at(1, 4, 1), world::kStateStone);
+    CYANE_CHECK_EQ(loaded_world.block_at(2, 5, 2), world::kStateChest);
+    CYANE_CHECK_EQ(loaded_world.block_at(-1, 6, -1), world::kStateFurnace);
+    CYANE_CHECK_EQ(loaded_world.block_at(1, 3, 1), world::flat_baseline(3));
+    // 未编辑区块仍是超平坦
+    CYANE_CHECK_EQ(loaded_world.block_at(500, 0, 500), world::kStateBedrock);
+    CYANE_CHECK_EQ(loaded_world.block_at(500, 3, 500), world::kStateGrass);
+
+    const auto chest = loaded_chests.snapshot(chest_key);
+    CYANE_CHECK_EQ(chest[3].id, kApple);
+    CYANE_CHECK_EQ(chest[3].count, std::uint8_t{12});
+    const auto furnace = loaded_furnaces.snapshot(furnace_key);
+    CYANE_CHECK_EQ(furnace.input.id, std::int16_t{15});
+    CYANE_CHECK_EQ(furnace.cook_time, 100);
+
+    // 再次保存幂等（区块数不变）
+    auto resaved = loader.save();
+    CYANE_CHECK(resaved.has_value());
+    CYANE_CHECK_EQ(*resaved, std::size_t{2});
+
+    std::filesystem::remove_all(dir);
+}
