@@ -4,22 +4,45 @@ on:
   push:
   pull_request:
 
+env:
+  LLVM_VER: "19"
+
 jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
+      - name: Install C++23 toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld cmake ninja-build pkg-config zlib1g-dev libssl-dev liburing-dev
+          sudo apt-get install -y lsb-release wget software-properties-common gnupg
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh "$LLVM_VER"
+          sudo apt-get install -y lld-"$LLVM_VER" libstdc++-14-dev ninja-build pkg-config \
+            zlib1g-dev libssl-dev liburing-dev
           sudo apt-get install -y libzlib-ng-dev || true
+
+      - name: Sanity check C++23
+        run: |
+          clang++-"$LLVM_VER" -std=c++23 -x c++ -o /tmp/cpp23-probe - <<'EOF'
+          #include <expected>
+          #include <print>
+          int main() {
+              std::expected<int, int> e{42};
+              std::print("cpp23 ok: {}\n", *e);
+              return *e == 42 ? 0 : 1;
+          }
+          EOF
+          /tmp/cpp23-probe
 
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
-          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_C_COMPILER=clang-"$LLVM_VER"
+          -DCMAKE_CXX_COMPILER=clang++-"$LLVM_VER"
+          -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld-"$LLVM_VER"
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DCYANE_WERROR=ON
 
@@ -37,15 +60,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
+      - name: Install C++23 toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld cmake ninja-build pkg-config zlib1g-dev libssl-dev liburing-dev
+          sudo apt-get install -y lsb-release wget software-properties-common gnupg
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh "$LLVM_VER"
+          sudo apt-get install -y lld-"$LLVM_VER" libstdc++-14-dev ninja-build pkg-config \
+            zlib1g-dev libssl-dev liburing-dev
+
+      - name: Sanity check C++23
+        run: |
+          clang++-"$LLVM_VER" -std=c++23 -x c++ -o /tmp/cpp23-probe - <<'EOF'
+          #include <expected>
+          #include <print>
+          int main() {
+              std::expected<int, int> e{42};
+              std::print("cpp23 ok: {}\n", *e);
+              return *e == 42 ? 0 : 1;
+          }
+          EOF
+          /tmp/cpp23-probe
 
       - name: Configure with sanitizers
         run: >
           cmake -S . -B build -G Ninja
-          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_C_COMPILER=clang-"$LLVM_VER"
+          -DCMAKE_CXX_COMPILER=clang++-"$LLVM_VER"
+          -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld-"$LLVM_VER"
           -DCMAKE_BUILD_TYPE=Debug
           -DCYANE_SANITIZE=ON
           -DCYANE_LTO=OFF
