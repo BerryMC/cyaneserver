@@ -33,7 +33,8 @@ CYANE_TEST(frame_round_trips_without_compression) {
 }
 
 CYANE_TEST(frame_encode_decode_round_trip) {
-    for (const std::string_view text : {std::string_view{"tiny"}, std::string_view{std::string(4000, 'z')}}) {
+    const std::string long_text(4000, 'z');  // 压缩阈值上下：短帧不压缩、长帧压缩
+    for (const std::string_view text : {std::string_view{"tiny"}, std::string_view{long_text}}) {
         cyane::ByteWriter fields;
         fields.string(text);
 

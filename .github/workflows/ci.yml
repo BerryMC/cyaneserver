@@ -5,7 +5,7 @@ on:
   pull_request:
 
 env:
-  LLVM_VER: "19"
+  LLVM_VER: "22"
 
 jobs:
   build:
