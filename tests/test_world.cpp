@@ -19,7 +19,7 @@ namespace nbt = cyane::world::nbt;
 namespace {
 
 [[nodiscard]] std::filesystem::path fixture_path(const char* name) {
-    for (const std::string candidate :
+    for (const std::string& candidate :
          {std::string{name}, std::string{"tests/fixtures/"} + name,
           std::string{"../tests/fixtures/"} + name}) {
         if (std::filesystem::exists(candidate)) {

@@ -17,12 +17,6 @@ constexpr std::size_t kSectorBytes = RegionFile::kSectorSize;
 constexpr std::size_t kHeaderBytes = 2 * kSectorBytes;  // 位置表 + 时间戳表
 constexpr std::uint8_t kVersionZlib = 2;
 
-// 大端 3 字节读
-[[nodiscard]] std::uint32_t read_u24(const std::byte* p) noexcept {
-    const auto* u = reinterpret_cast<const std::uint8_t*>(p);
-    return static_cast<std::uint32_t>(u[0] << 16 | u[1] << 8 | u[2]);
-}
-
 // 4 字节大端：区块记录长度字段
 [[nodiscard]] std::uint32_t read_u32(const std::byte* p) noexcept {
     const auto* u = reinterpret_cast<const std::uint8_t*>(p);

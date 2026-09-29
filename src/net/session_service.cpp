@@ -22,7 +22,8 @@ namespace {
 [[nodiscard]] std::string url_encode(std::string_view text) {
     constexpr char kHex[] = "0123456789ABCDEF";
     std::string out;
-    for (const unsigned char c : text) {
+    for (const char ch : text) {
+        const auto c = static_cast<unsigned char>(ch);
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
             c == '.') {
             out.push_back(static_cast<char>(c));
@@ -43,6 +44,15 @@ struct SslDeleter {
     void operator()(SSL* ssl) const noexcept { SSL_free(ssl); }
 };
 
+// RAII 关闭描述符：https_get 的错误路径全部直接返回
+struct FdGuard {
+    explicit FdGuard(int f) noexcept : fd{f} {}
+    ~FdGuard() { ::close(fd); }
+    FdGuard(const FdGuard&) = delete;
+    FdGuard& operator=(const FdGuard&) = delete;
+    int fd;
+};
+
 // 阻塞式最小 HTTPS GET：仅在线验证使用，一次请求一个连接
 [[nodiscard]] Result<std::string> https_get(
     std::string_view host, std::string_view path, std::chrono::milliseconds timeout) {
@@ -60,7 +70,7 @@ struct SslDeleter {
     if (fd < 0) {
         return make_error(ErrorCode::net, "socket failed");
     }
-    const auto close_fd = [&fd] { ::close(fd); };
+    const FdGuard fd_guard{fd};
 
     timeval tv{};
     tv.tv_sec = static_cast<time_t>(timeout.count() / 1000);
