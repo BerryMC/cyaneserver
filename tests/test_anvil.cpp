@@ -15,27 +15,17 @@ using world::ChunkPos;
 namespace {
 constexpr std::int16_t kApple = 260;  // 物品 id
 
-[[nodiscard]] std::uint32_t chunk_local(std::int32_t wx, std::int32_t wy, std::int32_t wz,
-                                        ChunkPos pos) {
-    return (static_cast<std::uint32_t>(wy) << 8) |
-           (static_cast<std::uint32_t>(wz - pos.world_z()) << 4) |
-           static_cast<std::uint32_t>(wx - pos.world_x());
-}
 } // namespace
 
 CYANE_TEST(anvil_chunk_round_trip_with_entities) {
     const ChunkPos pos{3, -2};
-    // 编辑：石头塔 + 负坐标区块（local 索引按世界坐标折算）
-    std::vector<std::pair<std::uint32_t, std::uint16_t>> edits;
-    edits.emplace_back(chunk_local(pos.world_x() + 0, 4, pos.world_z() + 5, pos),
-                       world::kStateStone);
-    edits.emplace_back(chunk_local(pos.world_x() + 15, 9, pos.world_z() + 15, pos),
-                       static_cast<std::uint16_t>(world::kStateFurnace | 8));  // 点亮位 meta
-    edits.emplace_back(chunk_local(pos.world_x() + 2, 4, pos.world_z() + 2, pos),
-                       world::kStateChest);
-    // baseline 状态不应被编码
-    edits.emplace_back(chunk_local(pos.world_x() + 3, 3, pos.world_z() + 3, pos),
-                       world::kStateGrass);
+    // 方块：石头 / 点亮熔炉（meta 点亮位）/ 箱子 / 基线同值方块（无损语义下同样编码）
+    world::Chunk chunk{pos};
+    chunk.set_block_state(pos.world_x() + 0, 4, pos.world_z() + 5, world::kStateStone);
+    chunk.set_block_state(pos.world_x() + 15, 9, pos.world_z() + 15,
+                          static_cast<std::uint16_t>(world::kStateFurnace | 8));
+    chunk.set_block_state(pos.world_x() + 2, 4, pos.world_z() + 2, world::kStateChest);
+    chunk.set_block_state(pos.world_x() + 3, 3, pos.world_z() + 3, world::kStateGrass);
 
     world::ChunkEntities entities;
     world::StoredChest chest{};
@@ -52,19 +42,26 @@ CYANE_TEST(anvil_chunk_round_trip_with_entities) {
     entities.furnaces.emplace_back(world::pack_block_pos(pos.world_x() + 15, 9, pos.world_z() + 15),
                                    furnace);
 
-    auto encoded = world::encode_chunk(pos, edits, entities);
+    auto encoded = world::encode_chunk(pos, chunk, entities);
     CYANE_CHECK(encoded.has_value());
     auto decoded = world::decode_chunk(ByteSpan{*encoded});
     CYANE_CHECK(decoded.has_value());
 
-    // 编辑逐一还原（baseline 条目被剔除）
-    CYANE_CHECK_EQ(decoded->edits.size(), std::size_t{3});
-    for (const auto& [local, state] : decoded->edits) {
-        const bool found = std::any_of(edits.begin(), edits.end(), [&](const auto& pair) {
-            return pair.first == local && pair.second == state;
-        });
-        CYANE_CHECK(found);
-    }
+    // 方块逐一还原（无损：chunk 级往返）
+    const auto check_state = [&](std::int32_t wx, std::int32_t wy, std::int32_t wz,
+                                 std::uint16_t expected) {
+        const auto got = decoded->chunk.block_state(wx, wy, wz);
+        CYANE_CHECK(got.has_value());
+        CYANE_CHECK_EQ(*got, expected);
+    };
+    check_state(pos.world_x() + 0, 4, pos.world_z() + 5, world::kStateStone);
+    check_state(pos.world_x() + 15, 9, pos.world_z() + 15,
+                static_cast<std::uint16_t>(world::kStateFurnace | 8));
+    check_state(pos.world_x() + 2, 4, pos.world_z() + 2, world::kStateChest);
+    check_state(pos.world_x() + 3, 3, pos.world_z() + 3, world::kStateGrass);
+    // 未写的位置为空气
+    check_state(pos.world_x() + 8, 4, pos.world_z() + 8, world::kStateAir);
+    CYANE_CHECK_EQ(decoded->chunk.pos(), pos);
 
     CYANE_CHECK_EQ(decoded->entities.chests.size(), std::size_t{1});
     CYANE_CHECK_EQ(decoded->entities.chests[0].first,
@@ -84,10 +81,15 @@ CYANE_TEST(anvil_chunk_round_trip_with_entities) {
     CYANE_CHECK_EQ(restored.cook_time, 55);
 }
 
-CYANE_TEST(anvil_refuses_unedited_chunk) {
+CYANE_TEST(anvil_all_air_chunk_encodes_with_empty_sections) {
     const ChunkPos pos{0, 0};
-    auto encoded = world::encode_chunk(pos, {}, world::ChunkEntities{});
-    CYANE_CHECK(!encoded.has_value());
+    world::Chunk chunk{pos};
+    auto encoded = world::encode_chunk(pos, chunk, world::ChunkEntities{});
+    CYANE_CHECK(encoded.has_value());
+    auto decoded = world::decode_chunk(ByteSpan{*encoded});
+    CYANE_CHECK(decoded.has_value());
+    CYANE_CHECK(decoded->chunk.sections().empty());
+    CYANE_CHECK(decoded->entities.empty());
 }
 
 CYANE_TEST(region_write_read_round_trip) {
@@ -194,7 +196,8 @@ CYANE_TEST(persistence_world_round_trip) {
     CYANE_CHECK_EQ(furnace.input.id, std::int16_t{15});
     CYANE_CHECK_EQ(furnace.cook_time, 100);
 
-    // 再次保存幂等（区块数不变）
+    // 再次保存：方块区块全部干净（启动载入不标脏）不重写；
+    // 实体区块（箱子/熔炉所在）无条件重写——容器内容变更没有脏标记，保守起见
     auto resaved = loader.save();
     CYANE_CHECK(resaved.has_value());
     CYANE_CHECK_EQ(*resaved, std::size_t{2});

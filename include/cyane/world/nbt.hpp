@@ -74,6 +74,35 @@ public:
         return nullptr;
     }
 
+    // 可变查找：原地替换字段（无损保存时打补丁用）
+    [[nodiscard]] Value* find_mut(std::string_view key) noexcept {
+        auto* fields = std::get_if<Compound>(&data);
+        if (fields == nullptr) {
+            return nullptr;
+        }
+        for (auto& [name, value] : *fields) {
+            if (name == key) {
+                return &value;
+            }
+        }
+        return nullptr;
+    }
+
+    // 新增/覆盖 compound 字段
+    void set(std::string name, Value value) {
+        auto* fields = std::get_if<Compound>(&data);
+        if (fields == nullptr) {
+            return;
+        }
+        for (auto& [key, existing] : *fields) {
+            if (key == name) {
+                existing = std::move(value);
+                return;
+            }
+        }
+        fields->emplace_back(std::move(name), std::move(value));
+    }
+
     // 取标量（整数族之间窄化兼容：i8/i16/i32/i64 互通）
     [[nodiscard]] std::optional<std::int64_t> scalar() const noexcept;
     [[nodiscard]] std::optional<std::string_view> text() const noexcept;
@@ -92,6 +121,8 @@ public:
 [[nodiscard]] Result<Value> parse(ByteSpan data);
 // 解析压缩载荷（版本字节 1=gzip / 2=zlib），返回解压后的 NBT 根
 [[nodiscard]] Result<Value> parse_region_payload(ByteSpan payload);
+// 自嗅探压缩容器：gzip 魔数 1f8b（原版 .dat）、zlib 0x78、或未压缩 raw NBT 0x0A
+[[nodiscard]] Result<Value> parse_compressed(ByteSpan data);
 
 // 编码为「命名 compound 根」的字节流（不含 region 版本字节/压缩，由调用方处理）
 [[nodiscard]] Result<Bytes> serialize(std::string_view root_name, const Value& root);

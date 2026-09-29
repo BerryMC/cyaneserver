@@ -91,6 +91,7 @@ add_library(cyane_world
   src/world/nbt.cpp
   src/world/region.cpp
   src/world/anvil.cpp
+  src/world/level_dat.cpp
 )
 target_include_directories(cyane_world PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(cyane_world PUBLIC cyane::core cyane::proto)
@@ -121,6 +122,7 @@ add_library(cyane_game
   src/game/server.cpp
   src/game/status.cpp
   src/game/op_manager.cpp
+  src/game/player_data.cpp
   src/game/world_persistence.cpp
   src/item/crafting.cpp
 
@@ -162,9 +164,16 @@ if(CYANE_BUILD_TESTS)
     tests/test_furnace.cpp
     tests/test_nbt.cpp
     tests/test_anvil.cpp
+    tests/test_player_data.cpp
+    tests/test_world.cpp
   )
   target_include_directories(cyane_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
   target_link_libraries(cyane_tests PRIVATE cyane::game)
+  configure_file(
+    tests/fixtures/vanilla_player_oracle.dat
+    "${CMAKE_CURRENT_BINARY_DIR}/vanilla_player_oracle.dat"
+    COPYONLY
+  )
   add_test(NAME cyane_tests COMMAND cyane_tests)
 endif()
 

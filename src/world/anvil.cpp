@@ -93,91 +93,102 @@ Value tile_entity(std::int64_t key, std::string_view id, std::span<const item::I
 
 } // namespace
 
-Result<Bytes> encode_chunk(ChunkPos pos,
-                           std::span<const std::pair<std::uint32_t, std::uint16_t>> edits,
-                           const ChunkEntities& entities) {
-    if (edits.empty() && entities.empty()) {
-        return make_error(ErrorCode::world, "refusing to encode an unedited chunk");
-    }
 
-    // 展开编辑到 per-section 缓冲（堆分配，避免 ~130KB 栈占用）：非 baseline 状态才算内容
-    struct SectionBuffer {
-        std::array<std::uint8_t, kSectionBlockCount> blocks{};
-        std::array<std::uint8_t, kSectionBlockCount / 2> data{};
-        std::array<std::uint8_t, kSectionBlockCount / 2> add{};
-        std::array<bool, kSectionBlockCount> edited{};
-        bool used{false};
-        bool needs_add{false};
-    };
-    std::vector<SectionBuffer> sections(kSectionCount);
+namespace {
 
-    for (const auto& [local, state] : edits) {
-        const std::int32_t wy = static_cast<std::int32_t>(local >> 8);
-        if (wy < 0 || wy >= kChunkSizeY || state == flat_baseline(wy)) {
-            continue;
-        }
-        auto& section = sections[static_cast<std::size_t>(wy) / 16];
-        const std::size_t index = local & 0xFFF;
+// 由 Chunk 的某 section 生成 Blocks/Data[/Add] 三个标签
+struct SectionArrays {
+    Bytes blocks;
+    Bytes data;
+    Bytes add;
+    bool needs_add{false};
+};
+
+[[nodiscard]] SectionArrays build_section_arrays(const Section& section) {
+    SectionArrays out;
+    out.blocks.assign(kSectionBlockCount, std::byte{0});
+    out.data.assign(kSectionBlockCount / 2, std::byte{0});
+    out.add.assign(kSectionBlockCount / 2, std::byte{0});
+    for (std::size_t index = 0; index < kSectionBlockCount; ++index) {
+        const auto state = section.state(index);
         const auto id = block_id(state);
         const auto meta = state_meta(state);
-        section.blocks[index] = static_cast<std::uint8_t>(id & 0xFF);
-        section.data[index / 2] |= static_cast<std::uint8_t>(
+        out.blocks[index] = static_cast<std::byte>(id & 0xFF);
+        out.data[index / 2] |= static_cast<std::byte>(
             index % 2 == 0 ? meta & 0x0F : (meta & 0x0F) << 4);
-        section.edited[index] = true;
         if (id > 0xFF) {
             const auto high = static_cast<std::uint8_t>((id >> 8) & 0x0F);
-            section.add[index / 2] |= static_cast<std::uint8_t>(
-                index % 2 == 0 ? high : high << 4);
-            section.needs_add = true;
+            out.add[index / 2] |= static_cast<std::byte>(index % 2 == 0 ? high : high << 4);
+            out.needs_add = true;
         }
-        section.used = true;
     }
+    return out;
+}
 
+[[nodiscard]] bool section_all_air(const Section& section) {
+    for (const auto state : section.states) {
+        if (state != kStateAir) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] List build_tile_entities(const ChunkEntities& entities) {
+    List out;
+    for (const auto& [key, chest] : entities.chests) {
+        out.push_back(tile_entity(key, kChestEntityId, chest, nullptr));
+    }
+    for (const auto& [key, furnace] : entities.furnaces) {
+        out.push_back(tile_entity(key, kFurnaceEntityId, std::span{&furnace.input, 3}, &furnace));
+    }
+    return out;
+}
+
+} // namespace
+
+Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities& entities) {
     List section_list;
-    for (std::size_t sy = 0; sy < sections.size(); ++sy) {
-        auto& section = sections[sy];
-        if (!section.used) {
+    for (std::size_t sy = 0; sy < chunk.sections().size(); ++sy) {
+        const auto& section = chunk.sections()[sy];
+        if (section.empty()) {
             continue;
         }
-        // 未编辑位置填充超平坦基线：解码按 baseline 过滤即还原为纯编辑集，
-        // 文件本身也是完整地形（原版工具可读）
-        const std::int32_t base_y = static_cast<std::int32_t>(sy) * 16;
-        for (std::size_t index = 0; index < kSectionBlockCount; ++index) {
-            if (section.edited[index]) {
-                continue;
+        bool all_air = true;
+        for (const auto state : section.states) {
+            if (state != kStateAir) {
+                all_air = false;
+                break;
             }
-            const auto base = flat_baseline(base_y + static_cast<std::int32_t>(index >> 8));
-            const auto base_id = block_id(base);
-            const auto base_meta = state_meta(base);
-            section.blocks[index] = static_cast<std::uint8_t>(base_id & 0xFF);
-            if (base_id > 0xFF) {
-                const auto high = static_cast<std::uint8_t>((base_id >> 8) & 0x0F);
-                section.add[index / 2] |= static_cast<std::uint8_t>(
-                    index % 2 == 0 ? high : high << 4);
-                section.needs_add = true;
-            }
-            if (base_meta != 0) {
-                section.data[index / 2] |= static_cast<std::uint8_t>(
-                    index % 2 == 0 ? base_meta & 0x0F : (base_meta & 0x0F) << 4);
-            }
+        }
+        if (all_air) {
+            continue;
         }
         Compound fields;
         compound_set(fields, "Y", nbt::make_i8(static_cast<std::int8_t>(sy)));
         Bytes blocks(kSectionBlockCount);
-        std::transform(section.blocks.begin(), section.blocks.end(), blocks.begin(),
-                       [](std::uint8_t b) { return static_cast<std::byte>(b); });
-        compound_set(fields, "Blocks", nbt::make_byte_array(std::move(blocks)));
         Bytes data(kSectionBlockCount / 2);
-        std::transform(section.data.begin(), section.data.end(), data.begin(),
-                       [](std::uint8_t b) { return static_cast<std::byte>(b); });
+        bool needs_add = false;
+        Bytes add(kSectionBlockCount / 2);
+        for (std::size_t index = 0; index < kSectionBlockCount; ++index) {
+            const auto state = section.states[index];
+            const auto id = block_id(state);
+            const auto meta = state_meta(state);
+            blocks[index] = static_cast<std::byte>(id & 0xFF);
+            data[index / 2] |= static_cast<std::byte>(index % 2 == 0 ? meta & 0x0F
+                                                                      : (meta & 0x0F) << 4);
+            if (id > 0xFF) {
+                const auto high = static_cast<std::uint8_t>((id >> 8) & 0x0F);
+                add[index / 2] |= static_cast<std::byte>(index % 2 == 0 ? high : high << 4);
+                needs_add = true;
+            }
+        }
+        compound_set(fields, "Blocks", nbt::make_byte_array(std::move(blocks)));
         compound_set(fields, "Data", nbt::make_byte_array(std::move(data)));
-        if (section.needs_add) {
-            Bytes add(kSectionBlockCount / 2);
-            std::transform(section.add.begin(), section.add.end(), add.begin(),
-                           [](std::uint8_t b) { return static_cast<std::byte>(b); });
+        if (needs_add) {
             compound_set(fields, "Add", nbt::make_byte_array(std::move(add)));
         }
-        section_list.push_back(make_compound(std::move(fields)));
+        section_list.push_back(nbt::make_compound(std::move(fields)));
     }
 
     List tile_entities;
@@ -198,9 +209,97 @@ Result<Bytes> encode_chunk(ChunkPos pos,
 
     Compound root;
     compound_set(root, "DataVersion", nbt::make_i32(kDataVersion1343));
-    compound_set(root, "Level", make_compound(std::move(level)));
+    compound_set(root, "Level", nbt::make_compound(std::move(level)));
 
-    return nbt::serialize("", make_compound(std::move(root)));
+    return nbt::serialize("", nbt::make_compound(std::move(root)));
+}
+
+
+namespace {
+
+// 保留原版区块中除箱子/熔炉外的方块实体（告示牌等未建模实体透传）
+[[nodiscard]] bool is_modeled_tile_entity(const Value& entry) {
+    const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
+    return id && (*id == kChestEntityId || *id == kFurnaceEntityId);
+}
+
+} // namespace
+
+Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkEntities& entities,
+                                  ByteSpan source_nbt) {
+    if (source_nbt.empty()) {
+        return encode_chunk(pos, chunk, entities);
+    }
+    auto root = nbt::parse(source_nbt);
+    if (!root) {
+        return encode_chunk(pos, chunk, entities);  // 坏源档：退化为整体重编码
+    }
+    auto* level = root->find_mut("Level");
+    if (level == nullptr) {
+        return encode_chunk(pos, chunk, entities);
+    }
+
+    // 逐 section 覆盖 Blocks/Data/Add，保留光照等字段
+    if (auto* sections = level->find_mut("Sections"); sections != nullptr) {
+        if (auto* list = std::get_if<List>(&sections->data); list != nullptr) {
+            std::vector<bool> patched(chunk.sections().size(), false);
+            for (auto& section : *list) {
+                const auto y = section.find("Y") ? section.find("Y")->scalar() : std::nullopt;
+                if (!y || *y < 0 || static_cast<std::size_t>(*y) >= chunk.sections().size()) {
+                    continue;
+                }
+                const auto* model = chunk.section(static_cast<std::size_t>(*y));
+                if (model == nullptr || model->states.size() != kSectionBlockCount) {
+                    continue;
+                }
+                auto arrays = build_section_arrays(*model);
+                section.set("Blocks", nbt::make_byte_array(std::move(arrays.blocks)));
+                section.set("Data", nbt::make_byte_array(std::move(arrays.data)));
+                if (arrays.needs_add) {
+                    section.set("Add", nbt::make_byte_array(std::move(arrays.add)));
+                } else if (section.find("Add") != nullptr) {
+                    section.set("Add", nbt::make_byte_array(
+                                           Bytes(kSectionBlockCount / 2, std::byte{0})));
+                }
+                patched[static_cast<std::size_t>(*y)] = true;
+            }
+            // 模型有而源档缺失的非空 section：追加
+            for (std::size_t sy = 0; sy < chunk.sections().size(); ++sy) {
+                const auto* model = chunk.section(sy);
+                if (patched[sy] || model == nullptr || model->states.size() != kSectionBlockCount ||
+                    section_all_air(*model)) {
+                    continue;
+                }
+                auto arrays = build_section_arrays(*model);
+                Compound fields;
+                compound_set(fields, "Y", nbt::make_i8(static_cast<std::int8_t>(sy)));
+                compound_set(fields, "Blocks", nbt::make_byte_array(std::move(arrays.blocks)));
+                compound_set(fields, "Data", nbt::make_byte_array(std::move(arrays.data)));
+                if (arrays.needs_add) {
+                    compound_set(fields, "Add", nbt::make_byte_array(std::move(arrays.add)));
+                }
+                list->push_back(nbt::make_compound(std::move(fields)));
+            }
+        }
+    }
+
+    // TileEntities：保留未建模实体，替换/追加箱子与熔炉
+    List kept;
+    if (auto* tile_entities = level->find_mut("TileEntities"); tile_entities != nullptr) {
+        if (const auto* list = tile_entities->get_if<List>(); list != nullptr) {
+            for (const auto& entry : *list) {
+                if (!is_modeled_tile_entity(entry)) {
+                    kept.push_back(entry);
+                }
+            }
+        }
+    }
+    for (auto& entry : build_tile_entities(entities)) {
+        kept.push_back(std::move(entry));
+    }
+    level->set("TileEntities", nbt::make_list(std::move(kept)));
+
+    return nbt::serialize("", *root);
 }
 
 Result<DecodedChunk> decode_chunk(ByteSpan nbt_bytes) {
@@ -213,7 +312,14 @@ Result<DecodedChunk> decode_chunk(ByteSpan nbt_bytes) {
         return make_error(ErrorCode::world, "anvil chunk missing Level");
     }
 
+    const auto pos_x = level->find("xPos") ? level->find("xPos")->scalar() : std::nullopt;
+    const auto pos_z = level->find("zPos") ? level->find("zPos")->scalar() : std::nullopt;
+    if (!pos_x || !pos_z) {
+        return make_error(ErrorCode::world, "anvil chunk missing xPos/zPos");
+    }
     DecodedChunk out;
+    out.chunk = Chunk{ChunkPos{static_cast<std::int32_t>(*pos_x), static_cast<std::int32_t>(*pos_z)}};
+
     if (const Value* sections = level->find("Sections"); sections != nullptr) {
         if (const auto* list = sections->get_if<List>(); list != nullptr) {
             for (const auto& section : *list) {
@@ -230,29 +336,27 @@ Result<DecodedChunk> decode_chunk(ByteSpan nbt_bytes) {
                 }
                 const auto* data_bytes = data != nullptr ? data->get_if<Bytes>() : nullptr;
                 const auto* add_bytes = add != nullptr ? add->get_if<Bytes>() : nullptr;
-                const std::int32_t base_y = static_cast<std::int32_t>(*y) * 16;
+                Section loaded;
+                loaded.states.resize(kSectionBlockCount, kStateAir);
                 for (std::size_t index = 0; index < kSectionBlockCount; ++index) {
-                    const auto low = std::to_integer<std::uint8_t>((*block_bytes)[index]);
-                    std::uint16_t id = low;
+                    auto id = static_cast<std::uint16_t>(
+                        std::to_integer<std::uint8_t>((*block_bytes)[index]));
                     if (add_bytes != nullptr && add_bytes->size() == kSectionBlockCount / 2) {
-                        const auto nibble = std::to_integer<std::uint8_t>((*add_bytes)[index / 2]);
-                        id |= static_cast<std::uint16_t>((index % 2 == 0 ? (nibble & 0x0F)
-                                                                          : (nibble >> 4))
-                                                          << 8);
+                        const auto nibble =
+                            std::to_integer<std::uint8_t>((*add_bytes)[index / 2]);
+                        id |= static_cast<std::uint16_t>(
+                            (index % 2 == 0 ? (nibble & 0x0F) : (nibble >> 4)) << 8);
                     }
                     std::uint16_t meta = 0;
                     if (data_bytes != nullptr && data_bytes->size() == kSectionBlockCount / 2) {
-                        const auto nibble = std::to_integer<std::uint8_t>((*data_bytes)[index / 2]);
-                        meta = index % 2 == 0 ? (nibble & 0x0F) : static_cast<std::uint16_t>(nibble >> 4);
+                        const auto nibble =
+                            std::to_integer<std::uint8_t>((*data_bytes)[index / 2]);
+                        meta = index % 2 == 0 ? (nibble & 0x0F)
+                                              : static_cast<std::uint16_t>(nibble >> 4);
                     }
-                    const auto state = static_cast<std::uint16_t>((id << 4) | meta);
-                    const std::int32_t wy = base_y + static_cast<std::int32_t>(index >> 8);
-                    if (state != flat_baseline(wy)) {
-                        const std::uint32_t local = (static_cast<std::uint32_t>(wy) << 8) |
-                                                    static_cast<std::uint32_t>(index & 0xFF);
-                        out.edits.emplace_back(local, state);
-                    }
+                    loaded.states[index] = static_cast<std::uint16_t>((id << 4) | meta);
                 }
+                out.chunk.set_section(static_cast<std::size_t>(*y), std::move(loaded));
             }
         }
     }
@@ -299,7 +403,6 @@ Result<DecodedChunk> decode_chunk(ByteSpan nbt_bytes) {
                     furnace.burn_total = total ? static_cast<std::int32_t>(*total) : 0;
                     out.entities.furnaces.emplace_back(key, std::move(furnace));
                 }
-                // 未知方块实体：忽略（vanilla 同样容忍）
             }
         }
     }

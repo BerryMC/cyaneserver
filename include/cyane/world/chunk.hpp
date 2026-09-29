@@ -24,11 +24,14 @@ struct [[nodiscard]] ChunkPos {
     [[nodiscard]] bool operator==(const ChunkPos& other) const noexcept = default;
     [[nodiscard]] auto operator<=>(const ChunkPos&) const noexcept = default;
 
+    [[nodiscard]] static std::int32_t floor_div(std::int32_t value, std::int32_t divisor) noexcept {
+        const auto q = value / divisor;
+        return (value % divisor != 0 && (value < 0) != (divisor < 0)) ? q - 1 : q;
+    }
+
     [[nodiscard]] static std::optional<ChunkPos> from_world(std::int32_t wx, std::int32_t wz) noexcept {
-        if (wx >= 0) {
-            return ChunkPos{wx / kChunkSizeX, wz / kChunkSizeZ};
-        }
-        return ChunkPos{(wx + 1) / kChunkSizeX - 1, (wz + 1) / kChunkSizeZ - 1};
+        // 两轴独立地板除：截断除法会把 x≥0、z<0 象限的 z 偏移一个区块
+        return ChunkPos{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
     }
 
     [[nodiscard]] std::int32_t world_x() const noexcept { return x * kChunkSizeX; }

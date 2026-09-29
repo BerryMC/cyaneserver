@@ -6,7 +6,7 @@ Spigot 兼容 = **Bukkit API** + **NMS shim** + **第三方类路径**，三者�
 
 | 组成 | 类数 | 说明 |
 |---|---:|---|
-| `org.bukkit.*`（净 API） | **825** | 插件编译链接的接口面，M4/M5 主目标 |
+| `org.bukkit.*`（净 API） | **825** | 插件编译链接的接口面，M7/M8 主目标 |
 | `org.bukkit.craftbukkit.v1_12_R1.*` | 346 | CraftBukkit 实现类，插件常 `import` 其静态工具 |
 | `net.minecraft.server.v1_12_R1.*` | **2324** | NMS 面 |
 | `org.bukkit.craftbukkit.libs.*` | 10873 | shaded 库（fastutil 等），插件可 import |
@@ -28,7 +28,7 @@ NMS 类聚类（2324 总计）：`Block*` 304、`Entity*` 256、`World*` 229、`
 
 | 层 | 内容 | 成本 | 覆盖价值 |
 |---|---|---|---|
-| **T0** | 仅 Bukkit API（825 类） | M4–M5 主线 | 纯 API 插件 |
+| **T0** | 仅 Bukkit API（825 类） | M7–M8 主线 | 纯 API 插件 |
 | **T1** | NMS façade，按需增长 | 中 | 高 |
 | **T2** | 深水区，逐案评估 | 高 | 中 |
 | **T3** | 不做 | — | — |
@@ -71,7 +71,7 @@ C++ 权威状态（SoA）
 
 **配套机制（比 shim 本身更重要）**
 
-- **插件扫描器**（M4 就做，很便宜）：加载期扫常量池，判定插件属于哪个 tier；不支持时给出**缺失符号清单**而不是运行期 `NoClassDefFoundError`。同时它产出真实需求数据——**T1 的覆盖面靠扫描报告数据驱动增长，而不是预先规划**。
+- **插件扫描器**（M7 就做，很便宜）：加载期扫常量池，判定插件属于哪个 tier；不支持时给出**缺失符号清单**而不是运行期 `NoClassDefFoundError`。同时它产出真实需求数据——**T1 的覆盖面靠扫描报告数据驱动增长，而不是预先规划**。
 - **API 签名校验**（已验证可行）：对着 Spigot jar 编译 + javap 签名 diff，机械保证我们 825 类 API 与 shim 的 ABI 一致。
 
 ## 第三方类路径契约
@@ -119,7 +119,7 @@ sha256sum spigot/spigot-1.12.2.jar               # 须等于 patchedHash
 | 语义参考（阅读逻辑） | Vineflower / CFR | 已有 |
 | 协议对照 | 原版服务端 + 客户端抓包 | jar 已就位 |
 | 编译校验 | `javac -cp <spigot.jar>` | **已验证**：含 NMS 的探针类编译通过 |
-| ABI diff | 自研 `tools/apidiff`（javap → 结构化清单对比） | M4 交付 |
+| ABI diff | 自研 `tools/apidiff`（javap → 结构化清单对比） | M7 交付 |
 
 ## 环境
 

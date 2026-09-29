@@ -23,6 +23,23 @@ constexpr std::uint8_t kVersionZlib = 2;
     return static_cast<std::uint32_t>(u[0] << 16 | u[1] << 8 | u[2]);
 }
 
+// 4 字节大端：区块记录长度字段
+[[nodiscard]] std::uint32_t read_u32(const std::byte* p) noexcept {
+    const auto* u = reinterpret_cast<const std::uint8_t*>(p);
+    return static_cast<std::uint32_t>(static_cast<std::uint32_t>(u[0]) << 24 |
+                                      static_cast<std::uint32_t>(u[1]) << 16 |
+                                      static_cast<std::uint32_t>(u[2]) << 8 |
+                                      static_cast<std::uint32_t>(u[3]));
+}
+
+void write_u32(std::byte* p, std::uint32_t value) noexcept {
+    auto* u = reinterpret_cast<std::uint8_t*>(p);
+    u[0] = static_cast<std::uint8_t>((value >> 24) & 0xFF);
+    u[1] = static_cast<std::uint8_t>((value >> 16) & 0xFF);
+    u[2] = static_cast<std::uint8_t>((value >> 8) & 0xFF);
+    u[3] = static_cast<std::uint8_t>(value & 0xFF);
+}
+
 void write_u24(std::byte* p, std::uint32_t value) noexcept {
     auto* u = reinterpret_cast<std::uint8_t*>(p);
     u[0] = static_cast<std::uint8_t>((value >> 16) & 0xFF);
@@ -75,16 +92,21 @@ Result<std::optional<Bytes>> RegionFile::read_chunk(int cx, int cz) const {
     if (byte_offset + static_cast<std::size_t>(count) * kSectorBytes > data_.size()) {
         return make_error(ErrorCode::world, "region chunk location out of range");
     }
-    const std::uint32_t length = read_u24(data_.data() + byte_offset);
-    if (length == 0 || length < 1) {
+    // 区块记录：4 字节大端长度（含压缩字节）+ 1 字节压缩类型 + 压缩数据
+    const std::uint32_t length = read_u32(data_.data() + byte_offset);
+    if (length < 1) {
         return std::nullopt;  // 空块
     }
-    const std::size_t available = static_cast<std::size_t>(count) * kSectorBytes - 4;
-    if (length > available) {
+    const std::size_t available = static_cast<std::size_t>(count) * kSectorBytes - 5;
+    if (length - 1 > available) {
         return make_error(ErrorCode::world, "region chunk length exceeds its sectors");
     }
-    const auto payload = ByteSpan{data_.data() + byte_offset + 4, length};
-    auto inflated = proto::inflate_dynamic(payload, 8u << 20, payload.front() == std::byte{1});
+    const auto compression = std::to_integer<std::uint8_t>(data_[byte_offset + 4]);
+    const auto payload = ByteSpan{data_.data() + byte_offset + 5, length - 1};
+    if (compression == 3) {
+        return std::optional<Bytes>{Bytes{payload.begin(), payload.end()}};
+    }
+    auto inflated = proto::inflate_dynamic(payload, 8u << 20, compression == 1);
     if (!inflated) {
         return std::unexpected{std::move(inflated.error())};
     }
@@ -96,7 +118,7 @@ Result<bool> RegionFile::write_chunk(int cx, int cz, ByteSpan uncompressed) {
     if (!compressed) {
         return std::unexpected{std::move(compressed.error())};
     }
-    // 载荷 = 版本字节 + 压缩数据；长度 = 载荷大小（含 4 字节长度头的扇区占用另计）
+    // 记录 = 4 字节长度（含压缩字节）+ 压缩类型字节 + 压缩数据
     const std::size_t payload_size = 1 + compressed->size();
     const std::size_t entry_size = 4 + payload_size;
     if (entry_size > RegionFile::kMaxChunkSectors * kSectorBytes) {
@@ -109,9 +131,9 @@ Result<bool> RegionFile::write_chunk(int cx, int cz, ByteSpan uncompressed) {
     if (old_loc != 0 && static_cast<std::size_t>(old_count) == needed) {
         // 原地覆写
         std::byte* base = data_.data() + static_cast<std::size_t>(old_loc) * kSectorBytes;
-        write_u24(base, static_cast<std::uint32_t>(payload_size));
-        base[3] = std::byte{kVersionZlib};
-        std::memcpy(base + 4, compressed->data(), compressed->size());
+        write_u32(base, static_cast<std::uint32_t>(payload_size));
+        base[4] = std::byte{kVersionZlib};
+        std::memcpy(base + 5, compressed->data(), compressed->size());
         dirty_ = true;
         return true;
     }
@@ -123,9 +145,9 @@ Result<bool> RegionFile::write_chunk(int cx, int cz, ByteSpan uncompressed) {
         data_.resize((static_cast<std::size_t>(sector) + needed) * kSectorBytes);
     }
     std::byte* base = data_.data() + static_cast<std::size_t>(sector) * kSectorBytes;
-    write_u24(base, static_cast<std::uint32_t>(payload_size));
-    base[3] = std::byte{kVersionZlib};
-    std::memcpy(base + 4, compressed->data(), compressed->size());
+    write_u32(base, static_cast<std::uint32_t>(payload_size));
+    base[4] = std::byte{kVersionZlib};
+    std::memcpy(base + 5, compressed->data(), compressed->size());
     set_location(cx, cz, sector, static_cast<std::uint8_t>(needed));
 
     // 时间戳表：位置表后 1024 字节，秒级 unix 时间

@@ -79,21 +79,6 @@ public:
     [[nodiscard]] bool deop_player(std::string_view name);
     // 在线玩家名列表（控制台 list 命令）
     [[nodiscard]] std::vector<std::string> player_names() const;
-    // 玩家数据持久化：加载已有玩家数据（登录时调用）
-    [[nodiscard]] game::PlayerData load_player_data(std::string_view uuid_with_dashes,
-                                                    std::string_view username) const {
-        return player_data_store_->load_or_default(uuid_with_dashes, username);
-    }
-    // 保存玩家数据（断开连接时调用）
-    [[nodiscard]] Result<void> save_player_data(const game::PlayerData& data) const {
-        return player_data_store_->save(data);
-    }
-    // 删除指定玩家数据
-    void remove_player_data(const std::string& uuid_with_dashes) const {
-        player_data_store_->remove(uuid_with_dashes);
-    }
-    // 获取玩家数据存储引用（供连接层访问）
-    [[nodiscard]] const game::PlayerDataStore& player_data_store() const noexcept { return *player_data_store_; }
     // 世界存档：立即把方块编辑与箱子/熔炉落盘（控制台 save 命令）
     void save_world_now();
 

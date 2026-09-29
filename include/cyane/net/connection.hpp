@@ -69,6 +69,10 @@ struct ConnectionContext {
     std::int32_t view_distance{10};
     std::int32_t max_players{20};
     std::uint8_t game_mode{proto::game_mode::kCreative};
+    // 世界出生点（level.dat；缺失时为超平坦默认 (0,4,0)）
+    std::int32_t spawn_x{0};
+    std::int32_t spawn_y{4};
+    std::int32_t spawn_z{0};
     // 玩家数据持久化存储（加载/保存玩家背包、位置、游戏模式）
     game::PlayerDataStore* player_data_store{nullptr};
 };

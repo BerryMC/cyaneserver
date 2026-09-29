@@ -97,9 +97,10 @@ Result<std::size_t> WorldPersistence::load() {
                     continue;
                 }
                 const world::ChunkPos pos{rx * kRegionChunks + cx, rz * kRegionChunks + cz};
-                if (!decoded->edits.empty()) {
-                    world_.merge_edits(pos, decoded->edits);
-                }
+                const bool has_content =
+                    !decoded->chunk.sections().empty() || !decoded->entities.empty();
+                world_.load_chunk(pos, std::move(decoded->chunk), /*dirty=*/false,
+                                  std::move(**chunk));
                 for (const auto& [key, chest] : decoded->entities.chests) {
                     containers_.ensure(key);
                     for (std::size_t slot = 0; slot < chest.size(); ++slot) {
@@ -116,7 +117,7 @@ Result<std::size_t> WorldPersistence::load() {
                     state.cook_time = furnace.cook_time;
                     furnaces_.restore(key, std::move(state));
                 }
-                if (!decoded->edits.empty() || !decoded->entities.empty()) {
+                if (has_content) {
                     ++loaded;
                 }
             }
@@ -131,14 +132,15 @@ Result<std::size_t> WorldPersistence::load() {
 }
 
 Result<std::size_t> WorldPersistence::save() {
+    // 写出集合 = 脏区块 ∪ 有方块实体的区块（箱子内容变更不一定伴随方块编辑）
     struct ChunkData {
-        std::vector<std::pair<std::uint32_t, std::uint16_t>> edits;
         world::ChunkEntities entities;
     };
     std::map<std::pair<std::int32_t, std::int32_t>, ChunkData> chunks;
+    std::set<std::pair<std::int32_t, std::int32_t>> write_set;
 
-    for (const auto& pos : world_.edited_chunks()) {
-        chunks[{pos.x, pos.z}].edits = world_.chunk_edits(pos);
+    for (const auto& pos : world_.dirty_chunks()) {
+        write_set.emplace(pos.x, pos.z);
     }
     for (const auto& [key, chest] : containers_.all()) {
         const auto [bx, by, bz] = world::unpack_block_pos(key);
@@ -146,6 +148,7 @@ Result<std::size_t> WorldPersistence::save() {
         if (!pos) {
             continue;
         }
+        write_set.emplace(pos->x, pos->z);
         chunks[{pos->x, pos->z}].entities.chests.emplace_back(key, chest);
     }
     for (const auto& [key, furnace] : furnaces_.all()) {
@@ -154,16 +157,22 @@ Result<std::size_t> WorldPersistence::save() {
         if (!pos) {
             continue;
         }
+        write_set.emplace(pos->x, pos->z);
         chunks[{pos->x, pos->z}].entities.furnaces.emplace_back(key, to_stored(furnace));
     }
 
+    static const world::ChunkEntities kNoEntities{};
     std::size_t written = 0;
-    for (const auto& [cpos, data] : chunks) {
-        if (data.edits.empty() && data.entities.empty()) {
-            continue;
-        }
+    for (const auto& cpos : write_set) {
         const world::ChunkPos pos{cpos.first, cpos.second};
-        auto encoded = world::encode_chunk(pos, data.edits, data.entities);
+        const auto data_it = chunks.find(cpos);
+        const auto& entities =
+            data_it != chunks.end() ? data_it->second.entities : kNoEntities;
+        const auto chunk = world_.chunk_at(pos);
+        const auto source = world_.source_nbt(pos);
+        auto encoded = source.empty()
+                           ? world::encode_chunk(pos, chunk, entities)
+                           : world::encode_chunk_merged(pos, chunk, entities, ByteSpan{source});
         if (!encoded) {
             log::warn("world: cannot encode chunk ({},{}): {}", pos.x, pos.z,
                       encoded.error().message);
@@ -179,6 +188,7 @@ Result<std::size_t> WorldPersistence::save() {
                       rz, wrote.error().message);
             continue;
         }
+        world_.clear_dirty(pos);
         ++written;
     }
 

@@ -12,6 +12,7 @@
 #include "cyane/proto/json.hpp"
 #include "cyane/proto/packet_ids.hpp"
 #include "cyane/proto/play_fields.hpp"
+#include "cyane/world/level_dat.hpp"
 
 namespace cyane {
 namespace {
@@ -254,6 +255,16 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.game_mode = server->config_.game_mode == "survival" ? proto::game_mode::kSurvival
                          : (server->config_.game_mode == "spectator" ? proto::game_mode::kSpectator
                                                                       : proto::game_mode::kCreative);
+
+    // 世界元数据：level.dat 出生点
+    if (auto level = world::load_level_dat(server->config_.world_dir); !level) {
+        log::warn("cannot read level.dat: {}", level.error().message);
+    } else {
+        context.spawn_x = level->spawn_x;
+        context.spawn_y = level->spawn_y;
+        context.spawn_z = level->spawn_z;
+        log::info("world spawn at ({}, {}, {})", level->spawn_x, level->spawn_y, level->spawn_z);
+    }
 
     // 世界存档：载入 region/*.mca（方块编辑 + 箱子/熔炉方块实体）
     server->persistence_ = std::make_unique<game::WorldPersistence>(

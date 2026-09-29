@@ -88,3 +88,25 @@
   - **密文接入**：读路径解密原始缓冲后交帧解码器；写路径整帧加密后入发送队列。`Connection::alive_` 为 false 时停止加密。
   - **测试验证**：`integration_login_start_gets_disconnect` 通过，76 个测试全绿。`receive_compressed_packet` 用于 SetCompression 后的所有包。
 - 落地：`src/crypto/`（aes.hpp, rsa.hpp, sha1.hpp, session_service.hpp）、`src/net/connection.cpp`（handle_login、handle_encryption_response、finish_login）、`tests/test_status_ping.cpp`。
+### R-010 — playerdata `<uuid>.dat` 格式（原版预言机实测）
+
+- 来源：原版 1.12.2 服务器（Java 21 可直接运行）在线模式关闭下，真实客户端登录后停机，取 `world/playerdata/<uuid>.dat`（708 字节）；载入 `tests/fixtures/vanilla_player_oracle.dat`（sha256 `140e093e…db8d8`）。
+- 结论：
+  - 根为**未命名** TAG_Compound，字段**直接**位于根下（无 `Data` 包装——`Data` 是 level.dat 的结构）。
+  - 空列表元素类型写 `TAG_End`(0)（`Inventory`/`EnderItems` 实测）。
+  - 字段名实测：`Pos`(List<Double>×3)、`Motion`(×3)、`Rotation`(List<Float>×2)、`Health`(Float)、`playerGameType`/`Dimension`/`Score`/`XpLevel`/`XpTotal`/`foodLevel`/`foodTickTimer`/`DataVersion`(Int=1343)、`XpP`/`foodSaturationLevel`/`foodExhaustionLevel`(Float)、`Air`/`Fire`(Short)、`OnGround`/`Invulnerable`/`seenCredits`(Byte)、`SelectedItemSlot`(Byte)、`UUIDMost`/`UUIDLeast`(Long)、`abilities`(Compound：invulnerable/flying/mayfly/instabuild/mayBuild=Byte，flySpeed/walkSpeed=Float)、`EnderItems`(List)。
+  - 载体为 **gzip**（region 是 zlib 版本字节 2，.dat 无版本字节直接 gzip）。
+  - Inventory NBT 槽位（公认布局，EntityEquipmentSlot.getSlotIndex）：0-8 热区、9-35 主背包、100-103 护甲（100=脚…103=头）、40 副手；2x2 合成格不持久化。
+- 落地：`include/cyane/game/player_data.hpp` + `src/game/player_data.cpp`（`build_vanilla_nbt`/解析、`window_slot_to_nbt`/`nbt_slot_to_window` 槽位映射、遗留 JSON 自动迁移）；`proto::deflate_gzip`；`nbt::parse_compressed`；`tests/test_player_data.cpp`（fixture 锁定 + 双向互通）。
+- 互操作实测：我们写的 `.dat` 由原版服务器加载，玩家以文件中的游戏模式（创造，server.properties 默认生存，字段值必出自我们的文件）与坐标出生；原版停机后回写保留该值。
+
+### R-011 — 区块记录（region）与 level.dat 格式（原版预言机实测）
+
+- 来源：原版 1.12.2 服务器生成的世界（扁平模式，6.3MB region）；区块记录与 `level.dat` 逐字节观测，fixture 入库（`tests/fixtures/vanilla_region_chunk.bin` sha256 `6bc883be…c2bd`、`tests/fixtures/vanilla_level_oracle.dat` sha256 `080b30f6…5270`）。
+- 结论：
+  - **区块记录格式**：`[长度:4B 大端，含压缩字节][压缩类型:1B][压缩数据]`。压缩类型 1=gzip、2=zlib、3=未压缩。实测 `00 00 01 0a 02 78 9c…` → 长度 266、类型 2、载荷 265 字节 zlib。
+  - **修正**：仓库早期 `region.cpp` 按"3 字节长度 + 版本字节"读取并写出，与自己的写自洽但**与原版不互通**（原版区块全部解压失败，我们的文件原版也读不了真数据）；`write`/`read` 已统一为上述 4 字节布局。
+  - **level.dat**：根 compound 含 `Data` compound（与 playerdata 的"字段直接在根下"不同），出生点在 `Data.SpawnX/SpawnY/SpawnZ`（实测 247/4/1091）。容器为 gzip。
+  - **区块 Level 字段实测**：`LightPopulated`、`HeightMap`(i32[256])、`Sections`（每节含 `Y`/`Blocks`/`Data`/`BlockLight`/`SkyLight`）。我们早期只写 Blocks/Data/Add 会让这些字段丢失——无损保存改为"以磁盘原始 NBT 为底打补丁"。
+- 落地：`world/region.cpp`（记录布局）、`world/level_dat.cpp`、`world/anvil.cpp::encode_chunk_merged`、`game/world_persistence.cpp`（载入保留 source NBT）；测试 `tests/test_world.cpp`。
+- 互操作实测：cyane 加载原版世界 1576 区块；改块保存后交原版服务器重新加载零错误；重写区块保留 SkyLight/BlockLight/HeightMap/Biomes。

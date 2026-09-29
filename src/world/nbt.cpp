@@ -387,6 +387,27 @@ Result<Value> parse_region_payload(ByteSpan payload) {
     return make_error(ErrorCode::world, std::format("unsupported region chunk version {}", version));
 }
 
+Result<Value> parse_compressed(ByteSpan data) {
+    if (data.size() >= 2 && data[0] == std::byte{0x1F} && data[1] == std::byte{0x8B}) {
+        auto inflated = proto::inflate_dynamic(data, kMaxNbtBytes, true);
+        if (!inflated) {
+            return std::unexpected{std::move(inflated.error())};
+        }
+        return parse(ByteSpan{*inflated});
+    }
+    if (!data.empty() && data[0] == std::byte{0x0A}) {
+        return parse(data);  // 未压缩 raw NBT
+    }
+    if (!data.empty() && data[0] == std::byte{0x78}) {
+        auto inflated = proto::inflate_dynamic(data, kMaxNbtBytes);
+        if (!inflated) {
+            return std::unexpected{std::move(inflated.error())};
+        }
+        return parse(ByteSpan{*inflated});
+    }
+    return make_error(ErrorCode::world, "unknown NBT container format");
+}
+
 Result<Bytes> serialize(std::string_view root_name, const Value& root) {
     if (root.type != Tag::compound) {
         return make_error(ErrorCode::world, "nbt root must be a compound");

@@ -62,7 +62,7 @@ C++23 内核：net / proto / world / entity / game
 - 光照引擎：blocklight/skylight 独立 nibble 数组；禁止每 tick 全量重算。
 - 存储：当前为内存编辑表；Anvil `.mca` 待实现。
 - 碰撞：voxel shape 索引 + AABB 扫掠。
-- 存储：超平坦 baseline + 内存编辑表；**Anvil 存档**（`world/region` + `world/anvil` + `game/world_persistence`）把编辑区块与箱子/熔炉方块实体落盘到 `world/region/r.<rx>.<rz>.mca`（1.12.2 NBT；停机保存 + `server.autosave_interval` 自动保存 + 控制台 `save`）。工作台 3×3 格不落盘（vanilla 同样不持久化）。玩家数据在 `world/playerdata/<uuid>.json`（原版为 gzip NBT `.dat`，格式兼容待做）。
+- 存储：**完整区块存储**（每区块全量 section；未物化区块回退超平坦 baseline，供 M5 世界生成替换）；**Anvil 存档**（`world/region` + `world/anvil` + `game/world_persistence`）读写 `world/region/r.<rx>.<rz>.mca`（1.12.2 NBT）。载入原版世界时保留磁盘原始 NBT，保存走 `encode_chunk_merged` 无损打补丁（只替换 Blocks/Data/Add 与箱子/熔炉，光照/生物群系/HeightMap/实体透传）。`level.dat` 提供出生点。工作台 3×3 格不落盘（vanilla 同样不持久化）。玩家数据在 `world/playerdata/<uuid>.dat`，**原版 gzip NBT 格式**，已与原版服务器实测双向互通。
 
 ### 实体与玩家 `src/entity/`
 

@@ -9,12 +9,14 @@
 - [x] **M0 工程骨架**
 - [x] **M1 协议与连接**（Handshake/Status/Ping/加密登录）
 - [x] **M2 世界与移动**（超平坦区块、移动同步、多人可见、聊天、KeepAlive、动态区块加载）
-- [~] **M3 玩法基础**（方块交互/物品栏/容器/合成/熔炉/命令/被动生物 AI/玩家数据持久化完成；缺高级 AI、掉落物广播、Anvil 存档）
-- [ ] M4 插件基座
-- [ ] M5 Bukkit API 覆盖扩展
-- [ ] M6 NMS shim
-- [ ] M7 世界生成与规模
-- [ ] M8 性能与加固
+- [x] **M3 玩法基础**（方块交互/物品栏/容器/合成/熔炉/命令/被动生物 AI）
+- [~] **M4 存档与世界兼容**（玩家 .dat 双向互通 ✅、**完整区块存储** ✅、**原版世界加载** ✅、`level.dat` ✅、**保存无损化** ✅；缺更多方块实体与实体落盘）
+- [ ] M5 世界生成
+- [ ] M6 玩法进阶
+- [ ] M7 插件基座
+- [ ] M8 Bukkit API 覆盖扩展
+- [ ] M9 NMS shim
+- [ ] M10 性能与加固
 
 ## 里程碑定义
 
@@ -30,28 +32,36 @@ Handshake/Status/Ping、Login（加密+压缩）、KeepAlive、Disconnect 全流
 Anvil 读取、Chunk Data 发送、玩家实体、移动同步、聊天、Tab、区块动态加载。
 **验收**：客户端进世界自由移动，看到地形与他人聊天；100 假人稳 20 TPS。
 
-### M3 — 玩法基础
+### M3 — 玩法基础 ✅
 方块破坏/放置、物品栏与窗口同步、容器、合成、熔炉、掉落物、生物生成与基础 AI、伤害与重生、命令与 OP。
-**验收**：正常生存游玩 30 分钟无致命 bug，物品栏持久化。
+**验收**：正常生存游玩 30 分钟无致命 bug。（已达成）
 
-### M4 — 插件基座
+### M4 — 存档与世界兼容
+玩家数据 `.dat`（原版 gzip NBT，双向互通）、区块 Anvil 读写；**完整区块存储**（全量状态数组替代超平坦+差量模型）、原版世界目录加载（真实地形）、`level.dat` 读写（种子/出生点/时间/gamerules）、保存无损化（未建模字段透传，消除有损重写）、更多方块实体与实体落盘。
+**验收**：cyane 与原版服务器对同一 `world/` 目录交替运行，地形/方块/容器/玩家数据在两侧往返均完整保留。
+
+### M5 — 世界生成
+多层噪声地形 + 生物群系 + 洞穴 + 基础结构，基于 M4 完整区块模型生成并按原版格式落盘。
+**验收**：新世界地形多样、群系过渡自然；生成的 `.mca` 原版客户端可直接游玩。
+
+### M6 — 玩法进阶
+敌对生物生成与战斗 AI（目标选择/寻路，参考 `Mobs/Monster.cpp`）、物理与重力（AABB 重叠分离、实体推动）、经验/附魔/药水。
+**验收**：生存模式夜间可玩，战斗-掉落-拾取链路完整。
+
+### M7 — 插件基座
 JVM 嵌入、`cyane-bukkit.jar` 核心子集、第三方类路径、每插件类加载器、事件总线、调度器、命令、权限、`plugin.yml`、配置；**插件扫描器**与 **`tools/apidiff`**。
 **验收**：自写 Hello 插件（`PlayerJoinEvent` + `/hello` + 周期任务 + `config.yml`）零改动运行；无监听器时事件开销 ≈ 0；apidiff 对 T0 类全绿。
 
-### M5 — Bukkit API 覆盖扩展
+### M8 — Bukkit API 覆盖扩展
 补齐 `Inventory/ItemMeta/Enchantment/PotionEffect/Scoreboard/BossBar/Title/BlockData/Metadata/WorldEdit 所需 API`。
 **验收**：20 个纯 Bukkit 真实插件跑通清单记入 `docs/plugin-compat.md`。
 
-### M6 — NMS shim（T1 → 部分 T2）
+### M9 — NMS shim（T1 → 部分 T2）
 按扫描器实测的需求频次排序实现：`Packet*` → `NBT*` → 聊天组件 → 枚举 → `Craft*` 句柄 + 镜像字段同步。
 **验收**：shim 覆盖扫描器统计的 top-N 高频符号；取真实 NMS 插件实测通过。
 
-### M7 — 世界生成与规模
-噪声地形 + 生物群系 + 洞穴 + 基础结构；光照引擎优化；实体 AI 完善；序列化零拷贝化。
-**验收**：新世界 500+ chunks/s（4 核），1000 加载区块内存 < 2GB。
-
-### M8 — 性能与加固
-压测 1000 玩家、内存/GC 调优、崩溃恢复、安全（握手限流、封包校验、压缩炸弹防护）。
+### M10 — 性能与加固
+光照引擎优化、序列化零拷贝化、区块生成吞吐（≥ 500 chunks/s / 4 核）；压测 1000 玩家、内存/GC 调优、崩溃恢复、安全（握手限流、封包校验、压缩炸弹防护）。
 **验收**：性能目标达标，`docs/benchmarks.md` 有可复现数据。
 
 ## 已实现功能（按 Cuberite 功能域对照）
@@ -79,19 +89,17 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 | **Registries** 配方/方块/物品/实体 | `item/crafting` `world/blocks` `mob_manager` | 🟡 部分 |
 | **UI/Window** 窗口与槽区抽象 | 分散在各 `connection_*` | 🟡 无统一抽象 |
 | **Commands** 控制台/权限 | `game/op_manager` `connection_play` | ✅ |
-| **插件加载/JNI/Bukkit API** | — | ⬜ M4–M6 |
+| **插件加载/JNI/Bukkit API** | — | ⬜ M7–M9 |
 
 ## 近期优先项
 
-按"玩家可玩性收益 / 实现成本"排序：
+按里程碑顺序（M4 → M5 → M6），"收益/成本"在同级内排序：
 
-1. **高级 AI 与敌对生物** — 参考 `Mobs/Monster.cpp` 的目标选择与寻路。
-2. **物理与重力** — AABB 重叠分离、实体推动、活塞。
-3. **更多方块实体** — 附魔台、铁砧、酿造台、告示牌、唱片机、发射器。
-4. **统一窗口抽象** — 抽出 `Window`/`SlotArea` 思路，降低新容器接入成本。
-5. **世界生成** — 噪声地形、生物群系、洞穴、村庄（依赖 Anvil 读写，已就绪）。
-6. **经验与附魔** — 经验球/附魔台/药水效果，物品 NBT 支持。
-7. **容器方块实体完善** — 工作台 3×3 格当前不落盘（vanilla 亦不持久化），评估是否入档。
+1. **完整区块存储**（M4 核心）— World 从"超平坦基线+差量表"升级为全量状态模型，是地形加载与生成的共同地基。
+2. **原版世界目录加载**（M4）— 读取原版 `world/`（真实地形 + `level.dat`），cyane 可接入既有存档。
+3. **保存无损化**（M4）— 玩家/区块未建模字段透传，消除有损重写。
+4. **世界生成**（M5）— 噪声地形、生物群系、洞穴；生成的 `.mca` 原版客户端可直接游玩。
+5. **敌对生物与物理**（M6）— 目标选择/寻路、AABB 重力；经验/附魔随后。
 
 ## 交付记录
 
@@ -161,20 +169,36 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 
 **验证结论**：熔炉合成全链路（煤炭+铁矿 → 铁锭）、容器 shift-click 转移、工作台 3×3、命令与 Tab 补全均经真实 1.12.2 客户端验证。
 
-### M3b 交付（玩家持久化 + Anvil 存档）
+### M4 交付（第一部分）：存档与世界兼容
 
 | 模块 | 内容 |
 |---|---|
-| `game/player_data` | 按 UUID 落盘玩家位置/朝向/游戏模式/血量/46 格背包（`world/playerdata/<uuid>.json`，对齐原版 playerdata 布局；格式暂为 JSON），登录恢复、断开保存 |
+| `game/player_data` | 按 UUID 落盘玩家位置/朝向/游戏模式/血量/46 格背包（`world/playerdata/<uuid>.dat`，**原版 gzip NBT 格式**），登录恢复、断开保存；遗留 JSON 自动迁移 |
 | `proto/frame` | `inflate_dynamic`：输出未知大小的流式解压（zlib/gzip，上限防压缩炸弹） |
 | `world/nbt` | Anvil NBT 读写器（大端、命名标签、13 类标签、保序 compound） |
 | `world/region` | `.mca` 读写重写：扇区分配/复用、位置表+时间戳、tmp+rename 原子落盘；修除原悬垂指针缺陷 |
 | `world/anvil` | 区块 ↔ 1.12.2 NBT（Blocks/Data/Add per-section 基线填充 + TileEntities：箱子 Items、熔炉 Items/BurnTime/CookTime/CookTimeTotal） |
 | `game/world_persistence` | 编排：编辑区块 ∪ 实体区块 → region；载入合并编辑并恢复箱子/熔炉存储 |
 | Server 接线 | 启动载入、停机保存、`server.autosave_interval` 自动保存、控制台 `save` 命令 |
-| 测试 | +7 用例（NBT 往返、区块往返、region 往返、持久化端到端），105 全绿 |
+| `proto/deflate_gzip` | gzip 容器写出（zlib deflateInit2 15+16）；`nbt::parse_compressed` 嗅探 gzip/zlib/raw |
+| 测试 | +4 用例（预言机 fixture 解析、.dat 往返与槽位映射、读原版文件、遗留 JSON 迁移），109 全绿 |
 
 **验证结论**：真实客户端挖方块 → SIGTERM 停机落盘 `world/region/r.0.0.mca` → 重启日志 `loaded 1 chunks` → 再次停机 `saved 1 chunks`；区块级还原由 `persistence_world_round_trip` 覆盖（跨 region 负坐标、baseline 剔除、箱子/熔炉内容与进度）。
+
+**玩家 .dat 互操作**（R-010 预言机实测）：我们的服务器写的 `.dat` 由原版 1.12.2 服务器加载——玩家按我们保存的游戏模式（创造，server.properties 默认为生存，故该字段必出自我们的文件）与坐标 (0.5, 4, 0.5) 进入世界；反向由 fixture `tests/fixtures/vanilla_player_oracle.dat` 锁定。
+
+### M4 交付（第二部分）：完整区块模型与原版世界加载
+
+| 模块 | 内容 |
+|---|---|
+| `world/world` | 重构为**完整区块存储**：每区块持全量 section，未物化区块回退超平坦 baseline；脏标记驱动落盘、干净区块按视距释放 |
+| `world/region` | 修正区块记录格式为原版布局（4 字节大端长度含压缩字节 + 1 字节压缩类型）；支持 gzip/zlib/未压缩三种类型 |
+| `world/anvil` | 编解码改为 Chunk 级（去 baseline 过滤）；新增 `encode_chunk_merged` **无损保存**：以磁盘原始 NBT 为底仅替换 Blocks/Data/Add 与箱子/熔炉，光照/生物群系/HeightMap/实体/未建模方块实体原样透传 |
+| `world/chunk` | 修复 `ChunkPos::from_world` 地板除（此前 x≥0、z<0 象限 z 轴偏移一个区块） |
+| `world/level_dat` | 读取 `<world>/level.dat` 的 SpawnX/Y/Z，接入出生点 |
+| 测试 | +6 用例（完整/无损往返、原版区块记录 fixture、level.dat oracle、无损字段保留），115 全绿 |
+
+**验证结论**：cyane 加载原版 1.12.2 服务器生成的真实世界（`loaded 1576 chunks`，出生点取自 level.dat `(247,4,1091)`）；改块保存后由原版服务器重新加载**零区块错误**；被重写的区块保留 SkyLight/BlockLight/HeightMap/Biomes。
 
 ## 性能目标（M8 验收基线）
 
@@ -194,7 +218,7 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| NMS 需求面未知 | 做了没人用的符号 | M4 起用扫描器收集真实需求，T1 按频次数据驱动 |
+| NMS 需求面未知 | 做了没人用的符号 | M7 起用扫描器收集真实需求，T1 按频次数据驱动 |
 | 混淆/MCP 混名写错 | 插件链接失败 | 签名清单从 jar 机械提取，禁手写 |
 | 镜像字段与内核状态不一致 | 幽灵 bug | 单一权威 + 固定同步点；debug 构建校验双向一致 |
 | 第三方类路径缺失 | 大量插件 `NoClassDefFoundError` | 类路径契约表 + 扫描器检测 import 并预检 |

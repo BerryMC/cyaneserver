@@ -142,11 +142,13 @@ void Connection::finish_login(Uuid uuid) {
 }
 
 entity::Position Connection::spawn_point() const noexcept {
-    // 按实体 id 在草方块上错开成网格：多名玩家重叠在同一坐标时，
-    // 客户端视锥剔除会在某些视角把对方剔除，表现为"某些角度人会消失"。
-    const double x = 0.5 + static_cast<double>(player_id_ % 8) * 2.0;
-    const double z = 0.5 + static_cast<double>((player_id_ / 8) % 8) * 2.0;
-    return entity::Position{x, 4.0, z, 0.0f, 0.0f};
+    // 以世界出生点（level.dat）为网格原点，按实体 id 错开：
+    // 多名玩家重叠在同一坐标时，客户端视锥剔除会在某些视角把对方剔除。
+    const double x = static_cast<double>(context_.spawn_x) + 0.5 +
+                     static_cast<double>(player_id_ % 8) * 2.0;
+    const double z = static_cast<double>(context_.spawn_z) + 0.5 +
+                     static_cast<double>((player_id_ / 8) % 8) * 2.0;
+    return entity::Position{x, static_cast<double>(context_.spawn_y), z, 0.0f, 0.0f};
 }
 
 void Connection::send_login_success(std::string uuid_with_dashes) {
@@ -177,7 +179,7 @@ void Connection::send_join_game() {
 
 void Connection::send_world_state() {
     cyane::ByteWriter spawn_pos;
-    spawn_pos.position(0, 4, 0);
+    spawn_pos.position(context_.spawn_x, context_.spawn_y, context_.spawn_z);
     send_packet(proto::play_cb::kSpawnPosition, spawn_pos.data());
 
     if (context_.player_manager != nullptr) {

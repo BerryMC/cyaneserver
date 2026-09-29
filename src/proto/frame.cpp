@@ -4,7 +4,9 @@
 #include <zlib.h>
 #endif
 
+#include <array>
 #include <format>
+#include <memory>
 
 namespace cyane::proto {
 
@@ -45,6 +47,38 @@ Result<Bytes> inflate(ByteSpan input, std::size_t output_size) {
 #else
     (void)input;
     (void)output_size;
+    return make_error(ErrorCode::protocol, "built without zlib-ng, compression unavailable");
+#endif
+}
+
+Result<Bytes> deflate_gzip(ByteSpan input, int level) {
+#if CYANE_HAVE_ZLIB
+    z_stream stream{};
+    // windowBits 15 + 16 = deflate 数据包一层 gzip 容器（头尾 + CRC32 由 zlib 自动写）
+    if (deflateInit2(&stream, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        return make_error(ErrorCode::protocol, "deflate_gzip: init failed");
+    }
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<std::byte*>(input.data()));
+    stream.avail_in = static_cast<uInt>(input.size());
+    Bytes output;
+    std::array<std::byte, 65536> chunk{};
+    int status = Z_OK;
+    do {
+        stream.next_out = reinterpret_cast<Bytef*>(chunk.data());
+        stream.avail_out = static_cast<uInt>(chunk.size());
+        status = deflate(&stream, Z_FINISH);
+        output.insert(output.end(), chunk.begin(),
+                      chunk.begin() + static_cast<std::ptrdiff_t>(chunk.size() - stream.avail_out));
+        if (status == Z_STREAM_ERROR || status == Z_DATA_ERROR) {
+            deflateEnd(&stream);
+            return make_error(ErrorCode::protocol, std::format("deflate_gzip failed with zlib status {}", status));
+        }
+    } while (status != Z_STREAM_END);
+    deflateEnd(&stream);
+    return output;
+#else
+    (void)input;
+    (void)level;
     return make_error(ErrorCode::protocol, "built without zlib-ng, compression unavailable");
 #endif
 }

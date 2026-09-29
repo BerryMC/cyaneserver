@@ -9,7 +9,8 @@ void Connection::load_player_data() {
     if (context_.player_data_store == nullptr || uuid_.is_null()) {
         return;
     }
-    const auto data = context_.player_data_store->load_or_default(uuid_.dashed(), username_);
+    const auto data =
+        context_.player_data_store->load_or_default(uuid_.dashed(), username_, context_.game_mode);
     player_pos_.x = data.x;
     player_pos_.y = data.y;
     player_pos_.z = data.z;
@@ -44,6 +45,7 @@ void Connection::save_player_data() {
     data.pitch = player_pos_.pitch;
     data.game_mode = context_.game_mode;
     data.health = health_;
+    data.selected_slot = selected_slot_;
     data.inventory = inventory_.slots();
     if (const auto saved = context_.player_data_store->save(data); !saved) {
         log::warn("{}: cannot save player data: {}", username_, saved.error().message);

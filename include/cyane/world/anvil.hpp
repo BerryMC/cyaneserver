@@ -34,17 +34,24 @@ struct ChunkEntities {
     [[nodiscard]] bool empty() const noexcept { return chests.empty() && furnaces.empty(); }
 };
 
+// 解码结果：完整区块（缺失 section = 空气）+ 方块实体
 struct DecodedChunk {
-    // 仅非 baseline 状态（local 索引 y<<8|z<<4|x → 状态）
-    std::vector<std::pair<std::uint32_t, std::uint16_t>> edits;
+    Chunk chunk;
     ChunkEntities entities;
 };
 
 // 1.12.2 Anvil 区块编码：Level{Sections{Y,Blocks,Data[,Add]}, TileEntities}
-// edits 为空且无实体时返回错误（调用方不该为纯超平坦区块写盘）
-[[nodiscard]] Result<Bytes> encode_chunk(ChunkPos pos,
-                                         std::span<const std::pair<std::uint32_t, std::uint16_t>> edits,
+// 全空气 section 跳过；方块数据按存储原样写出（无损，不做 baseline 变换）
+[[nodiscard]] Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk,
                                          const ChunkEntities& entities);
+
+// 无损保存：以 source_nbt（磁盘原始 NBT）为底，仅替换我们管理的字段——
+// 逐 section 覆盖 Blocks/Data/Add（保留 BlockLight/SkyLight），
+// TileEntities 保留未建模实体后追加箱子/熔炉。其余字段（Biomes/HeightMap/
+// Entities/InhabitedTime 等）原样透传。source_nbt 为空则退化为 encode_chunk。
+[[nodiscard]] Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk,
+                                                const ChunkEntities& entities,
+                                                ByteSpan source_nbt);
 
 [[nodiscard]] Result<DecodedChunk> decode_chunk(ByteSpan nbt);
 

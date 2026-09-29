@@ -4,6 +4,7 @@
 #include <mutex>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -13,82 +14,92 @@
 
 namespace cyane::world {
 
-// 超平坦地形作为 baseline，叠加一张运行期编辑覆盖表。
-// 多个 I/O reactor 线程共享同一个 World，故所有访问加锁。
+// 世界存储：每个区块持有全量 section 状态（可从存档载入原版真实地形），
+// 尚未物化的区块回退为超平坦 baseline（M5 世界生成接入后由生成器取代）。
+// 缺失 section = 全空气；物化超平坦区块时 section 0 以 baseline 填充。
+// 多个 I/O reactor 线程共享，全部访问加锁。
 class World {
 public:
-    World() = default;
-
-    void set_block(std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state) {
-        const auto key = ChunkPos::from_world(wx, wz);
-        if (!key || wy < 0 || wy >= kChunkSizeY) {
-            return;
-        }
-        const std::uint32_t local = local_index(*key, wx, wy, wz);
-        std::lock_guard<std::mutex> lock(mutex_);
-        edits_[chunk_key(*key)][local] = state;
-    }
-
-    // 优先返回编辑覆盖，否则回退到超平坦 baseline
-    [[nodiscard]] std::uint16_t block_at(std::int32_t wx, std::int32_t wy, std::int32_t wz) const {
-        const auto key = ChunkPos::from_world(wx, wz);
-        if (!key || wy < 0 || wy >= kChunkSizeY) {
+    // 读取方块：未物化区块按 baseline 兜底
+    [[nodiscard]] std::uint16_t block_at(std::int32_t wx, std::int32_t wy, std::int32_t wz) {
+        if (wy < 0 || wy >= kChunkSizeY) {
             return kStateAir;
         }
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (auto it = edits_.find(chunk_key(*key)); it != edits_.end()) {
-                if (auto b = it->second.find(local_index(*key, wx, wy, wz)); b != it->second.end()) {
-                    return b->second;
-                }
-            }
+        const auto pos = ChunkPos::from_world(wx, wz);
+        if (!pos) {
+            return kStateAir;
         }
-        return flat_baseline(wy);
-    }
-
-    // 超平坦打底后套用该区块已记录的编辑
-    [[nodiscard]] Chunk build_chunk(ChunkPos pos) const {
-        Chunk chunk = make_flat_chunk(pos);
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (auto it = edits_.find(chunk_key(pos)); it != edits_.end()) {
-            for (const auto& [local, state] : it->second) {
-                const std::int32_t wx = pos.world_x() + static_cast<std::int32_t>(local & 0xF);
-                const std::int32_t wz = pos.world_z() + static_cast<std::int32_t>((local >> 4) & 0xF);
-                const std::int32_t wy = static_cast<std::int32_t>(local >> 8);
-                chunk.set_block_state(wx, wy, wz, state);
-            }
-        }
-        return chunk;
-    }
-
-    // ---- 持久化接口（Anvil 存档）----
-
-    // 拷出某区块的全部编辑（local 索引 → 状态）
-    [[nodiscard]] std::vector<std::pair<std::uint32_t, std::uint16_t>>
-    chunk_edits(ChunkPos pos) const {
         std::lock_guard<std::mutex> lock{mutex_};
-        if (auto it = edits_.find(chunk_key(pos)); it != edits_.end()) {
-            return {it->second.begin(), it->second.end()};
+        const auto* sc = find_locked(*pos);
+        if (sc == nullptr) {
+            return flat_baseline(wy);
+        }
+        const auto* section = sc->chunk.section(static_cast<std::size_t>(wy) / 16);
+        if (section == nullptr || section->empty()) {
+            return kStateAir;
+        }
+        return section->state(section_index(static_cast<std::size_t>(wx - pos->world_x()),
+                                            static_cast<std::size_t>(wy % 16),
+                                            static_cast<std::size_t>(wz - pos->world_z())));
+    }
+
+    // 修改方块：物化所在区块并标记脏；缺失 section 由 Chunk 按全空气创建
+    // （超平坦区块物化时 section 0 已承载 baseline，不会走到该路径）
+    void set_block(std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state) {
+        if (wy < 0 || wy >= kChunkSizeY) {
+            return;
+        }
+        const auto pos = ChunkPos::from_world(wx, wz);
+        if (!pos) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock{mutex_};
+        auto& sc = ensure_locked(*pos);
+        sc.chunk.set_block_state(wx, wy, wz, state);
+        sc.dirty = true;
+    }
+
+    // 发送/编码用：物化（如缺）后返回拷贝；已存在的区块原样返回
+    [[nodiscard]] Chunk chunk_at(ChunkPos pos) {
+        std::lock_guard<std::mutex> lock{mutex_};
+        return ensure_locked(pos).chunk;
+    }
+
+    // 存档载入：整体替换区块内容（explicit 语义：缺失 section = 空气）。
+    // 从磁盘启动载入时 dirty=false（文件即权威，无需回写）；程序化构造传 true。
+    // source_nbt 为磁盘原始 NBT，保存时作为无损打补丁的底（空则整体重编码）。
+    void load_chunk(ChunkPos pos, Chunk chunk, bool dirty = false, Bytes source_nbt = {}) {
+        std::lock_guard<std::mutex> lock{mutex_};
+        auto& sc = chunks_[chunk_key(pos)];
+        sc.chunk = std::move(chunk);
+        sc.dirty = dirty;
+        sc.source_nbt = std::move(source_nbt);
+    }
+
+    // 区块的磁盘原始 NBT（无则空）
+    [[nodiscard]] Bytes source_nbt(ChunkPos pos) const {
+        std::lock_guard<std::mutex> lock{mutex_};
+        if (const auto* sc = find_locked(pos); sc != nullptr) {
+            return sc->source_nbt;
         }
         return {};
     }
 
-    // 合并存档加载来的编辑（同 local 覆盖）
-    void merge_edits(ChunkPos pos, std::span<const std::pair<std::uint32_t, std::uint16_t>> edits) {
+    // 释放干净区块（内存上限管理）；脏区块保留至落盘
+    void release_chunk(ChunkPos pos) {
         std::lock_guard<std::mutex> lock{mutex_};
-        auto& target = edits_[chunk_key(pos)];
-        for (const auto& [local, state] : edits) {
-            target.insert_or_assign(local, state);
+        const auto key = chunk_key(pos);
+        if (auto it = chunks_.find(key); it != chunks_.end() && !it->second.dirty) {
+            chunks_.erase(it);
         }
     }
 
-    // 有编辑的区块列表（保存时逐区块写 region）
-    [[nodiscard]] std::vector<ChunkPos> edited_chunks() const {
+    [[nodiscard]] std::vector<ChunkPos> dirty_chunks() const {
         std::vector<ChunkPos> out;
         std::lock_guard<std::mutex> lock{mutex_};
-        out.reserve(edits_.size());
-        for (const auto& [key, edits] : edits_) {
-            if (!edits.empty()) {
+        out.reserve(chunks_.size());
+        for (const auto& [key, sc] : chunks_) {
+            if (sc.dirty) {
                 out.push_back(ChunkPos{static_cast<std::int32_t>(key >> 32),
                                        static_cast<std::int32_t>(key & 0xFFFFFFFFll)});
             }
@@ -96,21 +107,65 @@ public:
         return out;
     }
 
-private:
-    // 区块内线性索引：y<<8 | z<<4 | x
-    [[nodiscard]] static std::uint32_t local_index(ChunkPos pos, std::int32_t wx, std::int32_t wy,
-                                                   std::int32_t wz) noexcept {
-        const auto x = static_cast<std::uint32_t>(wx - pos.world_x());
-        const auto z = static_cast<std::uint32_t>(wz - pos.world_z());
-        return (static_cast<std::uint32_t>(wy) << 8) | (z << 4) | x;
+    void clear_dirty(ChunkPos pos) {
+        std::lock_guard<std::mutex> lock{mutex_};
+        if (auto it = chunks_.find(chunk_key(pos)); it != chunks_.end()) {
+            it->second.dirty = false;
+        }
     }
+
+    [[nodiscard]] std::size_t loaded_chunks() const {
+        std::lock_guard<std::mutex> lock{mutex_};
+        return chunks_.size();
+    }
+
+private:
+    struct StoredChunk {
+        Chunk chunk;
+        Bytes source_nbt;  // 磁盘原始 NBT；无损保存时打补丁的底
+        bool dirty{false};
+    };
 
     [[nodiscard]] static std::int64_t chunk_key(ChunkPos pos) noexcept {
         return (static_cast<std::int64_t>(pos.x) << 32) | static_cast<std::uint32_t>(pos.z);
     }
 
-    mutable std::mutex mutex_;
-    std::unordered_map<std::int64_t, std::unordered_map<std::uint32_t, std::uint16_t>> edits_;
+    [[nodiscard]] const StoredChunk* find_locked(ChunkPos pos) const {
+        const auto it = chunks_.find(chunk_key(pos));
+        return it != chunks_.end() ? &it->second : nullptr;
+    }
+
+    [[nodiscard]] StoredChunk& ensure_locked(ChunkPos pos) {
+        const auto key = chunk_key(pos);
+        if (auto it = chunks_.find(key); it != chunks_.end()) {
+            return it->second;
+        }
+        StoredChunk sc;
+        sc.chunk = materialize_flat(pos);
+        return chunks_.emplace(key, std::move(sc)).first->second;
+    }
+
+    // 超平坦物化：section 0 显式承载 baseline（bedrock/dirt/grass），其余 section 缺失 = 空气
+    [[nodiscard]] static Chunk materialize_flat(ChunkPos pos) {
+        Chunk chunk{pos};
+        chunk.set_section(0, make_section(0));
+        return chunk;
+    }
+
+    [[nodiscard]] static Section make_section(std::size_t sy) {
+        Section section;
+        section.states.resize(kSectionBlockCount, kStateAir);
+        if (sy == 0) {
+            for (std::size_t y = 0; y < 16; ++y) {
+                const auto base = flat_baseline(static_cast<std::int32_t>(y));
+                for (std::size_t i = y << 8; i < (y << 8) + 256; ++i) {
+                    section.states[i] = base;
+                }
+            }
+        }
+        return section;
+    }    mutable std::mutex mutex_;
+    std::unordered_map<std::int64_t, StoredChunk> chunks_;
 };
 
 }

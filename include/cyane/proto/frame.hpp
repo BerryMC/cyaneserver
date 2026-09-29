@@ -26,6 +26,8 @@ struct DecodedFrame {
 void encode_frame(Bytes& out, std::int32_t packet_id, ByteSpan fields, std::int32_t threshold);
 
 [[nodiscard]] Result<Bytes> deflate(ByteSpan input, int level);
+// gzip 容器（RFC 1952）：原版 level.dat / playerdata/*.dat 用
+[[nodiscard]] Result<Bytes> deflate_gzip(ByteSpan input, int level);
 [[nodiscard]] Result<Bytes> inflate(ByteSpan input, std::size_t output_size);
 // 输出大小未知的流式解压（Anvil 区块）：gzip=true 处理版本字节 1 的 gzip 载荷，
 // 否则按 zlib 载荷（版本字节 2）。max_output 上限防压缩炸弹。

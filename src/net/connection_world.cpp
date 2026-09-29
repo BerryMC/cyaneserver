@@ -239,8 +239,8 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
 }
 
 void Connection::send_chunk(world::ChunkPos pos) {
-    world::Chunk chunk = context_.world != nullptr ? context_.world->build_chunk(pos)
-                                                   : world::make_flat_chunk(pos);
+    const world::Chunk chunk = context_.world != nullptr ? context_.world->chunk_at(pos)
+                                                         : world::make_flat_chunk(pos);
     cyane::ByteWriter fields;
     world::write_full_chunk(fields, chunk);
     send_packet(proto::play_cb::kChunkData, fields.data());
@@ -273,6 +273,10 @@ void Connection::unload_chunk(world::ChunkPos pos) {
     fields.i32(pos.z);
     send_packet(proto::play_cb::kUnloadChunk, fields.data());
     loaded_chunks_.erase(key);
+    // 干净区块从内存释放（脏区块留待落盘），约束常驻内存
+    if (context_.world != nullptr) {
+        context_.world->release_chunk(pos);
+    }
 }
 
 void Connection::update_view(world::ChunkPos center) {
