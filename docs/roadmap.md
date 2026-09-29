@@ -10,7 +10,7 @@
 - [x] **M1 协议与连接**（Handshake/Status/Ping/加密登录）
 - [x] **M2 世界与移动**（超平坦区块、移动同步、多人可见、聊天、KeepAlive、动态区块加载）
 - [x] **M3 玩法基础**（方块交互/物品栏/容器/合成/熔炉/命令/被动生物 AI）
-- [~] **M4 存档与世界兼容**（玩家 .dat 双向互通 ✅、**完整区块存储** ✅、**原版世界加载** ✅、`level.dat` ✅、**保存无损化** ✅；缺更多方块实体与实体落盘）
+- [~] **M4 存档与世界兼容**（玩家 .dat 双向互通 ✅、**完整区块存储** ✅、**原版世界加载** ✅、`level.dat` ✅（读 + 首启建档）、**保存无损化** ✅、**掉落物实体落盘** ✅；缺更多方块实体）
 - [ ] M5 世界生成
 - [ ] M6 玩法进阶
 - [ ] M7 插件基座
@@ -186,6 +186,16 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 **验证结论**：真实客户端挖方块 → SIGTERM 停机落盘 `world/region/r.0.0.mca` → 重启日志 `loaded 1 chunks` → 再次停机 `saved 1 chunks`；区块级还原由 `persistence_world_round_trip` 覆盖（跨 region 负坐标、baseline 剔除、箱子/熔炉内容与进度）。
 
 **玩家 .dat 互操作**（R-010 预言机实测）：我们的服务器写的 `.dat` 由原版 1.12.2 服务器加载——玩家按我们保存的游戏模式（创造，server.properties 默认为生存，故该字段必出自我们的文件）与坐标 (0.5, 4, 0.5) 进入世界；反向由 fixture `tests/fixtures/vanilla_player_oracle.dat` 锁定。
+
+| 模块 | 内容 |
+|---|---|
+| `world/anvil` | 掉落物实体 ↔ region `Entities` 列表（`id=minecraft:item`，`Pos` List<f64>×3 + `Item{id,Count,Damage}`——实体字段名与方块实体不同，见 R-012）；`decode_chunk` 还原；`encode_chunk` 写出；`encode_chunk_merged` 保留非物品实体（生物等）原样透传、重写物品实体为内存态 |
+| `net/item_drop` | `ItemDropManager` 增加 `restore(span<DroppedItemState>)` / `all_drops()`：存档载入回填、保存取全量（`DroppedItemState` 仅位置+堆叠，去实体 id/出生时刻） |
+| `game/world_persistence` | 载入时把各区块掉落物回填 `ItemDropManager`；保存时按 `floor` 坐标把 `all_drops()` 归入所在区块的 `Entities` |
+| `world/level_dat` | `ensure_level_dat(dir, game_type)`：首启缺失时写最小集（`Time/Version{Id=1101,Name=1.12.2}/GameType/generatorName=flat/Spawn*`，gzip NBT）；已存在不覆盖 |
+| 测试 | +2 用例（掉落物往返 + merged 保留生物实体；level.dat 首启建档），117 全绿 |
+
+**验证结论**：cyane 载入含掉落物的区块后重新保存，物品实体按原版 `id`+`Pos` 格式写回 region `Entities`，非物品实体（生物等）经无损保存原样透传；首启无 level.dat 时建档最小集供原版读取出生点。真机预言机：cyane 载入原版世界（633 区块，83 生物 + 6 掉落物实体）→ 保存 → 原版重载 `Done (4.317s)` 零错误，掉落物字段往返完整（R-012）。
 
 ### M4 交付（第二部分）：完整区块模型与原版世界加载
 

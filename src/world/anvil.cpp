@@ -20,6 +20,7 @@ constexpr std::int32_t kDataVersion1343 = 1343;
 
 constexpr std::string_view kChestEntityId = "minecraft:chest";
 constexpr std::string_view kFurnaceEntityId = "minecraft:furnace";
+constexpr std::string_view kItemEntityId = "minecraft:item";
 
 void compound_set(Compound& fields, std::string name, Value value) {
     for (auto& [key, existing] : fields) {
@@ -89,6 +90,64 @@ Value tile_entity(std::int64_t key, std::string_view id, std::span<const item::I
                      nbt::make_i16(static_cast<std::int16_t>(furnace->burn_total)));
     }
     return nbt::make_compound(std::move(fields));
+}
+
+// 掉落物品实体：Entity{id:"minecraft:item", Pos:List<Double>×3, Motion, Item{Count,id,Damage}}
+// 字段名与方块实体不同：实体用小写 id + Pos 列表（原版 1.12.2 实测，R-012）
+Value item_entity(const StoredEntity& entity) {
+    Compound item;
+    compound_set(item, "id", nbt::make_i16(entity.stack.id));
+    compound_set(item, "Count", nbt::make_i8(static_cast<std::int8_t>(entity.stack.count)));
+    compound_set(item, "Damage", nbt::make_i16(entity.stack.damage));
+    Compound fields;
+    compound_set(fields, "id", nbt::make_string(std::string{kItemEntityId}));
+    compound_set(fields, "Pos", nbt::make_list(List{nbt::make_f64(entity.x),
+                                                    nbt::make_f64(entity.y),
+                                                    nbt::make_f64(entity.z)}));
+    compound_set(fields, "Motion", nbt::make_list(List{nbt::make_f64(0.0),
+                                                       nbt::make_f64(0.0),
+                                                       nbt::make_f64(0.0)}));
+    compound_set(fields, "Health", nbt::make_f32(5.0F));
+    compound_set(fields, "Age", nbt::make_i16(0));
+    compound_set(fields, "Item", nbt::make_compound(std::move(item)));
+    return nbt::make_compound(std::move(fields));
+}
+
+// 解析一个 Entities 条目：仅还原 minecraft:item（Pos + Item 堆叠），其余实体忽略
+bool read_item_entity(const Value& entry, StoredEntity& out) {
+    const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
+    if (!id || *id != kItemEntityId) {
+        return false;
+    }
+    const auto* pos = entry.find("Pos");
+    const auto* pos_list = pos != nullptr ? pos->get_if<List>() : nullptr;
+    if (pos_list == nullptr || pos_list->size() != 3) {
+        return false;
+    }
+    const auto axis = [&](std::size_t index) {
+        if (const auto* d = (*pos_list)[index].get_if<double>()) {
+            return *d;
+        }
+        if (const auto* f = (*pos_list)[index].get_if<float>()) {
+            return static_cast<double>(*f);
+        }
+        return 0.0;
+    };
+    out.x = axis(0);
+    out.y = axis(1);
+    out.z = axis(2);
+    if (const Value* item = entry.find("Item"); item != nullptr) {
+        const auto count = item->find("Count") ? item->find("Count")->scalar() : std::nullopt;
+        const auto item_id = item->find("id") ? item->find("id")->scalar() : std::nullopt;
+        const auto damage = item->find("Damage") ? item->find("Damage")->scalar() : std::nullopt;
+        if (count && item_id && *count > 0) {
+            const auto damage_value =
+                damage ? static_cast<std::int16_t>(*damage) : std::int16_t{0};
+            out.stack = item::ItemStack{static_cast<std::int16_t>(*item_id),
+                                        static_cast<std::uint8_t>(*count), damage_value};
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -200,12 +259,19 @@ Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities
                                             std::span{&furnace.input, 3}, &furnace));
     }
 
+    // 掉落物品实体（原版 Entities 列表，ID=minecraft:item）
+    List entity_list;
+    for (const auto& item : entities.items) {
+        entity_list.push_back(item_entity(item));
+    }
+
     Compound level;
     compound_set(level, "xPos", nbt::make_i32(pos.x));
     compound_set(level, "zPos", nbt::make_i32(pos.z));
     compound_set(level, "LastUpdate", nbt::make_i64(0));
     compound_set(level, "Sections", nbt::make_list(std::move(section_list)));
     compound_set(level, "TileEntities", nbt::make_list(std::move(tile_entities)));
+    compound_set(level, "Entities", nbt::make_list(std::move(entity_list)));
 
     Compound root;
     compound_set(root, "DataVersion", nbt::make_i32(kDataVersion1343));
@@ -298,6 +364,25 @@ Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkE
         kept.push_back(std::move(entry));
     }
     level->set("TileEntities", nbt::make_list(std::move(kept)));
+
+    // Entities：保留原版非物品实体（生物等），重写掉落物品为内存态
+    {
+        List kept_entities;
+        if (auto* entities_field = level->find_mut("Entities"); entities_field != nullptr) {
+            if (const auto* list = entities_field->get_if<List>(); list != nullptr) {
+                for (const auto& entry : *list) {
+                    const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
+                    if (!id || *id != kItemEntityId) {
+                        kept_entities.push_back(entry);  // 非物品实体（生物等）原样透传
+                    }
+                }
+            }
+        }
+        for (const auto& item : entities.items) {
+            kept_entities.push_back(item_entity(item));
+        }
+        level->set("Entities", nbt::make_list(std::move(kept_entities)));
+    }
 
     return nbt::serialize("", *root);
 }
@@ -402,6 +487,17 @@ Result<DecodedChunk> decode_chunk(ByteSpan nbt_bytes) {
                     furnace.cook_time = cook ? static_cast<std::int32_t>(*cook) : 0;
                     furnace.burn_total = total ? static_cast<std::int32_t>(*total) : 0;
                     out.entities.furnaces.emplace_back(key, std::move(furnace));
+                }
+            }
+        }
+    }
+
+    if (const Value* entities = level->find("Entities"); entities != nullptr) {
+        if (const auto* list = entities->get_if<List>(); list != nullptr) {
+            for (const auto& entry : *list) {
+                StoredEntity item;
+                if (read_item_entity(entry, item)) {
+                    out.entities.items.push_back(std::move(item));
                 }
             }
         }

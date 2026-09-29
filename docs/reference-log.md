@@ -110,3 +110,16 @@
   - **区块 Level 字段实测**：`LightPopulated`、`HeightMap`(i32[256])、`Sections`（每节含 `Y`/`Blocks`/`Data`/`BlockLight`/`SkyLight`）。我们早期只写 Blocks/Data/Add 会让这些字段丢失——无损保存改为"以磁盘原始 NBT 为底打补丁"。
 - 落地：`world/region.cpp`（记录布局）、`world/level_dat.cpp`、`world/anvil.cpp::encode_chunk_merged`、`game/world_persistence.cpp`（载入保留 source NBT）；测试 `tests/test_world.cpp`。
 - 互操作实测：cyane 加载原版世界 1576 区块；改块保存后交原版服务器重新加载零错误；重写区块保留 SkyLight/BlockLight/HeightMap/Biomes。
+
+### R-012 — 区块 Entities 列表的实体格式（原版预言机实测）
+
+- 来源：原版 1.12.2 世界 `r.0.0.mca` 内 89 个真实实体记录逐字段解析（村民/铁傀儡等）；cyane 保存含掉落物的世界后由原版服务器重载。
+- 结论（与方块实体 TileEntities 的字段名**不同**）：
+  - 实体类型字段是**小写 `id`**（如 `minecraft:villager`），不是方块实体那样的小写 `id` 之外的大写 `ID`；1.12.2 实体 id **带 `minecraft:` 命名空间前缀**。
+  - 位置字段是 **`Pos`（TAG_List of TAG_Double×3）**，不是方块实体的 `x`/`y`/`z` 标量。`Motion` 同为 List×3。
+  - 其余公共字段实测：`Health`(f32)、`Air`(i16=300)、`Fire`(i16)、`FallDistance`(f32)、`OnGround`/`Invulnerable`/`FallFlying`/`Leashed`/`CanPickUpLoot`(u8)、`PortalCooldown`/`HurtTime`/`DeathTime`/`HurtByTimestamp`/`Age`/`ForcedAge`/`Riches`/`Dimension`(i32)、`UUIDMost`/`UUIDLeast`(i64)、`Rotation`(List<f32>×2)。
+  - 掉落物实体（`id="minecraft:item"`）带 `Item`{`id`(i16),`Count`(i8),`Damage`(i16)}。
+  - 原版读取宽容：缺失字段取默认（`getTagList("Pos")` 越界返回 0），因此我们写最小集（id/Pos/Motion/Health/Age/Item）即可互通；重写实体时未建模字段（UUID 等）由原版重新生成。
+  - **教训**：最初实现误用方块实体的 `ID`+`x/y/z` 字段名写实体——那种记录原版读到的位置恒为 (0,0,0)。由本预言机实测纠正为 `id`+`Pos`。
+- 落地：`world/anvil.cpp`（`item_entity` 编码 / `read_item_entity` 解码 / merged 透传过滤）、`net/item_drop`（restore/all_drops）、`game/world_persistence`（载入回填掉落物、保存按 chunk 归位）。
+- 互操作实测：cyane 载入原版世界（633 区块，含 83 生物 + 6 掉落物实体）→ 保存 → 原版重载 `Done (4.317s)` 零错误；掉落物实体往返字段完整。

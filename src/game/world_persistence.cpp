@@ -1,6 +1,7 @@
 #include "cyane/game/world_persistence.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -117,6 +118,14 @@ Result<std::size_t> WorldPersistence::load() {
                     state.cook_time = furnace.cook_time;
                     furnaces_.restore(key, std::move(state));
                 }
+                if (!decoded->entities.items.empty()) {
+                    std::vector<net::DroppedItemState> drops;
+                    drops.reserve(decoded->entities.items.size());
+                    for (const auto& item : decoded->entities.items) {
+                        drops.push_back(net::DroppedItemState{item.x, item.y, item.z, item.stack});
+                    }
+                    item_drops_.restore(drops);
+                }
                 if (has_content) {
                     ++loaded;
                 }
@@ -159,6 +168,20 @@ Result<std::size_t> WorldPersistence::save() {
         }
         write_set.emplace(pos->x, pos->z);
         chunks[{pos->x, pos->z}].entities.furnaces.emplace_back(key, to_stored(furnace));
+    }
+
+    // 掉落物按整方块坐标归入区块（floor_div 处理负坐标）
+    const auto drops = item_drops_.all_drops();
+    for (const auto& drop : drops) {
+        const auto pos =
+            world::ChunkPos::from_world(static_cast<std::int32_t>(std::floor(drop.x)),
+                                        static_cast<std::int32_t>(std::floor(drop.z)));
+        if (!pos) {
+            continue;
+        }
+        write_set.emplace(pos->x, pos->z);
+        chunks[{pos->x, pos->z}].entities.items.push_back(
+            world::StoredEntity{drop.x, drop.y, drop.z, drop.stack});
     }
 
     static const world::ChunkEntities kNoEntities{};

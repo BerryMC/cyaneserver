@@ -3,6 +3,7 @@
 
 #include "cyane/game/world_persistence.hpp"
 #include "cyane/net/furnace_store.hpp"
+#include "cyane/net/item_drop.hpp"
 #include "cyane/world/anvil.hpp"
 #include "cyane/world/blocks.hpp"
 #include "cyane/world/nbt.hpp"
@@ -79,6 +80,20 @@ CYANE_TEST(anvil_chunk_round_trip_with_entities) {
     CYANE_CHECK_EQ(restored.burn_left, 1200);
     CYANE_CHECK_EQ(restored.burn_total, 1600);
     CYANE_CHECK_EQ(restored.cook_time, 55);
+
+    // 掉落物：写入 Entities，解码还原
+    entities.items.push_back(world::StoredEntity{1.25, 3.5, -2.75, item::ItemStack{kApple, 9, 0}});
+    entities.items.push_back(world::StoredEntity{5.0, 5.0, 5.0,
+                                                 item::ItemStack{std::int16_t{1}, 1, 3}});
+    encoded = world::encode_chunk(pos, chunk, entities);
+    CYANE_CHECK(encoded.has_value());
+    decoded = world::decode_chunk(ByteSpan{*encoded});
+    CYANE_CHECK(decoded.has_value());
+    CYANE_CHECK_EQ(decoded->entities.items.size(), std::size_t{2});
+    CYANE_CHECK(decoded->entities.items[0].x == 1.25 && decoded->entities.items[0].z == -2.75);
+    CYANE_CHECK_EQ(decoded->entities.items[0].stack.id, kApple);
+    CYANE_CHECK_EQ(decoded->entities.items[0].stack.count, std::uint8_t{9});
+    CYANE_CHECK_EQ(decoded->entities.items[1].stack.damage, std::int16_t{3});
 }
 
 CYANE_TEST(anvil_all_air_chunk_encodes_with_empty_sections) {
@@ -161,9 +176,12 @@ CYANE_TEST(persistence_world_round_trip) {
         state.burn_total = 1600;
         return state;
     }());
+    net::ItemDropManager source_drops;
+    source_drops.spawn(1.5, 5.5, 1.5, item::ItemStack{kApple, 7, 0}, 0);
 
     {
-        game::WorldPersistence saver(source_world, source_chests, source_furnaces, dir.string());
+        game::WorldPersistence saver(source_world, source_chests, source_furnaces, source_drops,
+                                    dir.string());
         auto saved = saver.save();
         CYANE_CHECK(saved.has_value());
         CYANE_CHECK_EQ(*saved, std::size_t{2});
@@ -175,8 +193,10 @@ CYANE_TEST(persistence_world_round_trip) {
     world::World loaded_world;
     net::ContainerStore loaded_chests;
     net::FurnaceStore loaded_furnaces;
+    net::ItemDropManager loaded_drops;
     loaded_furnaces.set_tables({}, {});
-    game::WorldPersistence loader(loaded_world, loaded_chests, loaded_furnaces, dir.string());
+    game::WorldPersistence loader(loaded_world, loaded_chests, loaded_furnaces, loaded_drops,
+                                  dir.string());
     auto loaded = loader.load();
     CYANE_CHECK(loaded.has_value());
     CYANE_CHECK_EQ(*loaded, std::size_t{2});
@@ -195,6 +215,13 @@ CYANE_TEST(persistence_world_round_trip) {
     const auto furnace = loaded_furnaces.snapshot(furnace_key);
     CYANE_CHECK_EQ(furnace.input.id, std::int16_t{15});
     CYANE_CHECK_EQ(furnace.cook_time, 100);
+
+    // 掉落物实体往返
+    const auto restored_drops = loaded_drops.all_drops();
+    CYANE_CHECK_EQ(restored_drops.size(), std::size_t{1});
+    CYANE_CHECK_EQ(restored_drops[0].stack.id, kApple);
+    CYANE_CHECK_EQ(restored_drops[0].stack.count, std::uint8_t{7});
+    CYANE_CHECK(restored_drops[0].x == 1.5 && restored_drops[0].z == 1.5);
 
     // 再次保存：方块区块全部干净（启动载入不标脏）不重写；
     // 实体区块（箱子/熔炉所在）无条件重写——容器内容变更没有脏标记，保守起见

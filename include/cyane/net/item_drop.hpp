@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <span>
 #include <vector>
 
 #include "cyane/entity/player_manager.hpp"
@@ -18,6 +19,14 @@ struct DroppedItem {
     double z{0.0};
     item::ItemStack stack;
     std::uint64_t spawn_ms{0};
+};
+
+// 持久化形状：位置 + 堆叠（存档 Entities 列表的最小字段集）
+struct DroppedItemState {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    item::ItemStack stack;
 };
 
 // 一次被某玩家拾取的结果：谁拾取、拾取了哪个实体、堆叠内容。
@@ -43,6 +52,29 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         items_.push_back(DroppedItem{id, x, y, z, stack, now_ms});
         return id;
+    }
+
+    // 从存档恢复掉落物（spawn_ms=0，过延迟即拾取）；空堆叠忽略
+    void restore(std::span<const DroppedItemState> drops) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& drop : drops) {
+            if (drop.stack.empty()) {
+                continue;
+            }
+            items_.push_back(DroppedItem{entity::allocate_entity_id(), drop.x, drop.y, drop.z,
+                                        drop.stack, 0});
+        }
+    }
+
+    // 全量快照（保存存档用：位置 + 堆叠）
+    [[nodiscard]] std::vector<DroppedItemState> all_drops() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<DroppedItemState> out;
+        out.reserve(items_.size());
+        for (const auto& it : items_) {
+            out.push_back(DroppedItemState{it.x, it.y, it.z, it.stack});
+        }
+        return out;
     }
 
     // 当前所有掉落物快照（新玩家进入时补发）

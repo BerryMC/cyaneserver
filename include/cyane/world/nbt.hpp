@@ -112,6 +112,8 @@ public:
 [[nodiscard]] inline Value make_i16(std::int16_t v) noexcept { return {Tag::i16, v}; }
 [[nodiscard]] inline Value make_i32(std::int32_t v) noexcept { return {Tag::i32, v}; }
 [[nodiscard]] inline Value make_i64(std::int64_t v) noexcept { return {Tag::i64, v}; }
+[[nodiscard]] inline Value make_f32(float v) noexcept { return {Tag::f32, v}; }
+[[nodiscard]] inline Value make_f64(double v) noexcept { return {Tag::f64, v}; }
 [[nodiscard]] inline Value make_string(std::string v) { return {Tag::string, std::move(v)}; }
 [[nodiscard]] inline Value make_byte_array(Bytes v) { return {Tag::byte_array, std::move(v)}; }
 [[nodiscard]] inline Value make_list(List v) { return {Tag::list, std::move(v)}; }

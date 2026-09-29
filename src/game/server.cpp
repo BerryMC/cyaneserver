@@ -256,7 +256,14 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
                          : (server->config_.game_mode == "spectator" ? proto::game_mode::kSpectator
                                                                       : proto::game_mode::kCreative);
 
-    // 世界元数据：level.dat 出生点
+    // 世界元数据：level.dat 出生点（首启缺失时建档最小集）
+    if (auto created = world::ensure_level_dat(server->config_.world_dir,
+                                                static_cast<std::int32_t>(context.game_mode));
+        !created) {
+        log::warn("cannot ensure level.dat: {}", created.error().message);
+    } else if (*created) {
+        log::info("created {} with minimal level.dat", server->config_.world_dir);
+    }
     if (auto level = world::load_level_dat(server->config_.world_dir); !level) {
         log::warn("cannot read level.dat: {}", level.error().message);
     } else {
@@ -266,9 +273,10 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         log::info("world spawn at ({}, {}, {})", level->spawn_x, level->spawn_y, level->spawn_z);
     }
 
-    // 世界存档：载入 region/*.mca（方块编辑 + 箱子/熔炉方块实体）
+    // 世界存档：载入 region/*.mca（方块编辑 + 箱子/熔炉方块实体 + 掉落物）
     server->persistence_ = std::make_unique<game::WorldPersistence>(
-        *server->world_, *server->containers_, *server->furnaces_, server->config_.world_dir);
+        *server->world_, *server->containers_, *server->furnaces_, *server->item_drops_,
+        server->config_.world_dir);
     if (auto loaded = server->persistence_->load(); !loaded) {
         log::warn("world load failed: {}", loaded.error().message);
     } else if (*loaded > 0) {

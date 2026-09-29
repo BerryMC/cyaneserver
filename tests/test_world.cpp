@@ -5,6 +5,7 @@
 #include "cyane/game/world_persistence.hpp"
 #include "cyane/net/container_store.hpp"
 #include "cyane/net/furnace_store.hpp"
+#include "cyane/net/item_drop.hpp"
 #include "cyane/proto/frame.hpp"
 #include "cyane/world/level_dat.hpp"
 #include "cyane/world/nbt.hpp"
@@ -92,7 +93,8 @@ CYANE_TEST(world_vanilla_terrain_load_and_lossless_round_trip) {
 
     net::ContainerStore chests;
     net::FurnaceStore furnaces;
-    game::WorldPersistence saver(source, chests, furnaces, dir.string());
+    net::ItemDropManager drops;
+    game::WorldPersistence saver(source, chests, furnaces, drops, dir.string());
     auto saved = saver.save();
     CYANE_CHECK(saved.has_value());
     CYANE_CHECK_EQ(*saved, std::size_t{1});
@@ -101,7 +103,8 @@ CYANE_TEST(world_vanilla_terrain_load_and_lossless_round_trip) {
     world::World loaded;
     net::ContainerStore chests2;
     net::FurnaceStore furnaces2;
-    game::WorldPersistence loader(loaded, chests2, furnaces2, dir.string());
+    net::ItemDropManager drops2;
+    game::WorldPersistence loader(loaded, chests2, furnaces2, drops2, dir.string());
     CYANE_CHECK(loader.load().has_value());
     CYANE_CHECK_EQ(loaded.block_at(80, 0, -112),
                    static_cast<std::uint16_t>(world::kStateStone | 0x0));
@@ -236,6 +239,31 @@ CYANE_TEST(region_reads_vanilla_chunk_record_format) {
     std::filesystem::remove_all(dir);
 }
 
+CYANE_TEST(level_dat_ensure_creates_minimal_set) {
+    const auto tmp = std::filesystem::temp_directory_path() / "cyane_test_level_ensure";
+    std::filesystem::remove_all(tmp);
+
+    // 缺失时建档
+    auto created = world::ensure_level_dat(tmp, /*game_type=*/1);
+    CYANE_CHECK(created.has_value());
+    CYANE_CHECK(*created);
+    CYANE_CHECK(std::filesystem::exists(tmp / "level.dat"));
+
+    // 回读出生点
+    auto info = world::load_level_dat(tmp);
+    CYANE_CHECK(info.has_value());
+    CYANE_CHECK_EQ(info->spawn_x, 0);
+    CYANE_CHECK_EQ(info->spawn_y, 4);
+    CYANE_CHECK_EQ(info->spawn_z, 0);
+
+    // 已存在时不覆盖
+    auto again = world::ensure_level_dat(tmp, 0);
+    CYANE_CHECK(again.has_value());
+    CYANE_CHECK(!*again);
+
+    std::filesystem::remove_all(tmp);
+}
+
 CYANE_TEST(save_preserves_vanilla_fields_losslessly) {
     const auto path = fixture_path("vanilla_region_chunk.bin");
     CYANE_CHECK(!path.empty());
@@ -261,7 +289,8 @@ CYANE_TEST(save_preserves_vanilla_fields_losslessly) {
     world::World loaded;
     net::ContainerStore chests;
     net::FurnaceStore furnaces;
-    game::WorldPersistence loader(loaded, chests, furnaces, dir.string());
+    net::ItemDropManager drops;
+    game::WorldPersistence loader(loaded, chests, furnaces, drops, dir.string());
     CYANE_CHECK(loader.load().has_value());
 
     // 记录原方块（找第一个非空气位置）与其原始 NBT 特征
@@ -324,4 +353,67 @@ CYANE_TEST(save_preserves_vanilla_fields_losslessly) {
     CYANE_CHECK(kept.has_value() && *kept == original_state);
 
     std::filesystem::remove_all(dir);
+}
+
+CYANE_TEST(merged_save_preserves_non_item_entities) {
+    // 造一份含「生物实体 + 旧物品实体」的区块 NBT 作磁盘源档
+    const world::ChunkPos pos{2, 2};
+    world::Chunk chunk{pos};
+    chunk.set_block_state(pos.world_x() + 5, 3, pos.world_z() + 5, world::kStateStone);
+
+    {
+        // 实体条目用原版字段名：小写 id + Pos 列表（与方块实体的 x/y/z 不同）
+        nbt::Compound zombie_fields;
+        zombie_fields.emplace_back("Pos", nbt::make_list(nbt::List{
+            nbt::Value{nbt::Tag::f64, 100.0},
+            nbt::Value{nbt::Tag::f64, 5.0},
+            nbt::Value{nbt::Tag::f64, 100.0}}));
+        zombie_fields.emplace_back("id",
+                                   nbt::Value{nbt::Tag::string, std::string{"minecraft:zombie"}});
+        nbt::Compound old_item_fields;
+        old_item_fields.emplace_back("Item", nbt::Value{nbt::Tag::compound, nbt::Compound{}});
+        old_item_fields.emplace_back("id",
+                                     nbt::Value{nbt::Tag::string, std::string{"minecraft:item"}});
+        nbt::List entity_list;
+        entity_list.push_back(nbt::make_compound(std::move(zombie_fields)));
+        entity_list.push_back(nbt::make_compound(std::move(old_item_fields)));
+        nbt::Compound level;
+        level.emplace_back("xPos", nbt::Value{nbt::Tag::i32, pos.x});
+        level.emplace_back("zPos", nbt::Value{nbt::Tag::i32, pos.z});
+        level.emplace_back("Entities", nbt::make_list(std::move(entity_list)));
+        nbt::Compound root;
+        root.emplace_back("Level", nbt::make_compound(std::move(level)));
+        auto source = nbt::serialize("", nbt::make_compound(std::move(root)));
+        CYANE_CHECK(source.has_value());
+
+        world::ChunkEntities entities;
+        entities.items.push_back(
+            world::StoredEntity{21.5, 3.5, 21.5, item::ItemStack{260, 4, 0}});
+        auto merged = world::encode_chunk_merged(pos, chunk, entities, ByteSpan{*source});
+        CYANE_CHECK(merged.has_value());
+
+        // 旧物品实体被内存态替换，新物品实体出现
+        auto decoded = world::decode_chunk(ByteSpan{*merged});
+        CYANE_CHECK(decoded.has_value());
+        CYANE_CHECK_EQ(decoded->entities.items.size(), std::size_t{1});
+        CYANE_CHECK_EQ(decoded->entities.items[0].stack.id, std::int16_t{260});
+        CYANE_CHECK_EQ(decoded->entities.items[0].stack.count, std::uint8_t{4});
+
+        // 生物实体在 NBT 中原样保留
+        auto reparsed = nbt::parse(ByteSpan{*merged});
+        CYANE_CHECK(reparsed.has_value());
+        const nbt::Value* level_v = reparsed->find("Level");
+        const nbt::Value* ents_v =
+            level_v != nullptr ? level_v->find("Entities") : nullptr;
+        const auto* ents = ents_v != nullptr ? ents_v->get_if<nbt::List>() : nullptr;
+        CYANE_CHECK(ents != nullptr);
+        bool zombie_kept = false;
+        for (const auto& entry : *ents) {
+            const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
+            if (id && *id == "minecraft:zombie") {
+                zombie_kept = true;
+            }
+        }
+        CYANE_CHECK(zombie_kept);
+    }
 }

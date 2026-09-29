@@ -27,11 +27,20 @@ struct StoredFurnace {
     std::int32_t cook_time{0};
 };
 
-// 一个区块的方块实体（按方块位置键 pack_block_pos 索引）
+// 掉落物品实体（region 的 Entities 列表，id=minecraft:item）
+struct StoredEntity {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    item::ItemStack stack;
+};
+
+// 一个区块的方块实体（按方块位置键 pack_block_pos 索引）+ 掉落物
 struct ChunkEntities {
     std::vector<std::pair<std::int64_t, StoredChest>> chests;
     std::vector<std::pair<std::int64_t, StoredFurnace>> furnaces;
-    [[nodiscard]] bool empty() const noexcept { return chests.empty() && furnaces.empty(); }
+    std::vector<StoredEntity> items;
+    [[nodiscard]] bool empty() const noexcept { return chests.empty() && furnaces.empty() && items.empty(); }
 };
 
 // 解码结果：完整区块（缺失 section = 空气）+ 方块实体
