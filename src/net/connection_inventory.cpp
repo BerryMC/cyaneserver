@@ -356,6 +356,21 @@ void Connection::resync_open_window() {
                                                                                         detail::kChestSlots)));
         }
         send_packet(proto::play_cb::kWindowItems, items.data());
+    } else if (small_open_ && context_.containers != nullptr) {
+        // 小容器（发射器/投掷器/漏斗）：布局同箱子式，容器格数按打开时的值
+        ByteWriter items;
+        items.u8(kSmallWindowId);
+        const std::int16_t window_slots = static_cast<std::int16_t>(small_slots_ + 36);
+        items.i16(window_slots);
+        const auto container = context_.containers->snapshot_small(open_small_key_);
+        for (std::size_t i = 0; i < small_slots_; ++i) {
+            item::write_slot(items, container.slots[i]);
+        }
+        for (std::int16_t i = static_cast<std::int16_t>(small_slots_); i < window_slots; ++i) {
+            item::write_slot(items, inventory_.slot(detail::container_window_to_player_slot(
+                                        i, static_cast<std::int16_t>(small_slots_))));
+        }
+        send_packet(proto::play_cb::kWindowItems, items.data());
     } else if (furnace_open_ && context_.furnaces != nullptr) {
         ByteWriter items;
         items.u8(kFurnaceWindowId);

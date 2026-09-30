@@ -1,6 +1,8 @@
 #include "cyane/net/connection.hpp"
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 #include "connection_detail.hpp"
 #include "cyane/core/log.hpp"
@@ -196,13 +198,42 @@ void Connection::apply_chest_click(std::int16_t slot, std::uint8_t button, std::
         if (moving.empty()) {
             return;
         }
+        // shift 装入容器：先叠加已有同类，再填空槽（原版箱子语义，
+        // 与熔炉 DistributeStack 行为一致）；装不下的余量留在背包内互换
+        std::vector<std::pair<std::size_t, item::ItemStack>> touched;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(container_slots) && !moving.empty();
+             ++i) {
+            item::ItemStack dst = container_item(i);
+            if (dst.stacks_with(moving) && dst.count < item::kMaxStack) {
+                const int total = static_cast<int>(dst.count) + static_cast<int>(moving.count);
+                dst.count = static_cast<std::uint8_t>(std::min(total, static_cast<int>(item::kMaxStack)));
+                moving.count = static_cast<std::uint8_t>(total - dst.count);
+                if (moving.count == 0) {
+                    moving = item::ItemStack::air();
+                }
+                write_container_item(i, dst);
+                touched.emplace_back(i, dst);
+            }
+        }
+        for (std::size_t i = 0; i < static_cast<std::size_t>(container_slots) && !moving.empty();
+             ++i) {
+            if (container_item(i).empty()) {
+                write_container_item(i, moving);
+                touched.emplace_back(i, moving);
+                moving = item::ItemStack::air();
+            }
+        }
         if (pidx >= 36) {
             (void)merge_into_range(moving, 9, 35);
         } else {
             (void)merge_into_range(moving, 36, 44);
         }
         inventory_.set_slot(pidx, moving);
-        send_slot(is_small ? kSmallWindowId : kChestWindowId, slot, moving);
+        const auto win_id = static_cast<std::int8_t>(is_small ? kSmallWindowId : kChestWindowId);
+        for (const auto& [i, stack] : touched) {
+            send_slot(win_id, static_cast<std::int16_t>(i), stack);
+        }
+        send_slot(win_id, slot, moving);
         send_inventory();
         return;
     }
