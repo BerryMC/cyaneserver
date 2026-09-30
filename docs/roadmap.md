@@ -214,6 +214,16 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 
 **验证结论**：三轮启动-漫游-保存循环实体总数恒定（无幽灵复制）；纯 cyane 生成世界交原版 1.12.2 重载 `Done (5.268s)` 零区块错误（光照占位修复后）。
 
+### M4 交付（补丁）：区块生命周期与存档安全
+
+| 修复 | 内容 |
+|---|---|
+| 假区块覆盖（R-015） | 保存对不在内存的写集区块改走 `encode_chunk_entities_only`（region 源档只合并实体，地形原样）；`World::contains` 区分真区块与物化假区块 |
+| 释放区块回归 | `World::set_loader` + `attach_loader`：缺块按需从 region 重载真实地形并恢复方块实体（容器内存态优先）；不再物化超平坦 |
+| 并发 | `regions_` 缓存加锁（loader 在 reactor 线程、save 在 tick/停机）；锁内用 `region_locked` 防同线程自锁 |
+| shift 装入容器 | 箱子/漏斗/发射器/投掷器窗口 shift+左键移入容器（叠加同类→填空槽→余量留背包），逐一 SetSlot 重同步；`resync_open_window` 补小容器分支 |
+| 实测 | vanilla 地形 625 区块经两次玩家进出+保存零退化（修复前此路径必退化） |
+
 ### M4 交付（第二部分）：完整区块模型与原版世界加载
 
 | 模块 | 内容 |

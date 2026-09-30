@@ -189,6 +189,8 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
     // 右键点到已有箱子/熔炉/工作台：打开对应窗口而非放置
     if (context_.world != nullptr) {
         const auto clicked = world::block_id(context_.world->block_at(cx, cy, cz));
+        log::debug("place at ({},{},{}) face={} clicked_id={} held={}", cx, cy, cz, *face, clicked,
+                   inventory_.hotbar_item(selected_slot_).id);
         if (context_.containers != nullptr && clicked == world::block_id(world::kStateChest)) {
             open_chest(detail::block_key(cx, cy, cz));
             return true;

@@ -45,7 +45,8 @@ constexpr int kRegionChunks = world::RegionFile::kRegionSize;
 
 } // namespace
 
-world::RegionFile& WorldPersistence::region(std::int32_t rx, std::int32_t rz) {
+// 前置条件：调用方已持有 cache_mutex_（region() 的加锁包装见下）
+world::RegionFile& WorldPersistence::region_locked(std::int32_t rx, std::int32_t rz) {
     const auto key = region_key(rx, rz);
     if (auto it = regions_.find(key); it != regions_.end()) {
         return it->second;
@@ -58,6 +59,90 @@ world::RegionFile& WorldPersistence::region(std::int32_t rx, std::int32_t rz) {
         return regions_.emplace(key, world::RegionFile{}).first->second;
     }
     return regions_.emplace(key, std::move(*loaded)).first->second;
+}
+
+world::RegionFile& WorldPersistence::region(std::int32_t rx, std::int32_t rz) {
+    std::lock_guard<std::mutex> lock{cache_mutex_};
+    return region_locked(rx, rz);
+}
+
+void WorldPersistence::attach_loader() {
+    world_.set_loader([this](world::ChunkPos pos, world::Chunk& out, Bytes& source) -> bool {
+        const auto rx = world::ChunkPos::floor_div(pos.x, kRegionChunks);
+        const auto rz = world::ChunkPos::floor_div(pos.z, kRegionChunks);
+        const auto cx = floor_mod(pos.x, kRegionChunks);
+        const auto cz = floor_mod(pos.z, kRegionChunks);
+
+        world::RegionFile* file = nullptr;
+        std::optional<Bytes> payload;
+        {
+            // 持缓存锁完成"取 region + 读记录"（save 线程可能正在覆写同文件）
+            std::lock_guard<std::mutex> lock{cache_mutex_};
+            const auto key = region_key(rx, rz);
+            if (auto it = regions_.find(key); it != regions_.end()) {
+                file = &it->second;
+            } else {
+                auto loaded =
+                    world::RegionFile::load(world::RegionFile::path_for(world_dir_ + "/region",
+                                                                        rx, rz));
+                if (!loaded) {
+                    return false;
+                }
+                file = &regions_.emplace(key, std::move(*loaded)).first->second;
+            }
+            auto read = file->read_chunk(cx, cz);
+            if (!read) {
+                return false;
+            }
+            payload = std::move(*read);
+        }
+        if (!payload) {
+            return false;  // 无记录：交给调用方物化
+        }
+        auto decoded = world::decode_chunk(ByteSpan{*payload});
+        if (!decoded) {
+            log::warn("world: on-demand load of chunk ({},{}) failed: {}", pos.x, pos.z,
+                      decoded.error().message);
+            return false;
+        }
+        // 方块实体：容器/熔炉以内存态优先（运行时改动不被磁盘旧值覆盖）
+        for (const auto& [key, chest] : decoded->entities.chests) {
+            if (!containers_.exists(key)) {
+                containers_.ensure(key);
+                for (std::size_t slot = 0; slot < chest.size(); ++slot) {
+                    containers_.set_slot(key, slot, chest[slot]);
+                }
+            }
+        }
+        for (const auto& [key, small] : decoded->entities.small_containers) {
+            if (!containers_.small_exists(key)) {
+                const auto kind = static_cast<net::ContainerStore::SmallKind>(small.kind);
+                containers_.ensure_small(key, kind);
+                const std::size_t limit =
+                    kind == net::ContainerStore::SmallKind::hopper
+                        ? net::ContainerStore::kHopperSlots
+                        : net::ContainerStore::kSmallSlots;
+                for (std::size_t slot = 0; slot < limit; ++slot) {
+                    containers_.set_small_slot(key, slot, small.slots[slot]);
+                }
+            }
+        }
+        for (const auto& [key, furnace] : decoded->entities.furnaces) {
+            if (!furnaces_.exists(key)) {
+                net::FurnaceState state;
+                state.input = furnace.input;
+                state.fuel = furnace.fuel;
+                state.output = furnace.output;
+                state.burn_left = furnace.burn_left;
+                state.burn_total = furnace.burn_total;
+                state.cook_time = furnace.cook_time;
+                furnaces_.restore(key, std::move(state));
+            }
+        }
+        out = std::move(decoded->chunk);
+        source = std::move(*payload);
+        return true;
+    });
 }
 
 Result<std::size_t> WorldPersistence::load() {
@@ -155,7 +240,10 @@ Result<std::size_t> WorldPersistence::load() {
             }
         }
         // 已读文件入缓存，保存时直接覆写
-        regions_.insert_or_assign(region_key(rx, rz), std::move(*file));
+        {
+            std::lock_guard<std::mutex> lock{cache_mutex_};
+            regions_.insert_or_assign(region_key(rx, rz), std::move(*file));
+        }
     }
     if (ec) {
         return make_error(ErrorCode::io, "cannot list region dir: " + ec.message());
@@ -246,11 +334,31 @@ Result<std::size_t> WorldPersistence::save() {
         const auto data_it = chunks.find(cpos);
         const auto& entities =
             data_it != chunks.end() ? data_it->second.entities : kNoEntities;
-        const auto chunk = world_.chunk_at(pos);
-        const auto source = world_.source_nbt(pos);
-        auto encoded = source.empty()
+
+        // 区块不在内存 = 已按视距释放。此时 chunk_at 会物化出超平坦假区块，
+        // 若拿它编码会把真实地形覆盖成超平坦（历史数据丢失事故的根源）。
+        // 改走"仅实体合并"：以 region 缓存里的磁盘原 NBT 为底，只更新
+        // TileEntities/Entities，方块数据原样保留。
+        const bool in_memory = world_.contains(pos);
+        auto encoded = [&]() -> Result<Bytes> {
+            if (in_memory) {
+                const auto chunk = world_.chunk_at(pos);
+                const auto source = world_.source_nbt(pos);
+                return source.empty()
                            ? world::encode_chunk(pos, chunk, entities)
                            : world::encode_chunk_merged(pos, chunk, entities, ByteSpan{source});
+            }
+            const auto rx0 = floor_div(pos.x, kRegionChunks);
+            const auto rz0 = floor_div(pos.z, kRegionChunks);
+            auto& file = region(rx0, rz0);
+            auto source = file.read_chunk(floor_mod(pos.x, kRegionChunks),
+                                          floor_mod(pos.z, kRegionChunks));
+            if (!source || !*source) {
+                // region 里也没有记录：新世界的未加载区块，无地形可保，整块编码
+                return world::encode_chunk(pos, world::Chunk{pos}, entities);
+            }
+            return world::encode_chunk_entities_only(pos, entities, ByteSpan{**source});
+        }();
         if (!encoded) {
             log::warn("world: cannot encode chunk ({},{}): {}", pos.x, pos.z,
                       encoded.error().message);
@@ -258,9 +366,14 @@ Result<std::size_t> WorldPersistence::save() {
         }
         const auto rx = floor_div(pos.x, kRegionChunks);
         const auto rz = floor_div(pos.z, kRegionChunks);
-        auto& file = region(rx, rz);
-        auto wrote = file.write_chunk(floor_mod(pos.x, kRegionChunks),
-                                      floor_mod(pos.z, kRegionChunks), ByteSpan{*encoded});
+        // write_chunk 覆写 region 内存镜像，需与按需 loader 的 read_chunk 互斥
+        Result<bool> wrote;
+        {
+            std::lock_guard<std::mutex> lock{cache_mutex_};
+            auto& file = region_locked(rx, rz);
+            wrote = file.write_chunk(floor_mod(pos.x, kRegionChunks),
+                                     floor_mod(pos.z, kRegionChunks), ByteSpan{*encoded});
+        }
         if (!wrote) {
             log::warn("world: cannot write chunk ({},{}) to region r.{}.{}: {}", pos.x, pos.z, rx,
                       rz, wrote.error().message);
@@ -270,6 +383,7 @@ Result<std::size_t> WorldPersistence::save() {
         ++written;
     }
 
+    std::lock_guard<std::mutex> flush_lock{cache_mutex_};
     for (auto& [key, file] : regions_) {
         if (!file.dirty()) {
             continue;

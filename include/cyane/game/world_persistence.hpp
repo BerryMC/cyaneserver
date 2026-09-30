@@ -34,8 +34,14 @@ public:
     // 全量保存（只写有编辑/有实体的区块）；返回写出的区块数
     [[nodiscard]] Result<std::size_t> save();
 
+    // 注入按需加载回调：区块被视距释放后玩家回来时，从 region 缓存重读
+    // 真实地形并恢复方块实体（容器/熔炉以内存态优先，不覆盖运行时改动）。
+    void attach_loader();
+
 private:
     [[nodiscard]] world::RegionFile& region(std::int32_t rx, std::int32_t rz);
+    // 前置条件：cache_mutex_ 已持有（内部包装用）
+    [[nodiscard]] world::RegionFile& region_locked(std::int32_t rx, std::int32_t rz);
 
     world::World& world_;
     net::ContainerStore& containers_;
@@ -43,6 +49,9 @@ private:
     net::ItemDropManager& item_drops_;
     net::MobManager& mobs_;
     std::string world_dir_;
+    // regions_ 会被 load（启动）、save（tick/停机线程）、按需 loader（reactor
+    // 线程）并发触碰，统一走 cache_mutex_。
+    mutable std::mutex cache_mutex_;
     std::unordered_map<std::int64_t, world::RegionFile> regions_;
     // 曾含掉落物/生物的区块。实体在内存里会被拾取或漫游离开，原区块不再满足
     // 写出条件时磁盘上会残留旧副本（下次载入复活）——这些区块保存时无条件重写。

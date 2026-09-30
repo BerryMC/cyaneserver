@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <span>
 #include <unordered_map>
@@ -85,6 +86,20 @@ public:
         return {};
     }
 
+    // 按需加载回调：区块不在内存时（被释放后玩家回来）从磁盘重读，
+    // 返回 true 表示载入了真实地形。由 WorldPersistence 注入（读 region + 恢复方块实体）。
+    // 返回的 chunk 已带 dirty=false 与磁盘 source_nbt。
+    using ChunkLoader = std::function<bool(ChunkPos pos, Chunk& out, Bytes& source_nbt)>;
+
+    void set_loader(ChunkLoader loader) { loader_ = std::move(loader); }
+
+    // 区块是否在内存中（不触发物化）。保存侧用它区分"真区块"与
+    // "被释放后 materialize 出的超平坦假区块"——后者绝不能覆盖磁盘地形。
+    [[nodiscard]] bool contains(ChunkPos pos) const {
+        std::lock_guard<std::mutex> lock{mutex_};
+        return find_locked(pos) != nullptr;
+    }
+
     // 释放干净区块（内存上限管理）；脏区块保留至落盘
     void release_chunk(ChunkPos pos) {
         std::lock_guard<std::mutex> lock{mutex_};
@@ -140,6 +155,18 @@ private:
         if (auto it = chunks_.find(key); it != chunks_.end()) {
             return it->second;
         }
+        // 先试磁盘按需加载（释放区块回归），失败再物化超平坦
+        if (loader_) {
+            Chunk loaded{pos};
+            Bytes source;
+            if (loader_(pos, loaded, source)) {
+                auto& sc = chunks_[key];
+                sc.chunk = std::move(loaded);
+                sc.source_nbt = std::move(source);
+                sc.dirty = false;
+                return sc;
+            }
+        }
         StoredChunk sc;
         sc.chunk = materialize_flat(pos);
         return chunks_.emplace(key, std::move(sc)).first->second;
@@ -166,6 +193,7 @@ private:
         return section;
     }    mutable std::mutex mutex_;
     std::unordered_map<std::int64_t, StoredChunk> chunks_;
+    ChunkLoader loader_;  // WorldPersistence 注入；ensure_locked 在持锁状态下调用
 };
 
 }

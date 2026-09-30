@@ -273,10 +273,12 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         log::info("world spawn at ({}, {}, {})", level->spawn_x, level->spawn_y, level->spawn_z);
     }
 
-    // 世界存档：载入 region/*.mca（方块编辑 + 方块实体 + 掉落物/生物实体）
+    // 世界存档：载入 region/*.mca（方块编辑 + 方块实体 + 掉落物/生物实体），
+    // 并注入按需加载（被视距释放的区块回归时从磁盘重读真实地形）
     server->persistence_ = std::make_unique<game::WorldPersistence>(
         *server->world_, *server->containers_, *server->furnaces_, *server->item_drops_,
         *server->mobs_, server->config_.world_dir);
+    server->persistence_->attach_loader();
     if (auto loaded = server->persistence_->load(); !loaded) {
         log::warn("world load failed: {}", loaded.error().message);
     } else if (*loaded > 0) {

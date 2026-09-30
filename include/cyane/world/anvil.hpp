@@ -90,6 +90,12 @@ struct DecodedChunk {
                                                 const ChunkEntities& entities,
                                                 ByteSpan source_nbt);
 
+// 仅实体合并：区块不在内存（已按视距释放）但容器/实体记录命中写集时，
+// 以磁盘源 NBT 为底只更新 TileEntities/Entities——方块数据原样保留，
+// 绝不能用物化出的超平坦假区块覆盖真实地形。
+[[nodiscard]] Result<Bytes> encode_chunk_entities_only(ChunkPos pos, const ChunkEntities& entities,
+                                                       ByteSpan source_nbt);
+
 [[nodiscard]] Result<DecodedChunk> decode_chunk(ByteSpan nbt);
 
 } // namespace cyane::world

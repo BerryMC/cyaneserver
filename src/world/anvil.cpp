@@ -430,6 +430,46 @@ namespace {
 
 } // namespace
 
+// TileEntities/Entities 的统一重写（merged 与 entities_only 共用）：
+// 方块实体保留未建模类型后按内存态重建；实体保留未建模类型后重写物品与生物
+void rewrite_managed_fields(Value& level, const ChunkEntities& entities) {
+    // TileEntities：保留未建模实体，替换/追加已建模方块实体
+    List kept;
+    if (auto* tile_entities = level.find_mut("TileEntities"); tile_entities != nullptr) {
+        if (const auto* list = tile_entities->get_if<List>(); list != nullptr) {
+            for (const auto& entry : *list) {
+                if (!is_modeled_tile_entity(entry)) {
+                    kept.push_back(entry);
+                }
+            }
+        }
+    }
+    for (auto& entry : build_tile_entities(entities)) {
+        kept.push_back(std::move(entry));
+    }
+    level.set("TileEntities", nbt::make_list(std::move(kept)));
+
+    // Entities：保留原版未建模实体（敌对生物等），物品/被动生物由内存态重写
+    List kept_entities;
+    if (auto* entities_field = level.find_mut("Entities"); entities_field != nullptr) {
+        if (const auto* list = entities_field->get_if<List>(); list != nullptr) {
+            for (const auto& entry : *list) {
+                const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
+                if (!id || !is_modeled_entity_id(*id)) {
+                    kept_entities.push_back(entry);  // 未建模实体原样透传
+                }
+            }
+        }
+    }
+    for (const auto& item : entities.items) {
+        kept_entities.push_back(item_entity(item));
+    }
+    for (const auto& mob : entities.mobs) {
+        kept_entities.push_back(mob_entity(mob));
+    }
+    level.set("Entities", nbt::make_list(std::move(kept_entities)));
+}
+
 Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkEntities& entities,
                                   ByteSpan source_nbt) {
     if (source_nbt.empty()) {
@@ -491,44 +531,27 @@ Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkE
         }
     }
 
-    // TileEntities：保留未建模实体，替换/追加箱子与熔炉
-    List kept;
-    if (auto* tile_entities = level->find_mut("TileEntities"); tile_entities != nullptr) {
-        if (const auto* list = tile_entities->get_if<List>(); list != nullptr) {
-            for (const auto& entry : *list) {
-                if (!is_modeled_tile_entity(entry)) {
-                    kept.push_back(entry);
-                }
-            }
-        }
-    }
-    for (auto& entry : build_tile_entities(entities)) {
-        kept.push_back(std::move(entry));
-    }
-    level->set("TileEntities", nbt::make_list(std::move(kept)));
+    // TileEntities/Entities：保留未建模条目，已建模类型由内存态重写
+    rewrite_managed_fields(*level, entities);
 
-    // Entities：保留原版未建模实体（敌对生物等），物品/被动生物由内存态重写
-    {
-        List kept_entities;
-        if (auto* entities_field = level->find_mut("Entities"); entities_field != nullptr) {
-            if (const auto* list = entities_field->get_if<List>(); list != nullptr) {
-                for (const auto& entry : *list) {
-                    const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
-                    if (!id || !is_modeled_entity_id(*id)) {
-                        kept_entities.push_back(entry);  // 未建模实体原样透传
-                    }
-                }
-            }
-        }
-        for (const auto& item : entities.items) {
-            kept_entities.push_back(item_entity(item));
-        }
-        for (const auto& mob : entities.mobs) {
-            kept_entities.push_back(mob_entity(mob));
-        }
-        level->set("Entities", nbt::make_list(std::move(kept_entities)));
-    }
+    return nbt::serialize("", *root);
+}
 
+Result<Bytes> encode_chunk_entities_only(ChunkPos pos, const ChunkEntities& entities,
+                                         ByteSpan source_nbt) {
+    if (source_nbt.empty()) {
+        // 无源档可保（理论上不该发生：写集命中而 region 无记录）——退化为整块编码
+        return encode_chunk(pos, Chunk{pos}, entities);
+    }
+    auto root = nbt::parse(source_nbt);
+    if (!root) {
+        return std::unexpected{std::move(root.error())};
+    }
+    auto* level = root->find_mut("Level");
+    if (level == nullptr) {
+        return make_error(ErrorCode::world, "anvil chunk missing Level");
+    }
+    rewrite_managed_fields(*level, entities);
     return nbt::serialize("", *root);
 }
 
