@@ -67,7 +67,10 @@ public:
 
     // 控制台命令支持
     [[nodiscard]] double current_tps() const noexcept { return stats_.tps(); }
-    [[nodiscard]] std::uint64_t online_players() const noexcept { return network_->active(); }
+    // 在线玩家数 = 已进入 play 阶段的玩家（hub 注册表），不含 status ping 握手连接
+    [[nodiscard]] std::uint64_t online_players() const noexcept {
+        return hub_ != nullptr ? hub_->size() : 0;
+    }
     // 以系统身份向所有在线玩家广播一条聊天消息（控制台 say 命令）
     void broadcast_system_message(std::string_view message);
     // 根据玩家名杀死一名在线玩家（控制台 /kill 命令）

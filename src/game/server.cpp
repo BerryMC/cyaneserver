@@ -351,7 +351,9 @@ void Server::save_world_now() {
 }
 
 void Server::tick() {
-    status_->set_online(static_cast<std::int32_t>(network_->active()));
+    // 在线数 = 已进入 play 阶段的玩家（hub 注册表），而非活跃 TCP 连接——
+    // 后者会把 server list ping 的握手连接也计成玩家
+    status_->set_online(hub_ != nullptr ? static_cast<std::int32_t>(hub_->size()) : 0);
     // 周期性世界存档（autosave_interval 秒，0 = 关闭）
     if (persistence_ != nullptr && config_.autosave_interval > 0 &&
         ++ticks_since_save_ >= static_cast<std::uint64_t>(config_.autosave_interval) *

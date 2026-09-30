@@ -62,6 +62,12 @@ public:
         players_.erase(entity_id);
     }
 
+    // 当前在线玩家数（进入 play 阶段后才计数，status ping 不算）
+    [[nodiscard]] std::size_t size() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return players_.size();
+    }
+
     // 除 exclude 外的所有在线玩家快照（新玩家登录时补发已有玩家用）
     [[nodiscard]] std::vector<PlayerSnapshot> others(std::uint32_t exclude) const {
         std::vector<PlayerSnapshot> out;
