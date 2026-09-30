@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "cyane/core/log.hpp"
+#include "cyane/net/mob_manager.hpp"
 #include "cyane/world/anvil.hpp"
 #include "cyane/world/blocks.hpp"
 
@@ -108,6 +109,17 @@ Result<std::size_t> WorldPersistence::load() {
                         containers_.set_slot(key, slot, chest[slot]);
                     }
                 }
+                for (const auto& [key, small] : decoded->entities.small_containers) {
+                    const auto kind = static_cast<net::ContainerStore::SmallKind>(small.kind);
+                    containers_.ensure_small(key, kind);
+                    const std::size_t limit =
+                        kind == net::ContainerStore::SmallKind::hopper
+                            ? net::ContainerStore::kHopperSlots
+                            : net::ContainerStore::kSmallSlots;
+                    for (std::size_t slot = 0; slot < limit; ++slot) {
+                        containers_.set_small_slot(key, slot, small.slots[slot]);
+                    }
+                }
                 for (const auto& [key, furnace] : decoded->entities.furnaces) {
                     net::FurnaceState state;
                     state.input = furnace.input;
@@ -125,6 +137,17 @@ Result<std::size_t> WorldPersistence::load() {
                         drops.push_back(net::DroppedItemState{item.x, item.y, item.z, item.stack});
                     }
                     item_drops_.restore(drops);
+                    drop_chunks_.emplace(pos.x, pos.z);
+                }
+                if (!decoded->entities.mobs.empty()) {
+                    std::vector<net::MobState> restored_mobs;
+                    restored_mobs.reserve(decoded->entities.mobs.size());
+                    for (const auto& mob : decoded->entities.mobs) {
+                        restored_mobs.push_back(
+                            net::MobState{mob.type, mob.x, mob.y, mob.z, mob.yaw, mob.pitch});
+                    }
+                    mobs_.restore(restored_mobs);
+                    mob_chunks_.emplace(pos.x, pos.z);
                 }
                 if (has_content) {
                     ++loaded;
@@ -160,6 +183,18 @@ Result<std::size_t> WorldPersistence::save() {
         write_set.emplace(pos->x, pos->z);
         chunks[{pos->x, pos->z}].entities.chests.emplace_back(key, chest);
     }
+    for (const auto& [key, small] : containers_.all_small()) {
+        const auto [bx, by, bz] = world::unpack_block_pos(key);
+        const auto pos = world::ChunkPos::from_world(bx, bz);
+        if (!pos) {
+            continue;
+        }
+        write_set.emplace(pos->x, pos->z);
+        world::StoredSmallContainer stored;
+        stored.kind = static_cast<std::uint8_t>(small.kind);
+        stored.slots = small.slots;
+        chunks[{pos->x, pos->z}].entities.small_containers.emplace_back(key, std::move(stored));
+    }
     for (const auto& [key, furnace] : furnaces_.all()) {
         const auto [bx, by, bz] = world::unpack_block_pos(key);
         const auto pos = world::ChunkPos::from_world(bx, bz);
@@ -180,9 +215,29 @@ Result<std::size_t> WorldPersistence::save() {
             continue;
         }
         write_set.emplace(pos->x, pos->z);
+        drop_chunks_.emplace(pos->x, pos->z);
         chunks[{pos->x, pos->z}].entities.items.push_back(
             world::StoredEntity{drop.x, drop.y, drop.z, drop.stack});
     }
+
+    // 生物按所在区块归组，与掉落物同法重写 Entities 列表
+    const auto current_mobs = mobs_.all_mobs();
+    for (const auto& mob : current_mobs) {
+        const auto pos =
+            world::ChunkPos::from_world(static_cast<std::int32_t>(std::floor(mob.x)),
+                                        static_cast<std::int32_t>(std::floor(mob.z)));
+        if (!pos) {
+            continue;
+        }
+        write_set.emplace(pos->x, pos->z);
+        mob_chunks_.emplace(pos->x, pos->z);
+        chunks[{pos->x, pos->z}].entities.mobs.push_back(
+            world::StoredMob{mob.type, mob.x, mob.y, mob.z, mob.yaw, mob.pitch});
+    }
+
+    // 实体曾存在的区块无条件重写：拾取/漫游离开后清除磁盘旧副本
+    write_set.insert(drop_chunks_.begin(), drop_chunks_.end());
+    write_set.insert(mob_chunks_.begin(), mob_chunks_.end());
 
     static const world::ChunkEntities kNoEntities{};
     std::size_t written = 0;

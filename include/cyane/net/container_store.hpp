@@ -18,10 +18,70 @@ public:
     static constexpr std::size_t kChestSlots = 27;
     using Chest = std::array<item::ItemStack, kChestSlots>;
 
+    // 小容器：发射器/投掷器 9 格，漏斗 5 格（统一 9 格数组，漏斗只用前 5）
+    enum class SmallKind : std::uint8_t { dispenser = 0, dropper = 1, hopper = 2 };
+    static constexpr std::size_t kSmallSlots = 9;
+    static constexpr std::size_t kHopperSlots = 5;
+    struct SmallContainer {
+        SmallKind kind{SmallKind::dispenser};
+        std::array<item::ItemStack, kSmallSlots> slots{};
+    };
+
     // 确保 (bx,by,bz) 处存在一个空箱子容器（放置箱子时调用）
     void ensure(std::int64_t pos_key) {
         std::lock_guard<std::mutex> lock(mutex_);
         chests_.try_emplace(pos_key);
+    }
+
+    // ---- 小容器（发射器/投掷器/漏斗）----
+
+    void ensure_small(std::int64_t pos_key, SmallKind kind) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        small_.try_emplace(pos_key, SmallContainer{kind, {}});
+    }
+
+    void remove_small(std::int64_t pos_key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        small_.erase(pos_key);
+    }
+
+    [[nodiscard]] bool small_exists(std::int64_t pos_key) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return small_.contains(pos_key);
+    }
+
+    [[nodiscard]] SmallContainer snapshot_small(std::int64_t pos_key) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (auto it = small_.find(pos_key); it != small_.end()) {
+            return it->second;
+        }
+        return SmallContainer{};
+    }
+
+    [[nodiscard]] item::ItemStack small_slot(std::int64_t pos_key, std::size_t index) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (auto it = small_.find(pos_key); it != small_.end() && index < kSmallSlots) {
+            return it->second.slots[index];
+        }
+        return item::ItemStack::air();
+    }
+
+    void set_small_slot(std::int64_t pos_key, std::size_t index, item::ItemStack item) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = small_.find(pos_key);
+        if (it == small_.end() || index >= kSmallSlots) {
+            return;
+        }
+        if (it->second.kind == SmallKind::hopper && index >= kHopperSlots) {
+            return;  // 漏斗只有 5 格
+        }
+        it->second.slots[index] = item;
+    }
+
+    // 全量快照（存档：按区块归组写 TileEntities）
+    [[nodiscard]] std::vector<std::pair<std::int64_t, SmallContainer>> all_small() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return {small_.begin(), small_.end()};
     }
 
     void remove(std::int64_t pos_key) {
@@ -67,6 +127,7 @@ public:
 private:
     mutable std::mutex mutex_;
     std::unordered_map<std::int64_t, Chest> chests_;
+    std::unordered_map<std::int64_t, SmallContainer> small_;
 };
 
 }

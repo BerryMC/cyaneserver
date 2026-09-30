@@ -113,6 +113,25 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             open_chest_key_ = 0;
             close_client_window(kChestWindowId);
         }
+        // 小容器：破坏时内容掉落、从存储移除、打开中则关窗
+        if (context_.containers != nullptr && context_.containers->small_exists(bkey)) {
+            const auto small = context_.containers->snapshot_small(bkey);
+            const std::size_t limit = small.kind == ContainerStore::SmallKind::hopper
+                                          ? ContainerStore::kHopperSlots
+                                          : ContainerStore::kSmallSlots;
+            for (std::size_t slot = 0; slot < limit; ++slot) {
+                if (!small.slots[slot].empty()) {
+                    drop_stack(bx + 0.5, by + 0.25, bz + 0.5, small.slots[slot], bx, bz);
+                }
+            }
+            if (small_open_ && open_small_key_ == bkey) {
+                small_open_ = false;
+                open_small_key_ = 0;
+                small_slots_ = 0;
+                close_client_window(kSmallWindowId);
+            }
+            context_.containers->remove_small(bkey);
+        }
     }
     set_block_and_broadcast(bx, by, bz, world::kStateAir);
     if (!creative && context_.item_drops != nullptr && prev != world::kStateAir) {
@@ -183,6 +202,24 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
             open_crafting_table(detail::block_key(cx, cy, cz));
             return true;
         }
+        // 小容器：发射器/投掷器/漏斗
+        if (context_.containers != nullptr) {
+            if (clicked == world::block_id(world::kStateDispenser)) {
+                open_small_container(detail::block_key(cx, cy, cz),
+                                     ContainerStore::SmallKind::dispenser);
+                return true;
+            }
+            if (clicked == world::block_id(world::kStateDropper)) {
+                open_small_container(detail::block_key(cx, cy, cz),
+                                     ContainerStore::SmallKind::dropper);
+                return true;
+            }
+            if (clicked == world::block_id(world::kStateHopper)) {
+                open_small_container(detail::block_key(cx, cy, cz),
+                                     ContainerStore::SmallKind::hopper);
+                return true;
+            }
+        }
     }
     const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
     const std::uint16_t state = world::block_state_from_item(held.id, held.damage);
@@ -213,10 +250,21 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         return true;
     }
     set_block_and_broadcast(tx, ty, tz, state);
-    // 放下的是箱子/熔炉：登记对应容器状态
-    if (context_.containers != nullptr &&
-        world::block_id(state) == world::block_id(world::kStateChest)) {
-        context_.containers->ensure(detail::block_key(tx, ty, tz));
+    // 放下的是箱子/熔炉/小容器：登记对应容器状态
+    if (context_.containers != nullptr) {
+        const auto placed_id = world::block_id(state);
+        if (placed_id == world::block_id(world::kStateChest)) {
+            context_.containers->ensure(detail::block_key(tx, ty, tz));
+        } else if (placed_id == world::block_id(world::kStateDispenser)) {
+            context_.containers->ensure_small(detail::block_key(tx, ty, tz),
+                                              ContainerStore::SmallKind::dispenser);
+        } else if (placed_id == world::block_id(world::kStateDropper)) {
+            context_.containers->ensure_small(detail::block_key(tx, ty, tz),
+                                              ContainerStore::SmallKind::dropper);
+        } else if (placed_id == world::block_id(world::kStateHopper)) {
+            context_.containers->ensure_small(detail::block_key(tx, ty, tz),
+                                              ContainerStore::SmallKind::hopper);
+        }
     }
     if (context_.furnaces != nullptr &&
         world::block_id(state) == world::block_id(world::kStateFurnace)) {

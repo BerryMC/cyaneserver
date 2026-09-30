@@ -78,6 +78,12 @@ bool Connection::handle_play_click_window(ByteSpan payload) {
         finish_click();
         return true;
     }
+    // 小容器（发射器/投掷器/漏斗）与箱子共用点击逻辑，按打开时的容器格数区分
+    if (*window_id == kSmallWindowId && small_open_) {
+        apply_chest_click(*slot, *button, *mode, *clicked);
+        finish_click();
+        return true;
+    }
     if (*window_id == kFurnaceWindowId && furnace_open_) {
         apply_furnace_click(*slot, *button, *mode, *clicked);
         finish_click();

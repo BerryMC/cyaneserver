@@ -107,6 +107,73 @@ CYANE_TEST(anvil_all_air_chunk_encodes_with_empty_sections) {
     CYANE_CHECK(decoded->entities.empty());
 }
 
+CYANE_TEST(anvil_small_containers_and_mobs_round_trip) {
+    const ChunkPos pos{-1, 3};
+    world::Chunk chunk{pos};
+
+    world::ChunkEntities entities;
+    // 发射器：9 格中 2 格有物
+    world::StoredSmallContainer dispenser;
+    dispenser.kind = world::kSmallKindDispenser;
+    dispenser.slots[0] = item::ItemStack{262, 32, 0};  // 箭
+    dispenser.slots[8] = item::ItemStack{261, 1, 0};   // 弓
+    entities.small_containers.emplace_back(
+        world::pack_block_pos(pos.world_x() + 1, 4, pos.world_z() + 1), dispenser);
+    // 投掷器
+    world::StoredSmallContainer dropper;
+    dropper.kind = world::kSmallKindDropper;
+    dropper.slots[3] = item::ItemStack{1, 5, 0};
+    entities.small_containers.emplace_back(
+        world::pack_block_pos(pos.world_x() + 2, 4, pos.world_z() + 2), dropper);
+    // 漏斗：仅前 5 格有效
+    world::StoredSmallContainer hopper;
+    hopper.kind = world::kSmallKindHopper;
+    hopper.slots[4] = item::ItemStack{4, 12, 0};
+    entities.small_containers.emplace_back(
+        world::pack_block_pos(pos.world_x() + 3, 4, pos.world_z() + 3), hopper);
+    // 生物：猪 + 鸡
+    entities.mobs.push_back(world::StoredMob{90, pos.world_x() + 1.5, 4.0, pos.world_z() + 1.5,
+                                             1.25f, 0.0f});
+    entities.mobs.push_back(world::StoredMob{93, pos.world_x() + 5.5, 4.0, pos.world_z() + 5.5});
+
+    auto encoded = world::encode_chunk(pos, chunk, entities);
+    CYANE_CHECK(encoded.has_value());
+    auto decoded = world::decode_chunk(ByteSpan{*encoded});
+    CYANE_CHECK(decoded.has_value());
+    CYANE_CHECK_EQ(decoded->entities.small_containers.size(), std::size_t{3});
+    CYANE_CHECK_EQ(decoded->entities.mobs.size(), std::size_t{2});
+
+    // 逐一校验小容器类型与槽位
+    for (const auto& [key, small] : decoded->entities.small_containers) {
+        if (small.kind == world::kSmallKindDispenser) {
+            CYANE_CHECK_EQ(small.slots[0].id, std::int16_t{262});
+            CYANE_CHECK_EQ(small.slots[0].count, std::uint8_t{32});
+            CYANE_CHECK_EQ(small.slots[8].id, std::int16_t{261});
+            CYANE_CHECK(small.slots[1].empty());
+        } else if (small.kind == world::kSmallKindDropper) {
+            CYANE_CHECK_EQ(small.slots[3].id, std::int16_t{1});
+            CYANE_CHECK_EQ(small.slots[3].count, std::uint8_t{5});
+        } else {
+            CYANE_CHECK(small.kind == world::kSmallKindHopper);
+            CYANE_CHECK_EQ(small.slots[4].id, std::int16_t{4});
+            CYANE_CHECK_EQ(small.slots[4].count, std::uint8_t{12});
+            CYANE_CHECK(small.slots[5].empty());
+        }
+    }
+    // 生物位置/朝向
+    bool saw_pig = false;
+    for (const auto& mob : decoded->entities.mobs) {
+        if (mob.type == 90) {
+            saw_pig = true;
+            CYANE_CHECK(mob.x == pos.world_x() + 1.5 && mob.z == pos.world_z() + 1.5);
+            CYANE_CHECK(mob.yaw == 1.25f);
+        } else {
+            CYANE_CHECK_EQ(mob.type, 93);
+        }
+    }
+    CYANE_CHECK(saw_pig);
+}
+
 CYANE_TEST(region_write_read_round_trip) {
     const auto dir = std::filesystem::temp_directory_path() / "cyane_test_region";
     std::filesystem::remove_all(dir);
@@ -177,11 +244,23 @@ CYANE_TEST(persistence_world_round_trip) {
         return state;
     }());
     net::ItemDropManager source_drops;
+    net::MobManager source_mobs;
     source_drops.spawn(1.5, 5.5, 1.5, item::ItemStack{kApple, 7, 0}, 0);
+    // 发射器（9 格）+ 漏斗（5 格）+ 一只羊
+    source_world.set_block(3, 4, 3, world::kStateDispenser);
+    const std::int64_t dispenser_key = world::pack_block_pos(3, 4, 3);
+    source_chests.ensure_small(dispenser_key, net::ContainerStore::SmallKind::dispenser);
+    source_chests.set_small_slot(dispenser_key, 2, item::ItemStack{262, 9, 0});
+    source_world.set_block(4, 4, 4, world::kStateHopper);
+    const std::int64_t hopper_key = world::pack_block_pos(4, 4, 4);
+    source_chests.ensure_small(hopper_key, net::ContainerStore::SmallKind::hopper);
+    source_chests.set_small_slot(hopper_key, 1, item::ItemStack{1, 6, 0});
+    source_mobs.restore(std::vector<net::MobState>{
+        net::MobState{91, -3.5, 4.0, -3.5, 2.5f, 0.0f}});
 
     {
         game::WorldPersistence saver(source_world, source_chests, source_furnaces, source_drops,
-                                    dir.string());
+                                                source_mobs, dir.string());
         auto saved = saver.save();
         CYANE_CHECK(saved.has_value());
         CYANE_CHECK_EQ(*saved, std::size_t{2});
@@ -194,9 +273,10 @@ CYANE_TEST(persistence_world_round_trip) {
     net::ContainerStore loaded_chests;
     net::FurnaceStore loaded_furnaces;
     net::ItemDropManager loaded_drops;
+    net::MobManager loaded_mobs;
     loaded_furnaces.set_tables({}, {});
     game::WorldPersistence loader(loaded_world, loaded_chests, loaded_furnaces, loaded_drops,
-                                  dir.string());
+                                                loaded_mobs, dir.string());
     auto loaded = loader.load();
     CYANE_CHECK(loaded.has_value());
     CYANE_CHECK_EQ(*loaded, std::size_t{2});
@@ -222,6 +302,20 @@ CYANE_TEST(persistence_world_round_trip) {
     CYANE_CHECK_EQ(restored_drops[0].stack.id, kApple);
     CYANE_CHECK_EQ(restored_drops[0].stack.count, std::uint8_t{7});
     CYANE_CHECK(restored_drops[0].x == 1.5 && restored_drops[0].z == 1.5);
+
+    // 小容器与生物往返
+    const auto dispenser = loaded_chests.snapshot_small(dispenser_key);
+    CYANE_CHECK(dispenser.kind == net::ContainerStore::SmallKind::dispenser);
+    CYANE_CHECK_EQ(dispenser.slots[2].id, std::int16_t{262});
+    CYANE_CHECK_EQ(dispenser.slots[2].count, std::uint8_t{9});
+    const auto hopper = loaded_chests.snapshot_small(hopper_key);
+    CYANE_CHECK(hopper.kind == net::ContainerStore::SmallKind::hopper);
+    CYANE_CHECK_EQ(hopper.slots[1].id, std::int16_t{1});
+    CYANE_CHECK_EQ(hopper.slots[1].count, std::uint8_t{6});
+    const auto restored_mobs = loaded_mobs.all_mobs();
+    CYANE_CHECK_EQ(restored_mobs.size(), std::size_t{1});
+    CYANE_CHECK_EQ(restored_mobs[0].type, 91);  // 羊
+    CYANE_CHECK(restored_mobs[0].x == -3.5 && restored_mobs[0].z == -3.5);
 
     // 再次保存：方块区块全部干净（启动载入不标脏）不重写；
     // 实体区块（箱子/熔炉所在）无条件重写——容器内容变更没有脏标记，保守起见

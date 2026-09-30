@@ -1,13 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include "cyane/core/error.hpp"
 #include "cyane/net/container_store.hpp"
 #include "cyane/net/furnace_store.hpp"
 #include "cyane/net/item_drop.hpp"
+#include "cyane/net/mob_manager.hpp"
 #include "cyane/world/region.hpp"
 #include "cyane/world/world.hpp"
 
@@ -21,9 +24,9 @@ class WorldPersistence {
 public:
     WorldPersistence(world::World& world, net::ContainerStore& containers,
                      net::FurnaceStore& furnaces, net::ItemDropManager& item_drops,
-                     std::string world_dir)
+                     net::MobManager& mobs, std::string world_dir)
         : world_{world}, containers_{containers}, furnaces_{furnaces},
-          item_drops_{item_drops}, world_dir_{std::move(world_dir)} {}
+          item_drops_{item_drops}, mobs_{mobs}, world_dir_{std::move(world_dir)} {}
 
     // 读取 world_dir/region/*.mca；返回载入的区块数。目录不存在视为空世界。
     [[nodiscard]] Result<std::size_t> load();
@@ -38,8 +41,13 @@ private:
     net::ContainerStore& containers_;
     net::FurnaceStore& furnaces_;
     net::ItemDropManager& item_drops_;
+    net::MobManager& mobs_;
     std::string world_dir_;
     std::unordered_map<std::int64_t, world::RegionFile> regions_;
+    // 曾含掉落物/生物的区块。实体在内存里会被拾取或漫游离开，原区块不再满足
+    // 写出条件时磁盘上会残留旧副本（下次载入复活）——这些区块保存时无条件重写。
+    std::set<std::pair<std::int32_t, std::int32_t>> drop_chunks_;
+    std::set<std::pair<std::int32_t, std::int32_t>> mob_chunks_;
 };
 
 } // namespace cyane::game

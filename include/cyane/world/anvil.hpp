@@ -27,6 +27,18 @@ struct StoredFurnace {
     std::int32_t cook_time{0};
 };
 
+// 小容器持久化（发射器/投掷器 9 格；漏斗 5 格，数组后 4 格恒空）。
+// kind：0=dispenser 1=dropper 2=hopper（与 net::ContainerStore::SmallKind 对齐，
+// world 层不反向依赖 net，故用裸常量）
+inline constexpr std::uint8_t kSmallKindDispenser = 0;
+inline constexpr std::uint8_t kSmallKindDropper = 1;
+inline constexpr std::uint8_t kSmallKindHopper = 2;
+inline constexpr std::size_t kSmallPersistSlots = 9;
+struct StoredSmallContainer {
+    std::uint8_t kind{kSmallKindDispenser};
+    std::array<item::ItemStack, kSmallPersistSlots> slots{};
+};
+
 // 掉落物品实体（region 的 Entities 列表，id=minecraft:item）
 struct StoredEntity {
     double x{0.0};
@@ -35,12 +47,28 @@ struct StoredEntity {
     item::ItemStack stack;
 };
 
-// 一个区块的方块实体（按方块位置键 pack_block_pos 索引）+ 掉落物
+// 生物实体（region 的 Entities 列表）。type 为 1.12.2 SpawnMob 类型：
+// 90 猪 91 羊 92 牛 93 鸡（当前建模的被动生物集合）
+struct StoredMob {
+    std::uint8_t type{90};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    float yaw{0.0f};
+    float pitch{0.0f};
+};
+
+// 一个区块的方块实体（按方块位置键 pack_block_pos 索引）+ 实体
 struct ChunkEntities {
     std::vector<std::pair<std::int64_t, StoredChest>> chests;
     std::vector<std::pair<std::int64_t, StoredFurnace>> furnaces;
+    std::vector<std::pair<std::int64_t, StoredSmallContainer>> small_containers;
     std::vector<StoredEntity> items;
-    [[nodiscard]] bool empty() const noexcept { return chests.empty() && furnaces.empty() && items.empty(); }
+    std::vector<StoredMob> mobs;
+    [[nodiscard]] bool empty() const noexcept {
+        return chests.empty() && furnaces.empty() && small_containers.empty() && items.empty() &&
+               mobs.empty();
+    }
 };
 
 // 解码结果：完整区块（缺失 section = 空气）+ 方块实体

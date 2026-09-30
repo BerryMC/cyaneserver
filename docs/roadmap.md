@@ -10,7 +10,7 @@
 - [x] **M1 协议与连接**（Handshake/Status/Ping/加密登录）
 - [x] **M2 世界与移动**（超平坦区块、移动同步、多人可见、聊天、KeepAlive、动态区块加载）
 - [x] **M3 玩法基础**（方块交互/物品栏/容器/合成/熔炉/命令/被动生物 AI）
-- [~] **M4 存档与世界兼容**（玩家 .dat 双向互通 ✅、**完整区块存储** ✅、**原版世界加载** ✅、`level.dat` ✅（读 + 首启建档）、**保存无损化** ✅、**掉落物实体落盘** ✅；缺更多方块实体）
+- [x] **M4 存档与世界兼容**（玩家 .dat 双向互通 ✅、**完整区块存储** ✅、**原版世界加载** ✅、`level.dat` ✅（读 + 首启建档）、**保存无损化** ✅、**掉落物/生物实体落盘** ✅、**发射器/投掷器/漏斗** ✅；告示牌/附魔台/铁砧/酿造台等 UI 型方块实体未做，属 M6+ 范畴）
 - [ ] M5 世界生成
 - [ ] M6 玩法进阶
 - [ ] M7 插件基座
@@ -77,12 +77,14 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 | **BlockEntities** 箱子 | `net/container_store` `connection_container` | ✅ |
 | **BlockEntities** 工作台 | `net/crafting_table_store` `connection_table` | ✅ |
 | **BlockEntities** 熔炉 | `net/furnace_store` `connection_furnace` | ✅ |
-| **BlockEntities** 附魔台/铁砧/酿造台/漏斗/发射器/告示牌/唱片机 | — | ⬜ |
+| **BlockEntities** 附魔台/铁砧/酿造台/告示牌/唱片机 | — | ⬜ |
+| **BlockEntities** 发射器/投掷器/漏斗（窗口 + 内容落盘） | `ContainerStore::SmallContainer` `open_small_container` | ✅ 漏斗无自动传输 |
 | **Items** 物品堆/背包/掉落物拾取 | `item/item_stack` `item/player_inventory` `net/item_drop` | ✅ |
 | **Items** 合成（数据驱动） | `item/crafting` + `config/recipes.toml` | ✅ |
 | **Items** 熔炼与燃料表 | `item/crafting::load_furnace_config` | ✅ |
 | **Items** 附魔/药水/NBT 物品 | — | ⬜ |
 | **Mobs** 被动生物与漫游 AI | `net/mob_manager` `connection_mobs` | 🟡 AI 简单 |
+| **Mobs** 实体落盘（Entities 列表，往返 + 幽灵清理） | `world/anvil::mob_entity` `world_persistence::mob_chunks_` | ✅ |
 | **Mobs** 敌对生物/战斗/掉落表/生成权重 | `net/connection_combat`（仅伤害与死亡） | 🟡 |
 | **Physics** 碰撞/重力/推动 | 仅放置时 AABB 检测 | 🟡 无重力 |
 | **Generating** 地形/生物群系/结构/洞穴 | 仅超平坦 | ⬜ |
@@ -196,6 +198,21 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）是功能广度的对标物�
 | 测试 | +2 用例（掉落物往返 + merged 保留生物实体；level.dat 首启建档），117 全绿 |
 
 **验证结论**：cyane 载入含掉落物的区块后重新保存，物品实体按原版 `id`+`Pos` 格式写回 region `Entities`，非物品实体（生物等）经无损保存原样透传；首启无 level.dat 时建档最小集供原版读取出生点。真机预言机：cyane 载入原版世界（633 区块，83 生物 + 6 掉落物实体）→ 保存 → 原版重载 `Done (4.317s)` 零错误，掉落物字段往返完整（R-012）。
+
+### M4 交付（第三部分）：小容器方块与生物实体落盘
+
+| 模块 | 内容 |
+|---|---|
+| `world/blocks` | 新增发射器(23)/漏斗(154)/投掷器(158) 状态常量 |
+| `net/container_store` | `SmallContainer`（kind + 9 格，漏斗用前 5）：放置 ensure / 点击读写 / 破坏移除 |
+| `net/connection_*` | `open_small_container`（OpenWindow 按原版窗口类型）+ 点击逻辑泛化（箱子/小容器共用布局）+ 放置登记 + 破坏掉落内容并关窗 |
+| `world/anvil` | 小容器 TileEntity（`minecraft:dispenser/dropper/hopper` + Items）编解码；生物实体（`minecraft:pig/sheep/cow/chicken`，`Pos`/`Motion`/`Rotation`/`Health`）编解码；merged 保存时已建模实体类型由内存态重写、其余透传 |
+| `net/mob_manager` | `MobState` + `restore`/`all_mobs`：存档回填（新实体 id、AI 重置） |
+| `game/world_persistence` | 小容器/生物载入回填与按区块归组保存；`drop_chunks_`/`mob_chunks_` 追踪曾含实体区块并无条件重写（清除拾取/漫游离开后的磁盘幽灵副本）；存档已有生物时跳过 `spawn_passive` |
+| `world/anvil`（光照） | 新编码 section 补 `BlockLight`/`SkyLight` 2048 字节占位——原版读取端无条件构造光照 NibbleArray，缺失即 `Couldn't load chunk`（R-013） |
+| 测试 | +2 用例（小容器/生物 anvil 往返 + persistence 往返；merged 覆盖生物重写），118 全绿 |
+
+**验证结论**：三轮启动-漫游-保存循环实体总数恒定（无幽灵复制）；纯 cyane 生成世界交原版 1.12.2 重载 `Done (5.268s)` 零区块错误（光照占位修复后）。
 
 ### M4 交付（第二部分）：完整区块模型与原版世界加载
 

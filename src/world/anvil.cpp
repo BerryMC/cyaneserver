@@ -21,6 +21,13 @@ constexpr std::int32_t kDataVersion1343 = 1343;
 constexpr std::string_view kChestEntityId = "minecraft:chest";
 constexpr std::string_view kFurnaceEntityId = "minecraft:furnace";
 constexpr std::string_view kItemEntityId = "minecraft:item";
+constexpr std::string_view kDispenserEntityId = "minecraft:dispenser";
+constexpr std::string_view kDropperEntityId = "minecraft:dropper";
+constexpr std::string_view kHopperEntityId = "minecraft:hopper";
+// 被动生物实体 id ↔ 1.12.2 SpawnMob 类型（90 猪 91 羊 92 牛 93 鸡）
+constexpr std::string_view kMobEntityIds[] = {"minecraft:pig", "minecraft:sheep",
+                                              "minecraft:cow", "minecraft:chicken"};
+constexpr std::int32_t kMobSpawnTypes[] = {90, 91, 92, 93};
 
 void compound_set(Compound& fields, std::string name, Value value) {
     for (auto& [key, existing] : fields) {
@@ -113,6 +120,26 @@ Value item_entity(const StoredEntity& entity) {
     return nbt::make_compound(std::move(fields));
 }
 
+// 生物实体：Entity{id:"minecraft:pig"…, Pos, Motion, Rotation, Health}
+// 最小集即可与原版互通：缺失字段（Age/Sheared/Attributes 等）由原版取默认值
+Value mob_entity(const StoredMob& mob) {
+    Compound fields;
+    compound_set(fields, "id", nbt::make_string(std::string{kMobEntityIds
+                                                 [mob.type >= 90 && mob.type <= 93
+                                                      ? static_cast<std::size_t>(mob.type) - 90
+                                                      : 0]}));
+    compound_set(fields, "Pos", nbt::make_list(List{nbt::make_f64(mob.x),
+                                                    nbt::make_f64(mob.y),
+                                                    nbt::make_f64(mob.z)}));
+    compound_set(fields, "Motion", nbt::make_list(List{nbt::make_f64(0.0),
+                                                       nbt::make_f64(0.0),
+                                                       nbt::make_f64(0.0)}));
+    compound_set(fields, "Rotation",
+                 nbt::make_list(List{nbt::make_f32(mob.yaw), nbt::make_f32(mob.pitch)}));
+    compound_set(fields, "Health", nbt::make_f32(20.0F));
+    return nbt::make_compound(std::move(fields));
+}
+
 // 解析一个 Entities 条目：仅还原 minecraft:item（Pos + Item 堆叠），其余实体忽略
 bool read_item_entity(const Value& entry, StoredEntity& out) {
     const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
@@ -150,6 +177,90 @@ bool read_item_entity(const Value& entry, StoredEntity& out) {
     return true;
 }
 
+// 判断实体类型是否由我们建模（载入/保存两侧统一管理）：item + 4 种被动生物
+[[nodiscard]] bool is_modeled_entity_id(std::string_view id) noexcept {
+    if (id == kItemEntityId) {
+        return true;
+    }
+    for (const auto mob_id : kMobEntityIds) {
+        if (id == mob_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<std::int32_t> mob_spawn_type(std::string_view id) noexcept {
+    for (std::size_t i = 0; i < std::size(kMobEntityIds); ++i) {
+        if (id == kMobEntityIds[i]) {
+            return kMobSpawnTypes[i];
+        }
+    }
+    return std::nullopt;
+}
+
+// 解析一个生物实体条目（Pos + Rotation；Health 等运行时字段不持久化）
+bool read_mob_entity(const Value& entry, StoredMob& out) {
+    const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
+    if (!id) {
+        return false;
+    }
+    const auto type = mob_spawn_type(*id);
+    if (!type) {
+        return false;
+    }
+    out.type = static_cast<std::uint8_t>(*type);
+    const auto* pos = entry.find("Pos");
+    const auto* pos_list = pos != nullptr ? pos->get_if<List>() : nullptr;
+    if (pos_list == nullptr || pos_list->size() != 3) {
+        return false;
+    }
+    const auto axis = [&](std::size_t index) {
+        if (const auto* d = (*pos_list)[index].get_if<double>()) {
+            return *d;
+        }
+        if (const auto* f = (*pos_list)[index].get_if<float>()) {
+            return static_cast<double>(*f);
+        }
+        return 0.0;
+    };
+    out.x = axis(0);
+    out.y = axis(1);
+    out.z = axis(2);
+    out.yaw = 0.0f;
+    out.pitch = 0.0f;
+    if (const Value* rot = entry.find("Rotation"); rot != nullptr) {
+        if (const auto* rot_list = rot->get_if<List>(); rot_list != nullptr && rot_list->size() == 2) {
+            if (const auto* yaw = (*rot_list)[0].get_if<float>()) {
+                out.yaw = *yaw;
+            }
+            if (const auto* pitch = (*rot_list)[1].get_if<float>()) {
+                out.pitch = *pitch;
+            }
+        }
+    }
+    return true;
+}
+
+// 解析一个小容器 TileEntity（发射器/投掷器/漏斗）槽位
+bool read_small_container(std::string_view id, const Value& entry, StoredSmallContainer& out) {
+    if (id == kDispenserEntityId) {
+        out.kind = kSmallKindDispenser;
+    } else if (id == kDropperEntityId) {
+        out.kind = kSmallKindDropper;
+    } else if (id == kHopperEntityId) {
+        out.kind = kSmallKindHopper;
+    } else {
+        return false;
+    }
+    if (const Value* items = entry.find("Items"); items != nullptr) {
+        std::array<item::ItemStack, kSmallPersistSlots> slots{};
+        read_items(*items, slots);
+        out.slots = slots;
+    }
+    return true;
+}
+
 } // namespace
 
 
@@ -160,6 +271,8 @@ struct SectionArrays {
     Bytes blocks;
     Bytes data;
     Bytes add;
+    Bytes block_light;
+    Bytes sky_light;
     bool needs_add{false};
 };
 
@@ -168,6 +281,8 @@ struct SectionArrays {
     out.blocks.assign(kSectionBlockCount, std::byte{0});
     out.data.assign(kSectionBlockCount / 2, std::byte{0});
     out.add.assign(kSectionBlockCount / 2, std::byte{0});
+    out.block_light.assign(kLightArrayBytes, std::byte{0});
+    out.sky_light.assign(kLightArrayBytes, std::byte{0});
     for (std::size_t index = 0; index < kSectionBlockCount; ++index) {
         const auto state = section.state(index);
         const auto id = block_id(state);
@@ -201,6 +316,12 @@ struct SectionArrays {
     for (const auto& [key, furnace] : entities.furnaces) {
         out.push_back(tile_entity(key, kFurnaceEntityId, std::span{&furnace.input, 3}, &furnace));
     }
+    for (const auto& [key, small] : entities.small_containers) {
+        const std::string_view id = small.kind == kSmallKindHopper     ? kHopperEntityId
+                                    : small.kind == kSmallKindDropper  ? kDropperEntityId
+                                                                       : kDispenserEntityId;
+        out.push_back(tile_entity(key, id, small.slots, nullptr));
+    }
     return out;
 }
 
@@ -229,6 +350,9 @@ Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities
         Bytes data(kSectionBlockCount / 2);
         bool needs_add = false;
         Bytes add(kSectionBlockCount / 2);
+        // 原版读取端对每个 section 无条件构造光照 NibbleArray（必须 2048 字节）；
+        // 全 0 占位 + LightPopulated 缺省 0，原版加载后自行重算天光
+        Bytes light(kLightArrayBytes, std::byte{0});
         for (std::size_t index = 0; index < kSectionBlockCount; ++index) {
             const auto state = section.states[index];
             const auto id = block_id(state);
@@ -247,6 +371,8 @@ Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities
         if (needs_add) {
             compound_set(fields, "Add", nbt::make_byte_array(std::move(add)));
         }
+        compound_set(fields, "BlockLight", nbt::make_byte_array(light));
+        compound_set(fields, "SkyLight", nbt::make_byte_array(light));
         section_list.push_back(nbt::make_compound(std::move(fields)));
     }
 
@@ -258,11 +384,20 @@ Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities
         tile_entities.push_back(tile_entity(key, kFurnaceEntityId,
                                             std::span{&furnace.input, 3}, &furnace));
     }
+    for (const auto& [key, small] : entities.small_containers) {
+        const std::string_view id = small.kind == kSmallKindHopper     ? kHopperEntityId
+                                    : small.kind == kSmallKindDropper  ? kDropperEntityId
+                                                                       : kDispenserEntityId;
+        tile_entities.push_back(tile_entity(key, id, small.slots, nullptr));
+    }
 
     // 掉落物品实体（原版 Entities 列表，ID=minecraft:item）
     List entity_list;
     for (const auto& item : entities.items) {
         entity_list.push_back(item_entity(item));
+    }
+    for (const auto& mob : entities.mobs) {
+        entity_list.push_back(mob_entity(mob));
     }
 
     Compound level;
@@ -283,10 +418,14 @@ Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities
 
 namespace {
 
-// 保留原版区块中除箱子/熔炉外的方块实体（告示牌等未建模实体透传）
+// 保留原版区块中除已建模方块实体外的 TileEntity（告示牌等未建模实体透传）
 [[nodiscard]] bool is_modeled_tile_entity(const Value& entry) {
     const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
-    return id && (*id == kChestEntityId || *id == kFurnaceEntityId);
+    if (!id) {
+        return false;
+    }
+    return *id == kChestEntityId || *id == kFurnaceEntityId || *id == kDispenserEntityId ||
+           *id == kDropperEntityId || *id == kHopperEntityId;
 }
 
 } // namespace
@@ -344,6 +483,9 @@ Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkE
                 if (arrays.needs_add) {
                     compound_set(fields, "Add", nbt::make_byte_array(std::move(arrays.add)));
                 }
+                // 原版读取端无条件构造光照 NibbleArray：新增 section 必须带全 0 占位
+                compound_set(fields, "BlockLight", nbt::make_byte_array(std::move(arrays.block_light)));
+                compound_set(fields, "SkyLight", nbt::make_byte_array(std::move(arrays.sky_light)));
                 list->push_back(nbt::make_compound(std::move(fields)));
             }
         }
@@ -365,21 +507,24 @@ Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkE
     }
     level->set("TileEntities", nbt::make_list(std::move(kept)));
 
-    // Entities：保留原版非物品实体（生物等），重写掉落物品为内存态
+    // Entities：保留原版未建模实体（敌对生物等），物品/被动生物由内存态重写
     {
         List kept_entities;
         if (auto* entities_field = level->find_mut("Entities"); entities_field != nullptr) {
             if (const auto* list = entities_field->get_if<List>(); list != nullptr) {
                 for (const auto& entry : *list) {
                     const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
-                    if (!id || *id != kItemEntityId) {
-                        kept_entities.push_back(entry);  // 非物品实体（生物等）原样透传
+                    if (!id || !is_modeled_entity_id(*id)) {
+                        kept_entities.push_back(entry);  // 未建模实体原样透传
                     }
                 }
             }
         }
         for (const auto& item : entities.items) {
             kept_entities.push_back(item_entity(item));
+        }
+        for (const auto& mob : entities.mobs) {
+            kept_entities.push_back(mob_entity(mob));
         }
         level->set("Entities", nbt::make_list(std::move(kept_entities)));
     }
@@ -487,6 +632,11 @@ Result<DecodedChunk> decode_chunk(ByteSpan nbt_bytes) {
                     furnace.cook_time = cook ? static_cast<std::int32_t>(*cook) : 0;
                     furnace.burn_total = total ? static_cast<std::int32_t>(*total) : 0;
                     out.entities.furnaces.emplace_back(key, std::move(furnace));
+                } else {
+                    StoredSmallContainer small;
+                    if (read_small_container(*id, entity, small)) {
+                        out.entities.small_containers.emplace_back(key, std::move(small));
+                    }
                 }
             }
         }
@@ -498,6 +648,11 @@ Result<DecodedChunk> decode_chunk(ByteSpan nbt_bytes) {
                 StoredEntity item;
                 if (read_item_entity(entry, item)) {
                     out.entities.items.push_back(std::move(item));
+                    continue;
+                }
+                StoredMob mob;
+                if (read_mob_entity(entry, mob)) {
+                    out.entities.mobs.push_back(std::move(mob));
                 }
             }
         }

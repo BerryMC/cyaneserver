@@ -123,3 +123,20 @@
   - **教训**：最初实现误用方块实体的 `ID`+`x/y/z` 字段名写实体——那种记录原版读到的位置恒为 (0,0,0)。由本预言机实测纠正为 `id`+`Pos`。
 - 落地：`world/anvil.cpp`（`item_entity` 编码 / `read_item_entity` 解码 / merged 透传过滤）、`net/item_drop`（restore/all_drops）、`game/world_persistence`（载入回填掉落物、保存按 chunk 归位）。
 - 互操作实测：cyane 载入原版世界（633 区块，含 83 生物 + 6 掉落物实体）→ 保存 → 原版重载 `Done (4.317s)` 零错误；掉落物实体往返字段完整。
+
+### R-013 — 区块 section 光照数组为原版读取的必需字段（真机预言机实测）
+
+- 来源：纯 cyane 生成（无原版存档底档）的世界交原版 1.12.2 服务器重载，日志 10 处 `Couldn't load chunk: ChunkNibbleArrays should be 2048 bytes not: 0`（NibbleArray 构造）。
+- 结论：
+  - 原版 1.12.2 读取端对**每个非空 section 无条件**构造 `BlockLight`/`SkyLight` 的 NibbleArray（`getByteArray` 对缺失键返回空数组 → 抛异常），**没有** hasKey 保护。
+  - 此前未暴露：历次 oracle 都基于原版世界走 merged 保存（保留原光照）；只有全新编码的 section（`encode_chunk` / merged 追加节）会缺这两个键。
+  - 修复：新编码 section 补 2048 字节全 0 占位；`LightPopulated` 保持缺省 0，原版加载后自行重算天光（该标志即为此流程设计）。
+- 落地：`world/anvil.cpp`（`build_section_arrays` 增光照数组、`encode_chunk` 主循环与 merged 追加分支补 `BlockLight`/`SkyLight`）。
+- 互操作实测：纯 cyane 超平坦世界（含 12 只落盘生物）交原版重载 `Done (5.268s)` 零区块错误。
+
+### R-014 — 实体幽灵副本：跨区块移动/移除后的磁盘残留
+
+- 来源：生物落盘真机验证——第一轮保存 12 只，第二轮保存后磁盘出现 14 个实体条目（多 1 牛 1 鸡）。
+- 结论：生物在两次保存间漫游跨区块时，新位置区块被重写而旧位置区块不再满足写出条件（不脏、无方块实体）→ 磁盘残留旧副本，下次载入重复。掉落物被拾取后同理（位置不变但内容消失，所在区块可能不再被重写）。
+- 修复：`WorldPersistence` 维护 `drop_chunks_`/`mob_chunks_`（载入时从磁盘发现、保存时从内存态归组双向更新），保存时无条件并入写集——重写为内存态（可能为空）以清除幽灵。
+- 实测：三轮启动-漫游-保存循环后实体总数恒为 12。

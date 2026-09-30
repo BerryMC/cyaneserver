@@ -94,7 +94,8 @@ CYANE_TEST(world_vanilla_terrain_load_and_lossless_round_trip) {
     net::ContainerStore chests;
     net::FurnaceStore furnaces;
     net::ItemDropManager drops;
-    game::WorldPersistence saver(source, chests, furnaces, drops, dir.string());
+    net::MobManager mobs;
+    game::WorldPersistence saver(source, chests, furnaces, drops, mobs, dir.string());
     auto saved = saver.save();
     CYANE_CHECK(saved.has_value());
     CYANE_CHECK_EQ(*saved, std::size_t{1});
@@ -104,7 +105,8 @@ CYANE_TEST(world_vanilla_terrain_load_and_lossless_round_trip) {
     net::ContainerStore chests2;
     net::FurnaceStore furnaces2;
     net::ItemDropManager drops2;
-    game::WorldPersistence loader(loaded, chests2, furnaces2, drops2, dir.string());
+    net::MobManager mobs2;
+    game::WorldPersistence loader(loaded, chests2, furnaces2, drops2, mobs2, dir.string());
     CYANE_CHECK(loader.load().has_value());
     CYANE_CHECK_EQ(loaded.block_at(80, 0, -112),
                    static_cast<std::uint16_t>(world::kStateStone | 0x0));
@@ -290,7 +292,8 @@ CYANE_TEST(save_preserves_vanilla_fields_losslessly) {
     net::ContainerStore chests;
     net::FurnaceStore furnaces;
     net::ItemDropManager drops;
-    game::WorldPersistence loader(loaded, chests, furnaces, drops, dir.string());
+    net::MobManager mobs;
+    game::WorldPersistence loader(loaded, chests, furnaces, drops, mobs, dir.string());
     CYANE_CHECK(loader.load().has_value());
 
     // 记录原方块（找第一个非空气位置）与其原始 NBT 特征
@@ -374,9 +377,17 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
         old_item_fields.emplace_back("Item", nbt::Value{nbt::Tag::compound, nbt::Compound{}});
         old_item_fields.emplace_back("id",
                                      nbt::Value{nbt::Tag::string, std::string{"minecraft:item"}});
+        // 原版被动生物（猪）：已被我们建模，保存时由内存态重写
+        nbt::Compound vanilla_pig;
+        vanilla_pig.emplace_back("Pos", nbt::make_list(nbt::List{
+            nbt::Value{nbt::Tag::f64, 7.0},
+            nbt::Value{nbt::Tag::f64, 4.0},
+            nbt::Value{nbt::Tag::f64, 7.0}}));
+        vanilla_pig.emplace_back("id", nbt::Value{nbt::Tag::string, std::string{"minecraft:pig"}});
         nbt::List entity_list;
         entity_list.push_back(nbt::make_compound(std::move(zombie_fields)));
         entity_list.push_back(nbt::make_compound(std::move(old_item_fields)));
+        entity_list.push_back(nbt::make_compound(std::move(vanilla_pig)));
         nbt::Compound level;
         level.emplace_back("xPos", nbt::Value{nbt::Tag::i32, pos.x});
         level.emplace_back("zPos", nbt::Value{nbt::Tag::i32, pos.z});
@@ -389,6 +400,8 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
         world::ChunkEntities entities;
         entities.items.push_back(
             world::StoredEntity{21.5, 3.5, 21.5, item::ItemStack{260, 4, 0}});
+        // 内存态生物：一头牛（原版的猪被此重写）
+        entities.mobs.push_back(world::StoredMob{92, 30.5, 4.0, 30.5, 3.0f, 0.0f});
         auto merged = world::encode_chunk_merged(pos, chunk, entities, ByteSpan{*source});
         CYANE_CHECK(merged.has_value());
 
@@ -398,8 +411,12 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
         CYANE_CHECK_EQ(decoded->entities.items.size(), std::size_t{1});
         CYANE_CHECK_EQ(decoded->entities.items[0].stack.id, std::int16_t{260});
         CYANE_CHECK_EQ(decoded->entities.items[0].stack.count, std::uint8_t{4});
+        // 原版猪被内存态牛重写
+        CYANE_CHECK_EQ(decoded->entities.mobs.size(), std::size_t{1});
+        CYANE_CHECK_EQ(decoded->entities.mobs[0].type, 92);
+        CYANE_CHECK(decoded->entities.mobs[0].x == 30.5);
 
-        // 生物实体在 NBT 中原样保留
+        // 未建模实体在 NBT 中原样保留；已建模类型由内存态接管
         auto reparsed = nbt::parse(ByteSpan{*merged});
         CYANE_CHECK(reparsed.has_value());
         const nbt::Value* level_v = reparsed->find("Level");
@@ -408,12 +425,18 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
         const auto* ents = ents_v != nullptr ? ents_v->get_if<nbt::List>() : nullptr;
         CYANE_CHECK(ents != nullptr);
         bool zombie_kept = false;
+        bool pig_rewritten = false;
         for (const auto& entry : *ents) {
             const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
             if (id && *id == "minecraft:zombie") {
                 zombie_kept = true;
             }
+            if (id && *id == "minecraft:cow") {
+                pig_rewritten = true;
+            }
         }
         CYANE_CHECK(zombie_kept);
+        CYANE_CHECK(pig_rewritten);
+        CYANE_CHECK_EQ(ents->size(), std::size_t{3});  // 僵尸 + 牛 + 内存态物品
     }
 }

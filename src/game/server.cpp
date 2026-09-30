@@ -273,18 +273,20 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         log::info("world spawn at ({}, {}, {})", level->spawn_x, level->spawn_y, level->spawn_z);
     }
 
-    // 世界存档：载入 region/*.mca（方块编辑 + 箱子/熔炉方块实体 + 掉落物）
+    // 世界存档：载入 region/*.mca（方块编辑 + 方块实体 + 掉落物/生物实体）
     server->persistence_ = std::make_unique<game::WorldPersistence>(
         *server->world_, *server->containers_, *server->furnaces_, *server->item_drops_,
-        server->config_.world_dir);
+        *server->mobs_, server->config_.world_dir);
     if (auto loaded = server->persistence_->load(); !loaded) {
         log::warn("world load failed: {}", loaded.error().message);
     } else if (*loaded > 0) {
         log::info("loaded {} chunks from {}", *loaded, server->config_.world_dir);
     }
 
-    // 生成出生点附近的被动生物
-    server->mobs_->spawn_passive(12);
+    // 生成出生点附近的被动生物；存档已有生物时不再重复生成
+    if (server->mobs_->size() == 0) {
+        server->mobs_->spawn_passive(12);
+    }
 
     server->network_ = std::make_unique<net::NetService>(
         server->config_.bind_address, server->config_.port, server->config_.io_threads, std::move(context));

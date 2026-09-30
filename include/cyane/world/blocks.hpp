@@ -12,9 +12,12 @@ inline constexpr std::uint16_t kStateStone = 1 << 4;
 inline constexpr std::uint16_t kStateGrass = 2 << 4;
 inline constexpr std::uint16_t kStateDirt = 3 << 4;
 inline constexpr std::uint16_t kStateBedrock = 7 << 4;
-inline constexpr std::uint16_t kStateChest = 54 << 4;    // 箱子方块 id=54
-inline constexpr std::uint16_t kStateCraftingTable = 58 << 4; // 工作台方块 id=58
-inline constexpr std::uint16_t kStateFurnace = 61 << 4;  // 熔炉方块 id=61
+inline constexpr std::uint16_t kStateDispenser = 23 << 4;      // 发射器
+inline constexpr std::uint16_t kStateChest = 54 << 4;          // 箱子方块 id=54
+inline constexpr std::uint16_t kStateCraftingTable = 58 << 4;  // 工作台方块 id=58
+inline constexpr std::uint16_t kStateFurnace = 61 << 4;        // 熔炉方块 id=61
+inline constexpr std::uint16_t kStateHopper = 154 << 4;        // 漏斗
+inline constexpr std::uint16_t kStateDropper = 158 << 4;       // 投掷器
 
 [[nodiscard]] constexpr std::uint16_t block_id(std::uint16_t state) noexcept { return state >> 4; }
 [[nodiscard]] constexpr std::uint16_t state_meta(std::uint16_t state) noexcept { return state & 0x0F; }

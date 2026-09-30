@@ -126,6 +126,8 @@ private:
     [[nodiscard]] bool handle_play_animation(ByteSpan payload);
     // 打开箱子容器：下发 OpenWindow + 容器 WindowItems
     void open_chest(std::int64_t chest_key);
+    // 小容器（发射器/投掷器/漏斗）：窗口布局同箱子式（容器格 + 27 主背包 + 9 热区）
+    void open_small_container(std::int64_t key, ContainerStore::SmallKind kind);
     // 熔炉：打开窗口、点击处理、进度条同步
     void open_furnace(std::int64_t furnace_key);
     void apply_furnace_click(std::int16_t slot, std::uint8_t button, std::int32_t mode,
@@ -264,6 +266,11 @@ private:
     std::int64_t open_table_key_{0};
     bool table_open_{false};
     static constexpr std::uint8_t kCraftingTableWindowId = 4;
+    // 小容器窗口（发射器/投掷器/漏斗）：布局同箱子式，容器格数 9 或 5
+    std::int64_t open_small_key_{0};
+    bool small_open_{false};
+    std::size_t small_slots_{0};
+    static constexpr std::uint8_t kSmallWindowId = 5;
     // 打开期间的 3x3 格与最近一次结果（点击就地改，同步写回 CraftingTableStore）
     std::array<item::ItemStack, world::CraftingTableStore::kGridCells> table_grid_{};
     item::ItemStack table_result_{};

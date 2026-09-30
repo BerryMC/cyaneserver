@@ -4,9 +4,11 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "cyane/entity/player_entity.hpp"
+#include "cyane/entity/player_manager.hpp"
 
 namespace cyane::net {
 
@@ -25,6 +27,16 @@ struct Mob {
     std::int32_t state_ticks{0};  // 当前状态剩余 tick
     double dir_x{0.0};
     double dir_z{0.0};
+};
+
+// 持久化形状：类型 + 位置 + 朝向（存档 Entities 列表的最小字段集）
+struct MobState {
+    std::uint8_t type{90};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    float yaw{0.0f};
+    float pitch{0.0f};
 };
 
 // 生物登记表：Server::tick 驱动 AI（20Hz），连接线程读快照补发。
@@ -50,6 +62,34 @@ public:
             }
         }
         return std::nullopt;
+    }
+
+    // 从存档恢复生物（分配新实体 id，AI 状态重置为待机）
+    void restore(std::span<const MobState> restored) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& s : restored) {
+            Mob m;
+            m.entity_id = entity::allocate_entity_id();
+            m.type = s.type;
+            m.pos.x = s.x;
+            m.pos.y = s.y;
+            m.pos.z = s.z;
+            m.pos.yaw = s.yaw;
+            m.pos.pitch = s.pitch;
+            mobs_.push_back(std::move(m));
+        }
+    }
+
+    // 全量快照（保存存档用）
+    [[nodiscard]] std::vector<MobState> all_mobs() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<MobState> out;
+        out.reserve(mobs_.size());
+        for (const auto& m : mobs_) {
+            out.push_back(MobState{static_cast<std::uint8_t>(m.type), m.pos.x, m.pos.y, m.pos.z,
+                                   m.pos.yaw, m.pos.pitch});
+        }
+        return out;
     }
 
     // 移除生物（返回 true 表示存在且已移除）
