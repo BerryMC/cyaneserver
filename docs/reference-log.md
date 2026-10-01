@@ -153,3 +153,13 @@
   - `regions_` 缓存加 `cache_mutex_`（loader 在 reactor 线程、save 在 tick/停机线程并发）——注意非重入锁：锁内用 `region_locked`，勿调用会加锁的 `region()`（本次曾因此同线程自锁挂死测试）。
 - 回归实测：vanilla 生成 625 区块真实地形 → cyane 载入 → 两个玩家进出（触发释放/回载）→ 保存 → 全部区块保持多 section、零退化。
 - 教训：**`chunk_at` 的隐式物化语义是保存路径的陷阱**——任何"缺块即造"的兜底都不该出现在写盘路径上；另运维脚本对世界目录先验证拷贝成功再删原文件。
+
+### R-016 — 1.12.2 死亡重生序列（probe 实测对齐）
+
+- 来源：probe 登录 → 跳虚空（PlayerPosition y<-64 触发服务端击杀）→ ClientCommand(0) 重生 → 逐包记录。
+- 结论：
+  - **sb ClientCommand = 0x03**（0x04 是 Client Settings；respawn 动作 varint 0），实测 0x03 触发、0x04 无效。
+  - 服务端 respawn 序列**不应重发 JoinGame**：实测序列为 `Respawn(0x35) → PlayerAbilities(0x2C) → UpdateHealth(0x41) → SpawnPosition(0x46) → TimeUpdate(0x47) → HeldItemChange(0x3A) → 区块流 → PlayerPosLook(0x2F)`。早期实现 Respawn 后重发 JoinGame，强制客户端重建世界并**卡死在"加载地形"**。
+  - 同维度重生客户端**不清世界**：服务端不应补发实体（会双份）；死亡时向他人广播 EntityStatus(3) 死亡动画，重生时 broadcast_despawn + broadcast_spawn 同步他人视角。
+  - 重生点区块可能已被客户端 UnloadChunk：服务端清空 loaded_chunks_ 重新下发（重复 ChunkData 客户端就地覆盖，无害）。
+- 落地：`net/connection_combat.cpp::respawn_player/kill_player`。

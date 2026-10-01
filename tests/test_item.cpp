@@ -2,9 +2,13 @@
 
 #include "cyane/core/bytes.hpp"
 #include "cyane/item/item_stack.hpp"
+#include "cyane/item/item_traits.hpp"
 #include "cyane/item/player_inventory.hpp"
+#include "cyane/world/block_drops.hpp"
 #include "cyane/world/blocks.hpp"
 #include "test_framework.hpp"
+
+using namespace cyane;
 
 using cyane::item::ItemStack;
 using cyane::item::PlayerInventory;
@@ -76,3 +80,39 @@ CYANE_TEST(item_stacks_with_matches_same_id_and_damage) {
     CYANE_CHECK(!a.stacks_with(ItemStack::air()));      // 空堆叠不合并
 }
 
+
+CYANE_TEST(block_drops_and_item_traits) {
+    // 掉落表：石头→圆石、草→泥、煤矿→煤；玻璃/树叶无掉落；默认掉自身
+    auto stone = world::block_drops(world::kStateStone);
+    CYANE_CHECK_EQ(stone.size(), std::size_t{1});
+    CYANE_CHECK_EQ(stone[0].item_id, std::int16_t{4});  // 圆石
+
+    auto grass = world::block_drops(world::kStateGrass);
+    CYANE_CHECK_EQ(grass.size(), std::size_t{1});
+    CYANE_CHECK_EQ(grass[0].item_id, std::int16_t{3});  // 泥土
+
+    auto coal = world::block_drops(static_cast<std::uint16_t>(16 << 4));
+    CYANE_CHECK_EQ(coal[0].item_id, std::int16_t{263});  // 煤
+    auto diamond = world::block_drops(static_cast<std::uint16_t>(56 << 4));
+    CYANE_CHECK_EQ(diamond[0].item_id, std::int16_t{264});
+    CYANE_CHECK(diamond[0].count == 1);
+
+    CYANE_CHECK(world::block_drops(20 << 4).empty());            // 玻璃
+    CYANE_CHECK(world::block_drops(world::kStateAir).empty());   // 空气
+
+    auto planks = world::block_drops(static_cast<std::uint16_t>(5 << 4 | 2));
+    CYANE_CHECK_EQ(planks[0].item_id, std::int16_t{5});
+    CYANE_CHECK_EQ(planks[0].damage, std::int16_t{2});  // 木板按 meta 原样
+
+    // 食物：面包回 5、牛排回 8、金苹果回满 20；非食物无值
+    CYANE_CHECK(item::food_heal(297).value_or(0) == 5);
+    CYANE_CHECK(item::food_heal(364).value_or(0) == 8);
+    CYANE_CHECK(item::food_heal(322).value_or(0) == 20);
+    CYANE_CHECK(!item::food_heal(1).has_value());
+
+    // 武器伤害：钻剑 7 > 铁剑 6 > 木剑 4；徒手 1
+    CYANE_CHECK(item::attack_damage(276) == 7.0f);
+    CYANE_CHECK(item::attack_damage(267) == 6.0f);
+    CYANE_CHECK(item::attack_damage(268) == 4.0f);
+    CYANE_CHECK(item::attack_damage(0) == 1.0f);
+}

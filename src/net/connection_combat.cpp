@@ -30,6 +30,13 @@ void Connection::kill_player() {
     health.varint(20);
     health.f32(0.0f);
     send_packet(proto::play_cb::kUpdateHealth, health.data());
+    // EntityStatus 3 = 死亡动画，向他人广播
+    if (context_.hub != nullptr) {
+        cyane::ByteWriter status;
+        status.i32(static_cast<std::int32_t>(player_id_));
+        status.u8(3);
+        context_.hub->broadcast(player_id_, proto::play_cb::kEntityStatus, status.data());
+    }
     log::info("{} died", username_);
 }
 
@@ -39,7 +46,8 @@ void Connection::respawn_player() {
     player_pos_ = spawn_point();
 
     // Respawn (0x35)：int dimension | byte difficulty | byte gameMode | string levelType
-    // 客户端收到后卸载世界与全部实体，等待新的 JoinGame 重建
+    // 1.12.2 客户端同维度重生不重置世界；对齐 vanilla：不重发 JoinGame
+    // （实测 Respawn 后再发 JoinGame 会强制客户端重建世界并卡在"加载地形"）
     cyane::ByteWriter respawn;
     respawn.i32(0);  // overworld
     respawn.u8(2);   // normal
@@ -47,31 +55,26 @@ void Connection::respawn_player() {
     respawn.string("default");
     send_packet(proto::play_cb::kRespawn, respawn.data());
 
-    // 1.12.2 客户端 Respawn 后要求重发 JoinGame（否则停在 loading 界面）
-    send_join_game();
-
-    // 出生点与世界时间
-    cyane::ByteWriter spawn_pos;
-    spawn_pos.position(0, 4, 0);
-    send_packet(proto::play_cb::kSpawnPosition, spawn_pos.data());
-    cyane::ByteWriter time;
-    time.i64(0);
-    time.i64(0);
-    send_packet(proto::play_cb::kTimeUpdate, time.data());
-
-    // 血量恢复
+    // vanilla 重生序列：Abilities → Health → SpawnPosition → TimeUpdate → HeldItem
+    send_abilities_for(context_.game_mode);
     cyane::ByteWriter health;
     health.f32(20.0f);
     health.varint(20);
     health.f32(5.0f);
     send_packet(proto::play_cb::kUpdateHealth, health.data());
+    cyane::ByteWriter spawn_pos;
+    spawn_pos.position(context_.spawn_x, context_.spawn_y, context_.spawn_z);
+    send_packet(proto::play_cb::kSpawnPosition, spawn_pos.data());
+    cyane::ByteWriter time;
+    time.i64(0);
+    time.i64(0);
+    send_packet(proto::play_cb::kTimeUpdate, time.data());
+    cyane::ByteWriter held;
+    held.u8(0);
+    held.i16(static_cast<std::int16_t>(selected_slot_));
+    send_packet(proto::play_cb::kHeldItemChange, held.data());
 
-    // 客户端实体列表已清空：补发其他玩家/生物/掉落物
-    spawn_existing_players();
-    send_existing_mobs();
-    send_existing_drops();
-
-    // 重新下发出生点区块并把玩家放回去
+    // 出生点区块可能已被客户端按 UnloadChunk 丢弃：清表重发（重复 ChunkData 就地覆盖）
     loaded_chunks_.clear();
     pending_chunks_.clear();
     pending_chunk_keys_.clear();
@@ -79,6 +82,11 @@ void Connection::respawn_player() {
     const auto spawn_chunk = world::ChunkPos::from_world(
         static_cast<std::int32_t>(player_pos_.x), static_cast<std::int32_t>(player_pos_.z));
     update_view(spawn_chunk.value_or(world::ChunkPos{0, 0}));
+
+    // 同维度重生客户端不清世界：不补发实体（避免双份）；
+    // 他人端销毁旧实体后按新位置重发本玩家的 SpawnPlayer
+    broadcast_despawn();
+    broadcast_spawn();
 
     ++teleport_id_;
     cyane::ByteWriter tp;

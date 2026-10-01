@@ -5,6 +5,8 @@
 
 #include "connection_detail.hpp"
 #include "cyane/core/log.hpp"
+#include "cyane/item/item_traits.hpp"
+#include "cyane/world/block_drops.hpp"
 #include "cyane/world/chunk_codec.hpp"
 
 namespace cyane::net {
@@ -135,10 +137,11 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     }
     set_block_and_broadcast(bx, by, bz, world::kStateAir);
     if (!creative && context_.item_drops != nullptr && prev != world::kStateAir) {
-        // 方块 → 掉落物：1.12.2 方块 id<256 与物品 id 同值，meta 作 damage
-        const std::int16_t item_id = static_cast<std::int16_t>(world::block_id(prev));
-        const std::int16_t dmg = static_cast<std::int16_t>(world::state_meta(prev));
-        drop_stack(bx + 0.5, by + 0.25, bz + 0.5, item::ItemStack{item_id, 1, dmg}, bx, bz);
+        // 方块特性掉落表：石头→圆石、矿石→矿物等
+        for (const auto& drop : world::block_drops(prev)) {
+            drop_stack(bx + 0.5, by + 0.25, bz + 0.5,
+                       item::ItemStack{drop.item_id, drop.count, drop.damage}, bx, bz);
+        }
     }
     return true;
 }
@@ -224,6 +227,11 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         }
     }
     const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
+    // 手持食物且未满血：进食优先于放置（1.12 右键食物即食用）
+    if (item::food_heal(held.id) && health_ < 20.0f) {
+        (void)eat_held_food();
+        return true;
+    }
     const std::uint16_t state = world::block_state_from_item(held.id, held.damage);
     if (state == world::kStateAir) {
         return true;  // 空手或非方块物品：忽略
@@ -286,6 +294,36 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         send_slot(0, static_cast<std::int16_t>(hs), after);
     }
     return true;
+}
+
+bool Connection::eat_held_food() {
+    const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
+    const auto heal = item::food_heal(held.id);
+    if (!heal || health_ >= 20.0f || held.empty()) {
+        return false;
+    }
+    // 消耗 1 个（创造模式不消耗）
+    if (context_.game_mode != proto::game_mode::kCreative) {
+        const std::size_t hs = item::PlayerInventory::hotbar_slot(selected_slot_);
+        item::ItemStack after = held;
+        if (--after.count == 0) {
+            after = item::ItemStack::air();
+        }
+        inventory_.set_slot(hs, after);
+        send_slot(0, static_cast<std::int16_t>(hs), after);
+    }
+    health_ = std::min(20.0f, health_ + static_cast<float>(*heal));
+    cyane::ByteWriter out;
+    out.f32(health_);
+    out.varint(20);
+    out.f32(5.0f);
+    send_packet(proto::play_cb::kUpdateHealth, out.data());
+    return true;
+}
+
+bool Connection::handle_play_use_item(ByteSpan payload) {
+    (void)payload;  // 1.12.2: varint hand，进食逻辑只关心手持物品
+    return eat_held_food();
 }
 
 void Connection::send_chunk(world::ChunkPos pos) {

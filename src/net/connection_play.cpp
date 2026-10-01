@@ -62,6 +62,9 @@ bool Connection::handle_play(std::int32_t packet_id, ByteSpan payload) {
     if (packet_id == proto::play_sb::kAnimation) {
         return handle_play_animation(payload);
     }
+    if (packet_id == proto::play_sb::kUseItem) {
+        return handle_play_use_item(payload);
+    }
     // 已知但暂无游戏逻辑的 serverbound 包：静默接受，避免日志刷屏
     switch (packet_id) {
         case proto::play_sb::kSettings:                  // 客户端设置（视距/语言/皮肤部件）
@@ -69,7 +72,6 @@ bool Connection::handle_play(std::int32_t packet_id, ByteSpan payload) {
         case proto::play_sb::kAbilities:                 // 飞行能力回报
         case proto::play_sb::kConfirmTransaction:        // 事务确认回执
         case proto::play_sb::kRecipeDisplayed:           // 配方书
-        case proto::play_sb::kUseItem:                   // 使用物品
             return true;
         default:
             break;

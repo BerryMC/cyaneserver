@@ -122,6 +122,8 @@ private:
     [[nodiscard]] bool handle_play_click_window(ByteSpan payload);
     [[nodiscard]] bool handle_play_close_window(ByteSpan payload);
     [[nodiscard]] bool handle_play_client_command(ByteSpan payload);
+    // UseItem (0x20)：对空中右键——手持食物时进食
+    [[nodiscard]] bool handle_play_use_item(ByteSpan payload);
     // 0x1D 挥臂动画：限流后转发 Animation(0x06) 给视距内玩家
     [[nodiscard]] bool handle_play_animation(ByteSpan payload);
     // 打开箱子容器：下发 OpenWindow + 容器 WindowItems
@@ -165,6 +167,8 @@ private:
     void apply_remote_gamemode(std::uint8_t mode);
     // 把 moving 尽量并入 [lo,hi] 槽区间（先叠已有同类，再填空槽），就地更新剩余
     [[nodiscard]] bool merge_into_range(item::ItemStack& moving, std::size_t lo, std::size_t hi);
+    // 手持食物且未满血：消耗 1 个并回血（返回是否进食）
+    [[nodiscard]] bool eat_held_food();
     void kill_player();
     void respawn_player();
     // 掉落物：生成、给自己补发已有、拾取入包
