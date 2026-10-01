@@ -9,7 +9,7 @@ namespace cyane::net {
 namespace {
 // 1.12.2 EntityItem 的元数据：index 6 = 物品堆叠，type 5 = Slot
 constexpr std::uint8_t kItemMetaIndex = 6;
-constexpr std::uint8_t kMetaTypeSlot = 5;
+constexpr std::uint8_t kMetaTypeSlot = 6;  // 1.11+ meta 类型表：Slot=6（1.8-1.10 是 5）
 constexpr std::int32_t kObjectTypeItem = 2;  // SpawnObject type：掉落物
 }
 

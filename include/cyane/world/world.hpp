@@ -93,6 +93,22 @@ public:
 
     void set_loader(ChunkLoader loader) { loader_ = std::move(loader); }
 
+    // 出生点列的地表高度：自上而下第一个非空气方块的上一格。
+    // 先物化该区块再逐格探测——用于把 level.dat 里过时的 SpawnY 修正到实际地面。
+    [[nodiscard]] std::int32_t surface_y(std::int32_t wx, std::int32_t wz) {
+        const auto pos = ChunkPos::from_world(wx, wz);
+        if (!pos) {
+            return 4;
+        }
+        (void)chunk_at(*pos);  // 物化（载入地形或超平坦 baseline）
+        for (std::int32_t wy = kChunkSizeY - 1; wy >= 0; --wy) {
+            if (block_at(wx, wy, wz) != kStateAir) {
+                return wy + 1;
+            }
+        }
+        return 4;
+    }
+
     // 区块是否在内存中（不触发物化）。保存侧用它区分"真区块"与
     // "被释放后 materialize 出的超平坦假区块"——后者绝不能覆盖磁盘地形。
     [[nodiscard]] bool contains(ChunkPos pos) const {

@@ -148,7 +148,12 @@ entity::Position Connection::spawn_point() const noexcept {
                      static_cast<double>(player_id_ % 8) * 2.0;
     const double z = static_cast<double>(context_.spawn_z) + 0.5 +
                      static_cast<double>((player_id_ / 8) % 8) * 2.0;
-    return entity::Position{x, static_cast<double>(context_.spawn_y), z, 0.0f, 0.0f};
+    // level.dat 的 SpawnY 可能过时（世界重建/地形变化）——落到实际地表
+    const double y = context_.world != nullptr
+                         ? static_cast<double>(
+                               context_.world->surface_y(context_.spawn_x, context_.spawn_z))
+                         : static_cast<double>(context_.spawn_y);
+    return entity::Position{x, y, z, 0.0f, 0.0f};
 }
 
 void Connection::send_login_success(std::string uuid_with_dashes) {

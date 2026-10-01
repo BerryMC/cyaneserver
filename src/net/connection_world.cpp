@@ -323,7 +323,8 @@ bool Connection::eat_held_food() {
 
 bool Connection::handle_play_use_item(ByteSpan payload) {
     (void)payload;  // 1.12.2: varint hand，进食逻辑只关心手持物品
-    return eat_held_food();
+    (void)eat_held_food();  // 吃不下（满血/非食物）不算协议错误——返回 false 会断连
+    return true;
 }
 
 void Connection::send_chunk(world::ChunkPos pos) {
