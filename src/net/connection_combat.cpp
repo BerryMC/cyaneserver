@@ -69,9 +69,9 @@ void Connection::respawn_player() {
     time.i64(0);
     time.i64(0);
     send_packet(proto::play_cb::kTimeUpdate, time.data());
+    // HeldItemChange (0x3A)：仅 1 字节热区栏槽位（0..8），多发即解码越界
     cyane::ByteWriter held;
-    held.u8(0);
-    held.i16(static_cast<std::int16_t>(selected_slot_));
+    held.u8(selected_slot_);
     send_packet(proto::play_cb::kHeldItemChange, held.data());
 
     // 出生点区块可能已被客户端按 UnloadChunk 丢弃：清表重发（重复 ChunkData 就地覆盖）
