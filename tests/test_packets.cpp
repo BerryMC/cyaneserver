@@ -1,6 +1,7 @@
 #include <cstring>
 #include <string_view>
 
+#include "cyane/item/item_stack.hpp"
 #include "cyane/net/packet_writers.hpp"
 #include "cyane/world/blocks.hpp"
 #include "test_framework.hpp"
@@ -107,6 +108,18 @@ CYANE_TEST(packet_entity_head_look_layout) {
     net::writers::write_entity_head_look(out, 2, 180.0f);
     // varint(2) | byte(180°→0x80)
     CYANE_CHECK(payload_is(out, "02 80"));
+}
+
+// 权威参考：vanilla 1.12.2 RCON summon Item 后抓包——
+// metadata 条目 = index byte + type varint + value；Item 实体 idx6 type5(Slot) + 6 字节 Slot + 0xFF
+CYANE_TEST(packet_item_entity_metadata_matches_vanilla) {
+    ByteWriter meta;
+    meta.varint(0x0198);  // entityId 408（2 字节 varint）
+    meta.u8(6);           // index：EntityItem 的物品堆叠
+    meta.varint(5);       // type：Slot（1.9-1.12.2）
+    item::write_slot(meta, item::ItemStack{3, 2, 0});  // dirt x2
+    meta.u8(0xFF);
+    CYANE_CHECK(payload_is(meta, "98 03 06 05 00 03 02 00 00 00 ff"));
 }
 
 CYANE_TEST(packet_angle_byte_wraps) {

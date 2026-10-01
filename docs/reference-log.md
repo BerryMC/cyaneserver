@@ -163,3 +163,9 @@
   - 同维度重生客户端**不清世界**：服务端不应补发实体（会双份）；死亡时向他人广播 EntityStatus(3) 死亡动画，重生时 broadcast_despawn + broadcast_spawn 同步他人视角。
   - 重生点区块可能已被客户端 UnloadChunk：服务端清空 loaded_chunks_ 重新下发（重复 ChunkData 客户端就地覆盖，无害）。
 - 落地：`net/connection_combat.cpp::respawn_player/kill_player`。
+
+### R-017 — EntityMetadata Slot 类型值（vanilla RCON 实测纠正）
+
+- 来源：vanilla 1.12.2 服务器开 RCON，`summon Item` 后抓 EntityMetadata(0x3C) 字节：掉落物条目实测 `idx=06 type=05 <Slot 6字节> ff`。
+- 结论：1.9–1.12.2 的 metadata 类型表 **Item(Slot)=5、Boolean=6**（Cuberite `Protocol_1_9.h` eMetadataType 同值）。type=6 是 1.13+ 才成立。
+- **教训**：上一轮“修掉落物不可见”把 type 从 5 改成 6 是**基于错误记忆的猜测**，方向反了——真正的不可见另有其因（仍在排查），不该在没抓包时乱动已对的值。现已 RCON 实测回退为 5，并以黄金向量 `packet_item_entity_metadata_matches_vanilla` 锁定。
