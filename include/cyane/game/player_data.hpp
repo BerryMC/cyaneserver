@@ -40,10 +40,12 @@ public:
     PlayerDataStore(const PlayerDataStore&) = delete;
     PlayerDataStore& operator=(const PlayerDataStore&) = delete;
 
-    // 按 UUID 加载；无存档时返回默认数据（username/default_game_mode 填入结果）
+    // 按 UUID 加载；无存档时返回默认数据（username/default_game_mode 填入结果，
+    // 位置用传入的世界出生点——新玩家须落在 level.dat 的 spawn，而非硬编码原点）
     [[nodiscard]] PlayerData load_or_default(std::string_view uuid_with_dashes,
                                              std::string_view username,
-                                             std::uint8_t default_game_mode) const;
+                                             std::uint8_t default_game_mode,
+                                             double spawn_x, double spawn_y, double spawn_z) const;
 
     // 原版 .dat 落盘（tmp + rename 原子替换）
     [[nodiscard]] Result<void> save(const PlayerData& data) const;

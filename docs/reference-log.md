@@ -169,3 +169,11 @@
 - 来源：vanilla 1.12.2 服务器开 RCON，`summon Item` 后抓 EntityMetadata(0x3C) 字节：掉落物条目实测 `idx=06 type=05 <Slot 6字节> ff`。
 - 结论：1.9–1.12.2 的 metadata 类型表 **Item(Slot)=5、Boolean=6**（Cuberite `Protocol_1_9.h` eMetadataType 同值）。type=6 是 1.13+ 才成立。
 - **教训**：上一轮“修掉落物不可见”把 type 从 5 改成 6 是**基于错误记忆的猜测**，方向反了——真正的不可见另有其因（仍在排查），不该在没抓包时乱动已对的值。现已 RCON 实测回退为 5，并以黄金向量 `packet_item_entity_metadata_matches_vanilla` 锁定。
+
+### R-018 — 新玩家出生点落到原点虚空（卡加载/悬空根因）
+
+- 现象：玩家"进不去"（卡加载地形）、"复活点很高"。probe 抓包：SpawnPosition 正确为 (-28,64,244)，但真正的 PlayerPositionLook 落在 (0.5,4,0.5) 原点。
+- 根因：`PlayerData` 默认位置硬编码 (0.5,4,0.5)；登录流程先 `player_pos_ = spawn_point()`（已含地表探测），随后 `load_player_data()` 用 `load_or_default` 的默认值**无条件覆盖**，新玩家（无 .dat）被挪回原点。而当前世界原点区块是空的（void），玩家落进虚空 → 客户端表现为卡加载/悬空。
+- "很高"则是另一面：surface_y 之前的旧版本直接用 level.dat 的 SpawnY=64，而该世界地表在 y~15，玩家从 y64 自由下落。
+- 修复：`load_or_default` 增 spawn_x/y/z 参数作新玩家默认位置；连接层传入 `spawn_point()` 预置的 `player_pos_`（含逐列地表探测）。有 .dat 时仍读存档 Pos 覆盖。
+- 测试：`new_player_defaults_to_world_spawn_not_origin`；probe 实测新玩家落在 (-15.5,4,246.5)，所在区块在已发送集合内。

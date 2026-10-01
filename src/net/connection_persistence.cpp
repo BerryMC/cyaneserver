@@ -9,8 +9,9 @@ void Connection::load_player_data() {
     if (context_.player_data_store == nullptr || uuid_.is_null()) {
         return;
     }
-    const auto data =
-        context_.player_data_store->load_or_default(uuid_.dashed(), username_, context_.game_mode);
+    // player_pos_ 已由 spawn_point()（含地表探测）预置，作为新玩家默认位置传入
+    const auto data = context_.player_data_store->load_or_default(
+        uuid_.dashed(), username_, context_.game_mode, player_pos_.x, player_pos_.y, player_pos_.z);
     player_pos_.x = data.x;
     player_pos_.y = data.y;
     player_pos_.z = data.z;

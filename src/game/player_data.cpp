@@ -274,11 +274,16 @@ constexpr std::int32_t kDataVersion1343 = 1343;
 
 PlayerData PlayerDataStore::load_or_default(std::string_view uuid_with_dashes,
                                             std::string_view username,
-                                            std::uint8_t default_game_mode) const {
+                                            std::uint8_t default_game_mode,
+                                            double spawn_x, double spawn_y, double spawn_z) const {
     PlayerData data;
     data.uuid_with_dashes = std::string{uuid_with_dashes};
     data.username = std::string{username};
     data.game_mode = default_game_mode;  // 新玩家用服务器配置，存档存在时其值会覆盖
+    // 新玩家默认位置 = 世界出生点（无 .dat 时生效；有存档则下方读 Pos 覆盖）
+    data.x = spawn_x;
+    data.y = spawn_y;
+    data.z = spawn_z;
 
     std::lock_guard<std::mutex> lock{mutex_};
     const auto dat_path =

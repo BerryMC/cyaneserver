@@ -130,7 +130,7 @@ CYANE_TEST(player_dat_round_trip_with_slot_mapping) {
     }
 
     // 读回：全字段还原
-    const auto loaded = store.load_or_default(data.uuid_with_dashes, "NbtProbe", proto::game_mode::kSurvival);
+    const auto loaded = store.load_or_default(data.uuid_with_dashes, "NbtProbe", proto::game_mode::kSurvival, 0.5, 4.0, 0.5);
     CYANE_CHECK_EQ(loaded.x, 12.5);
     CYANE_CHECK_EQ(loaded.y, 6.0);
     CYANE_CHECK_EQ(loaded.z, -7.25);
@@ -167,7 +167,7 @@ CYANE_TEST(player_dat_reads_vanilla_written_file) {
 
     game::PlayerDataStore store;
     store.set_dir(dir);
-    const auto data = store.load_or_default("b50ad385-829d-3141-a216-7e7d7539ba7f", "OracleProbe", proto::game_mode::kSurvival);
+    const auto data = store.load_or_default("b50ad385-829d-3141-a216-7e7d7539ba7f", "OracleProbe", proto::game_mode::kSurvival, 0.5, 4.0, 0.5);
     // oracle 文件实测值：出生超平坦 (999.5, 4, 663.5)、生存、满血
     CYANE_CHECK_EQ(data.x, 999.5);
     CYANE_CHECK_EQ(data.y, 4.0);
@@ -204,7 +204,7 @@ CYANE_TEST(legacy_json_migrates_to_dat) {
 
     game::PlayerDataStore store;
     store.set_dir(dir);
-    const auto data = store.load_or_default(uuid, "OldProbe", proto::game_mode::kSurvival);
+    const auto data = store.load_or_default(uuid, "OldProbe", proto::game_mode::kSurvival, 0.5, 4.0, 0.5);
     CYANE_CHECK_EQ(data.x, 3.5);
     CYANE_CHECK_EQ(data.z, 5.5);
     CYANE_CHECK_EQ(data.health, 18.0f);
@@ -216,4 +216,18 @@ CYANE_TEST(legacy_json_migrates_to_dat) {
     CYANE_CHECK(!std::filesystem::exists(std::filesystem::path{dir} / (uuid + ".json")));
 
     std::filesystem::remove_all(dir);
+}
+CYANE_TEST(new_player_defaults_to_world_spawn_not_origin) {
+    const auto tmp = std::filesystem::temp_directory_path() / "cyane_test_newspawn";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    game::PlayerDataStore store;
+    store.set_dir(tmp.string());
+    // 无 .dat 的新玩家：位置应为传入的世界出生点，而非硬编码原点
+    const auto data = store.load_or_default("00000000-0000-0000-0000-000000000001", "Newbie",
+                                            proto::game_mode::kSurvival, -28.5, 72.0, 244.5);
+    CYANE_CHECK(data.x == -28.5);
+    CYANE_CHECK(data.y == 72.0);
+    CYANE_CHECK(data.z == 244.5);
+    std::filesystem::remove_all(tmp);
 }
