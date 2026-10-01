@@ -4,6 +4,8 @@
 
 #include "connection_detail.hpp"
 
+#include "cyane/net/packet_writers.hpp"
+
 namespace cyane::net {
 
 namespace {
@@ -101,9 +103,7 @@ void Connection::collect_items(std::uint64_t now_ms) {
         const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
         // CollectItem (0x4B)：varint collectedId | varint collectorId | varint count
         ByteWriter collect;
-        collect.varint(static_cast<std::int32_t>(ev.item_entity_id));
-        collect.varint(static_cast<std::int32_t>(ev.collector_id));
-        collect.varint(static_cast<std::int32_t>(ev.stack.count));
+        writers::write_collect_item(collect, ev.item_entity_id, ev.collector_id, ev.stack.count);
         send_packet(proto::play_cb::kCollectItem, collect.data());
         if (context_.hub != nullptr && cpos) {
             context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,

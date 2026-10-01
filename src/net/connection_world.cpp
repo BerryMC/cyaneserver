@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "connection_detail.hpp"
+#include "cyane/net/packet_writers.hpp"
 #include "cyane/core/log.hpp"
 #include "cyane/item/item_traits.hpp"
 #include "cyane/world/block_drops.hpp"
@@ -51,11 +52,9 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     if (!creative && (*status == 0 || *status == 1) && context_.hub != nullptr) {
         const auto cpos = world::ChunkPos::from_world(bx, bz);
         if (cpos) {
-            // BlockBreakAnimation (0x08)：varint entityId | position | byte progress
             ByteWriter out;
-            out.varint(static_cast<std::int32_t>(player_id_));
-            out.position(bx, by, bz);
-            out.u8(*status == 0 ? 0 : 0xFF);
+            writers::write_block_break_animation(out, player_id_, bx, by, bz,
+                                                 *status == 0 ? 0 : 0xFF);
             const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
             context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
                                          proto::play_cb::kBlockBreakAnimation, out.data());

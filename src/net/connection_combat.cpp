@@ -1,6 +1,7 @@
 #include "cyane/net/connection.hpp"
 
 #include "cyane/core/log.hpp"
+#include "cyane/net/packet_writers.hpp"
 
 namespace cyane::net {
 
@@ -33,8 +34,7 @@ void Connection::kill_player() {
     // EntityStatus 3 = 死亡动画，向他人广播
     if (context_.hub != nullptr) {
         cyane::ByteWriter status;
-        status.i32(static_cast<std::int32_t>(player_id_));
-        status.u8(3);
+        writers::write_entity_status(status, player_id_, 3);
         context_.hub->broadcast(player_id_, proto::play_cb::kEntityStatus, status.data());
     }
     log::info("{} died", username_);
@@ -69,9 +69,8 @@ void Connection::respawn_player() {
     time.i64(0);
     time.i64(0);
     send_packet(proto::play_cb::kTimeUpdate, time.data());
-    // HeldItemChange (0x3A)：仅 1 字节热区栏槽位（0..8），多发即解码越界
     cyane::ByteWriter held;
-    held.u8(selected_slot_);
+    writers::write_held_item_change(held, selected_slot_);
     send_packet(proto::play_cb::kHeldItemChange, held.data());
 
     // 出生点区块可能已被客户端按 UnloadChunk 丢弃：清表重发（重复 ChunkData 就地覆盖）

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "cyane/core/log.hpp"
+#include "cyane/net/packet_writers.hpp"
 #include "connection_detail.hpp"
 #include "cyane/item/crafting.hpp"
 
@@ -442,10 +443,11 @@ void Connection::broadcast_despawn() {
     if (context_.hub == nullptr || player_id_ == 0) {
         return;
     }
-    // DestroyEntities (0x32)：varint count | varint[] ids
     ByteWriter destroy;
-    destroy.varint(1);
-    destroy.varint(static_cast<std::int32_t>(player_id_));
+    {
+        const std::uint32_t ids[] = {player_id_};
+        writers::write_destroy_entities(destroy, ids);
+    }
     context_.hub->broadcast(player_id_, proto::play_cb::kDestroyEntities, destroy.data());
     // PlayerInfo(remove=4)：count | uuid(16)
     ByteWriter info;

@@ -9,6 +9,7 @@
 #include "cyane/core/log.hpp"
 #include "cyane/crypto/digest.hpp"
 #include "cyane/generated/registry_meta.hpp"
+#include "cyane/net/packet_writers.hpp"
 #include "cyane/proto/json.hpp"
 #include "cyane/proto/packet_ids.hpp"
 #include "cyane/proto/play_fields.hpp"
@@ -408,20 +409,13 @@ void Server::tick() {
             if (!cpos) {
                 continue;
             }
-            // EntityTeleport (0x4C) + EntityHeadLook (0x36)
             ByteWriter tp;
-            tp.varint(static_cast<std::int32_t>(mob.entity_id));
-            tp.f64(mob.pos.x);
-            tp.f64(mob.pos.y);
-            tp.f64(mob.pos.z);
-            tp.u8(net::angle_byte(mob.pos.yaw));
-            tp.u8(0);
-            tp.boolean(true);
+            net::writers::write_entity_teleport(tp, mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z,
+                                                mob.pos.yaw, 0.0f, true);
             hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
                                  tp.data());
             ByteWriter head;
-            head.varint(static_cast<std::int32_t>(mob.entity_id));
-            head.u8(net::angle_byte(mob.pos.yaw));
+            net::writers::write_entity_head_look(head, mob.entity_id, mob.pos.yaw);
             hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityHeadLook,
                                  head.data());
         }

@@ -155,6 +155,7 @@ if(CYANE_BUILD_TESTS)
     tests/test_generated.cpp
   tests/test_server.cpp
   tests/test_bytes.cpp
+  tests/test_packets.cpp
     tests/test_frame.cpp
     tests/test_json.cpp
     tests/test_status.cpp

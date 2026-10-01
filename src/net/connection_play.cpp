@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "cyane/core/log.hpp"
+#include "cyane/net/packet_writers.hpp"
 #include "connection_detail.hpp"
 #include "cyane/crypto/digest.hpp"
 #include "cyane/game/op_manager.hpp"
@@ -217,10 +218,8 @@ bool Connection::handle_play_animation(ByteSpan payload) {
     if (!cpos) {
         return true;
     }
-    // Animation (0x06)：varint entityId | byte hand
     ByteWriter out;
-    out.varint(static_cast<std::int32_t>(player_id_));
-    out.u8(static_cast<std::uint8_t>(*hand & 0xFF));
+    writers::write_animation(out, player_id_, static_cast<std::uint8_t>(*hand & 0xFF));
     const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
     context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
                                  proto::play_cb::kAnimation, out.data());
