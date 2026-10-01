@@ -217,9 +217,9 @@ bool Connection::handle_play_animation(ByteSpan payload) {
     if (!cpos) {
         return true;
     }
-    // Animation (0x06)：int entityId | byte hand
+    // Animation (0x06)：varint entityId | byte hand
     ByteWriter out;
-    out.i32(static_cast<std::int32_t>(player_id_));
+    out.varint(static_cast<std::int32_t>(player_id_));
     out.u8(static_cast<std::uint8_t>(*hand & 0xFF));
     const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
     context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,

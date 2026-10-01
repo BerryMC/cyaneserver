@@ -51,9 +51,9 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     if (!creative && (*status == 0 || *status == 1) && context_.hub != nullptr) {
         const auto cpos = world::ChunkPos::from_world(bx, bz);
         if (cpos) {
-            // BlockBreakAnimation (0x08)：int entityId | position | byte progress
+            // BlockBreakAnimation (0x08)：varint entityId | position | byte progress
             ByteWriter out;
-            out.i32(static_cast<std::int32_t>(player_id_));
+            out.varint(static_cast<std::int32_t>(player_id_));
             out.position(bx, by, bz);
             out.u8(*status == 0 ? 0 : 0xFF);
             const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
