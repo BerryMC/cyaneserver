@@ -444,6 +444,19 @@ void Server::tick() {
             hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityHeadLook,
                                  head.data());
         }
+        // 生物近战命中：走 hub 邮箱在目标连接线程扣血（受伤状态/击退/致死）
+        for (const auto& attack : mob_events.attacks) {
+            hub_->send_damage(attack.target_player, attack.damage, attack.x, attack.z);
+            // 攻击者的挥臂动画广播给附近玩家（受击者由 UpdateHealth 红闪感知）
+            ByteWriter anim;
+            net::writers::write_animation(anim, attack.mob_id, 0);
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(attack.x),
+                                                           static_cast<std::int32_t>(attack.z));
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kAnimation,
+                                     anim.data());
+            }
+        }
     }
 }
 

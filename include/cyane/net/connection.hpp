@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <random>
 #include <functional>
 #include <utility>
 #include <vector>
@@ -117,6 +118,8 @@ private:
     [[nodiscard]] bool handle_status(std::int32_t packet_id, ByteSpan payload);
     [[nodiscard]] bool handle_login(std::int32_t packet_id, ByteSpan payload);
     [[nodiscard]] bool handle_play(std::int32_t packet_id, ByteSpan payload);
+    // handle_play 的无兜底实现（异常在 handle_play 处捕获）
+    [[nodiscard]] bool handle_play_inner(std::int32_t packet_id, ByteSpan payload);
     [[nodiscard]] bool handle_play_keepalive(ByteSpan payload);
     [[nodiscard]] bool handle_play_position(std::int32_t packet_id, ByteSpan payload);
     [[nodiscard]] bool handle_play_entity_action(ByteSpan payload);
@@ -181,6 +184,15 @@ private:
                           std::uint16_t block_id, bool on);
     // 破坏 (x,y,z) 后，附着在它上面的按钮/拉杆失去支撑：一起破坏并掉落
     void break_unsupported_neighbors(std::int32_t x, std::int32_t y, std::int32_t z);
+    // UseEntity (0x0A)：type=1 攻击 → 生物掉血/击退/死亡掉落；挥臂动画广播
+    bool handle_play_use_entity(ByteSpan payload);
+    // 实体事件广播：自己 + 视距内其他人（受伤状态等 EntityStatus 事件）
+    void broadcast_entity_packet(ByteSpan packet, std::int32_t x, std::int32_t z);
+    // 在世界生成一个掉落物（供生物死亡掉落复用，绕过手持物品路径）
+    void spawn_dropped_item_at(double x, double y, double z, item::ItemStack stack);
+
+    // 生物攻击/爆炸命中玩家：扣血、受伤状态、击退、致死（由 mailbox 投递到本线程执行）
+    void apply_damage(float amount, double from_x, double from_z);
     void kill_player();
     void respawn_player();
     // 掉落物：生成、给自己补发已有、拾取入包

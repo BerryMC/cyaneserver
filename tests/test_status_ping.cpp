@@ -281,3 +281,69 @@ CYANE_TEST(integration_rejects_absurd_frame_length) {
 
     CYANE_CHECK(!client->receive_raw(1).has_value());
 }
+
+// 回归（R-022 期间实测）：空文本 + assumeCommand=true 的 TabComplete 曾让
+// handle_tab_complete 的 substr(1) 抛 out_of_range 并 terminate 整个进程。
+// 现在处理器有守卫 + handle_play 有异常兜底：连接最多被断，进程必须活着。
+CYANE_TEST(integration_malformed_tab_complete_does_not_kill_server) {
+    auto server = make_server("online_mode = false\n");
+    CYANE_CHECK(server != nullptr);
+    if (server == nullptr || !server->ready()) {
+        return;
+    }
+    const std::uint16_t port = server->bound_port();
+
+    auto client = cyane::test::TestClient::connect("127.0.0.1", port);
+    CYANE_CHECK(client.has_value());
+    if (!client) {
+        return;
+    }
+    cyane::Bytes request = handshake_frame(port, cyane::proto::kProtocolVersion, 2);
+    cyane::ByteWriter login;
+    login.string("Fuzzer");
+    cyane::append(request, frame_with(cyane::proto::login_sb::kLoginStart, login));
+    CYANE_CHECK(client->send_bytes(cyane::ByteSpan{request}));
+
+    // 读到 LoginSuccess（首包 SetCompression 未压缩，与既有登录测试一致）
+    auto first = client->receive_packet();
+    CYANE_CHECK(first.has_value());
+    bool entered = false;
+    if (first) {
+        cyane::ByteReader pr{*first};
+        if (pr.varint().value_or(-1) == cyane::proto::login_cb::kSetCompression) {
+            auto second = client->receive_compressed_packet();
+            if (second) {
+                cyane::ByteReader sr{*second};
+                entered = sr.varint().value_or(-1) == cyane::proto::login_cb::kSuccess;
+            }
+        }
+    }
+    CYANE_CHECK(entered);
+
+    // 畸形 TabComplete：text="" + assumeCommand=true（曾触发 substr 越界）
+    cyane::ByteWriter evil;
+    evil.string("");      // 空文本
+    evil.u8(1);           // assumeCommand=true
+    CYANE_CHECK(client->send_bytes(cyane::ByteSpan{frame_with(cyane::proto::play_sb::kTabComplete, evil)}));
+    // 混着再发一条合法的（防连接被断后仍"通过"）
+    cyane::ByteWriter hello;
+    hello.string("hi");
+    hello.u8(0);
+    CYANE_CHECK(client->send_bytes(cyane::ByteSpan{frame_with(cyane::proto::play_sb::kTabComplete, hello)}));
+
+    // 服务端必须仍然活着：status ping 能正常应答
+    auto prober = cyane::test::TestClient::connect("127.0.0.1", port);
+    CYANE_CHECK(prober.has_value());
+    if (!prober) {
+        return;
+    }
+    cyane::Bytes status_request = handshake_frame(port, cyane::proto::kProtocolVersion, 1);
+    cyane::append(status_request, frame_with(cyane::proto::status_sb::kRequest, {}));
+    CYANE_CHECK(prober->send_bytes(cyane::ByteSpan{status_request}));
+    auto response = prober->receive_packet();
+    CYANE_CHECK(response.has_value());
+    if (response) {
+        cyane::ByteReader rr{*response};
+        CYANE_CHECK_EQ(rr.varint().value_or(-1), cyane::proto::status_cb::kResponse);
+    }
+}

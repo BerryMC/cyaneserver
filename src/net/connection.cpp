@@ -194,6 +194,10 @@ void Connection::drain_mailbox() {
             apply_remote_gamemode(static_cast<std::uint8_t>(msg.gamemode));
             continue;
         }
+        if (msg.damage > 0.0f) {
+            apply_damage(msg.damage, msg.damage_from_x, msg.damage_from_z);
+            continue;
+        }
         send_packet(msg.packet_id, ByteSpan{msg.payload});
     }
 }

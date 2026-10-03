@@ -38,6 +38,9 @@ struct HubMessage {
     Bytes payload;
     bool kill_flag{false};  // true：要求目标连接自杀（用于控制台 /kill）
     std::int32_t gamemode{-1};  // ≥0：要求目标连接切换游戏模式（更新行为并回发 PlayerAbilities）
+    float damage{0.0f};  // >0：生物攻击命中（扣血/受伤状态/击退），来源见 damage_from_x/z
+    double damage_from_x{0.0};
+    double damage_from_z{0.0};
 };
 
 // 线程安全的多人广播中心：连接跨 reactor 线程时也安全。
@@ -115,6 +118,19 @@ public:
         }
         std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
         it->second->mailbox.push_back(HubMessage{/*packet_id=*/0, Bytes{}, /*kill_flag=*/true});
+        return true;
+    }
+
+    // 生物攻击命中：要求目标连接扣血 + 受伤反馈（由对方 reactor 线程执行）
+    bool send_damage(std::uint32_t target_id, float amount, double from_x, double from_z) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = players_.find(target_id);
+        if (it == players_.end()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
+        it->second->mailbox.push_back(
+            HubMessage{0, Bytes{}, false, -1, amount, from_x, from_z});
         return true;
     }
 

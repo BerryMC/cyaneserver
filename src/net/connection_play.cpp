@@ -1,6 +1,7 @@
 #include "cyane/net/connection.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <array>
 #include <cctype>
 #include <charconv>
@@ -19,6 +20,17 @@
 namespace cyane::net {
 
 bool Connection::handle_play(std::int32_t packet_id, ByteSpan payload) {
+    // 兜底：处理器内部假设被畸形包打破时抛出的异常不允许传出（terminate 整个进程）。
+    // 正常路径零开销（异常只在出错时展开），出错最多断开该连接。
+    try {
+        return handle_play_inner(packet_id, payload);
+    } catch (const std::exception& error) {
+        log::warn("connection {} packet 0x{:02x} handler error: {}", fd(), packet_id, error.what());
+        return false;
+    }
+}
+
+bool Connection::handle_play_inner(std::int32_t packet_id, ByteSpan payload) {
     if (packet_id == proto::play_sb::kConfirmTeleport) {
         return true;
     }
@@ -59,6 +71,9 @@ bool Connection::handle_play(std::int32_t packet_id, ByteSpan payload) {
     }
     if (packet_id == proto::play_sb::kCloseWindow) {
         return handle_play_close_window(payload);
+    }
+    if (packet_id == proto::play_sb::kUseEntity) {
+        return handle_play_use_entity(payload);
     }
     if (packet_id == proto::play_sb::kAnimation) {
         return handle_play_animation(payload);
@@ -593,8 +608,8 @@ bool Connection::handle_tab_complete(ByteSpan payload) {
         *assume_command || (!text->empty() && text->at(0) == '/');
 
     if (command_mode) {
-        // 命令补全
-        const std::string cmd_text = text->substr(1); // 去掉 /
+        // 命令补全（文本可能为空：客户端对空命令框也会发 assumeCommand=true）
+        const std::string cmd_text = text->empty() ? "" : text->substr(1); // 去掉 /
         // 找到命令名
         const auto space = cmd_text.find_first_of(" \t");
         std::string cmd_name = cmd_text.substr(0, space);

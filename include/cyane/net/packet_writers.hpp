@@ -5,6 +5,7 @@
 // 修改任何字段顺序/宽度必须同步更新测试并对照 wiki.vg 1.12.2 事实。
 // entityId 一律 varint（EntityStatus 除外，协议规定 int）。
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -66,6 +67,20 @@ inline void write_spawn_mob(ByteWriter& out, std::uint32_t entity_id, std::int32
     out.i16(0);
     out.i16(0);
     out.u8(0xFF);  // 空 metadata
+}
+
+// EntityVelocity (0x3E)：varint id | short vx/vy/vz（单位 = 1/8000 格/tick）
+inline void write_entity_velocity(ByteWriter& out, std::uint32_t entity_id, double vx, double vy,
+                                  double vz) {
+    constexpr double kScale = 8000.0;
+    auto clamp_i16 = [](double v) {
+        const double clamped = std::clamp(v, -3.9, 3.9) * kScale;
+        return static_cast<std::int16_t>(clamped);
+    };
+    out.varint(static_cast<std::int32_t>(entity_id));
+    out.i16(clamp_i16(vx));
+    out.i16(clamp_i16(vy));
+    out.i16(clamp_i16(vz));
 }
 
 // EntityStatus (0x19)：int entityId | byte status（此包协议确为 int）
