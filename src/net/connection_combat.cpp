@@ -83,8 +83,11 @@ void Connection::respawn_player() {
     update_view(spawn_chunk.value_or(world::ChunkPos{0, 0}));
 
     // 同维度重生客户端不清世界：不补发实体（避免双份）；
-    // 他人端销毁旧实体后按新位置重发本玩家的 SpawnPlayer
+    // 他人端销毁旧实体后按新位置重发本玩家的 SpawnPlayer。
+    // broadcast_despawn 会把玩家从 hub 注销——必须重新注册，
+    // 否则重生后收不到任何广播（方块/实体/聊天），对他人也不可见。
     broadcast_despawn();
+    register_in_hub();
     broadcast_spawn();
 
     ++teleport_id_;
