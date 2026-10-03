@@ -56,6 +56,7 @@ struct StoredMob {
     double z{0.0};
     float yaw{0.0f};
     float pitch{0.0f};
+    float health{20.0f};
 };
 
 // 一个区块的方块实体（按方块位置键 pack_block_pos 索引）+ 实体

@@ -291,7 +291,9 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
 
     // 生成出生点附近的被动生物；存档已有生物时不再重复生成
     if (server->mobs_->size() == 0) {
-        server->mobs_->spawn_passive(12);
+        server->mobs_->spawn_passive(12, *server->world_,
+                                     static_cast<double>(context.spawn_x) + 0.5,
+                                     static_cast<double>(context.spawn_z) + 0.5);
     }
 
     server->network_ = std::make_unique<net::NetService>(
@@ -422,20 +424,23 @@ void Server::tick() {
     }
     if (mobs_ != nullptr) {
         const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
-        for (const auto& mob : mobs_->tick()) {
+        // 目标选择用玩家快照（本 tick 取一次，避免每个生物各扫一遍）
+        const auto players = hub_->others(net::kNoExclude);
+        const auto mob_events = mobs_->tick(*world_, players);
+        for (const auto& mob : mob_events.moved) {
             // 只发给生物所在区块视距内的玩家（远端客户端看不到该实体）
-            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(mob.pos.x),
-                                                           static_cast<std::int32_t>(mob.pos.z));
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(mob.x),
+                                                           static_cast<std::int32_t>(mob.z));
             if (!cpos) {
                 continue;
             }
             ByteWriter tp;
-            net::writers::write_entity_teleport(tp, mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z,
-                                                mob.pos.yaw, 0.0f, true);
+            net::writers::write_entity_teleport(tp, mob.entity_id, mob.x, mob.y, mob.z, mob.yaw, 0.0f,
+                                                true);
             hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
                                  tp.data());
             ByteWriter head;
-            net::writers::write_entity_head_look(head, mob.entity_id, mob.pos.yaw);
+            net::writers::write_entity_head_look(head, mob.entity_id, mob.yaw);
             hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityHeadLook,
                                  head.data());
         }

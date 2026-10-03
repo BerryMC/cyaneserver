@@ -322,6 +322,22 @@ void Connection::take_craft_result(bool all) {
     }
 }
 
+void Connection::consume_held_item() {
+    if (context_.game_mode == proto::game_mode::kCreative) {
+        return;
+    }
+    const std::size_t hs = item::PlayerInventory::hotbar_slot(selected_slot_);
+    item::ItemStack after = inventory_.hotbar_item(selected_slot_);
+    if (after.count > 0) {
+        --after.count;
+    }
+    if (after.count == 0) {
+        after = item::ItemStack::air();
+    }
+    inventory_.set_slot(hs, after);
+    send_slot(0, static_cast<std::int16_t>(hs), after);
+}
+
 void Connection::send_slot(std::int8_t window_id, std::int16_t slot, const item::ItemStack& item) {
     // SetSlot (0x16)：byte windowId | short slot | slot data
     ByteWriter fields;

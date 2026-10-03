@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <vector>
 
 #include "connection_detail.hpp"
@@ -10,6 +11,7 @@
 #include "cyane/item/item_traits.hpp"
 #include "cyane/world/block_drops.hpp"
 #include "cyane/world/block_sounds.hpp"
+#include "cyane/world/mob_types.hpp"
 #include "cyane/world/chunk_codec.hpp"
 
 namespace cyane::net {
@@ -287,6 +289,16 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         }
     }
     const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
+    // 刷怪蛋：点击面外侧的格子生成生物（damage 即实体类型 id）
+    if (const auto egg = world::spawn_egg_type(held.id, held.damage)) {
+        const auto delta = world::face_delta(*face);
+        if (spawn_mob_at(*egg, static_cast<double>(cx + delta.dx) + 0.5,
+                         static_cast<double>(cy + delta.dy),
+                         static_cast<double>(cz + delta.dz) + 0.5, player_pos_.yaw + 180.0f)) {
+            consume_held_item();
+        }
+        return true;
+    }
     // 手持食物且未满血：进食优先于放置（1.12 右键食物即食用）
     if (item::food_heal(held.id) && health_ < 20.0f) {
         (void)eat_held_food();
@@ -345,14 +357,7 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         // 上半：meta 0x8 标上半 + 同朝向
         set_block_and_broadcast(tx, ty + 1, tz, static_cast<std::uint16_t>((did << 4) | 0x08 | facing));
         // 上半放置后跳过后续通用放置（已处理）
-        if (context_.game_mode != proto::game_mode::kCreative) {
-            const std::size_t hs = item::PlayerInventory::hotbar_slot(selected_slot_);
-            item::ItemStack after = held;
-            if (after.count > 0) { --after.count; }
-            if (after.count == 0) { after = item::ItemStack::air(); }
-            inventory_.set_slot(hs, after);
-            send_slot(0, static_cast<std::int16_t>(hs), after);
-        }
+        consume_held_item();
         return true;
     }
     set_block_and_broadcast(tx, ty, tz, state);
@@ -377,18 +382,7 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         context_.furnaces->ensure(detail::block_key(tx, ty, tz));
     }
     // 生存模式消耗一个手持方块并回发该槽（创造模式无限）
-    if (context_.game_mode != proto::game_mode::kCreative) {
-        const std::size_t hs = item::PlayerInventory::hotbar_slot(selected_slot_);
-        item::ItemStack after = held;
-        if (after.count > 0) {
-            --after.count;
-        }
-        if (after.count == 0) {
-            after = item::ItemStack::air();
-        }
-        inventory_.set_slot(hs, after);
-        send_slot(0, static_cast<std::int16_t>(hs), after);
-    }
+    consume_held_item();
     return true;
 }
 
@@ -399,15 +393,7 @@ bool Connection::eat_held_food() {
         return false;
     }
     // 消耗 1 个（创造模式不消耗）
-    if (context_.game_mode != proto::game_mode::kCreative) {
-        const std::size_t hs = item::PlayerInventory::hotbar_slot(selected_slot_);
-        item::ItemStack after = held;
-        if (--after.count == 0) {
-            after = item::ItemStack::air();
-        }
-        inventory_.set_slot(hs, after);
-        send_slot(0, static_cast<std::int16_t>(hs), after);
-    }
+    consume_held_item();
     health_ = std::min(20.0f, health_ + static_cast<float>(*heal));
     cyane::ByteWriter out;
     out.f32(health_);
@@ -418,7 +404,18 @@ bool Connection::eat_held_food() {
 }
 
 bool Connection::handle_play_use_item(ByteSpan payload) {
-    (void)payload;  // 1.12.2: varint hand，进食逻辑只关心手持物品
+    (void)payload;  // 1.12.2: varint hand，只关心手持物品
+    const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
+    // 刷怪蛋：对空使用 → 生成在视线前方 1.5 格（vanilla 是射线打到地面处，简化等价）
+    if (const auto egg = world::spawn_egg_type(held.id, held.damage)) {
+        constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+        const double yaw = static_cast<double>(player_pos_.yaw) * kDegToRad;
+        if (spawn_mob_at(*egg, player_pos_.x - std::sin(yaw) * 1.5, player_pos_.y,
+                         player_pos_.z + std::cos(yaw) * 1.5, player_pos_.yaw + 180.0f)) {
+            consume_held_item();
+        }
+        return true;
+    }
     (void)eat_held_food();  // 吃不下（满血/非食物）不算协议错误——返回 false 会断连
     return true;
 }

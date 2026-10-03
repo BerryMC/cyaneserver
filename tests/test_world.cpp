@@ -376,13 +376,14 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
 
     {
         // 实体条目用原版字段名：小写 id + Pos 列表（与方块实体的 x/y/z 不同）
-        nbt::Compound zombie_fields;
-        zombie_fields.emplace_back("Pos", nbt::make_list(nbt::List{
+        // 末影人：不在物种表里 → 保存时必须原样透传
+        nbt::Compound enderman_fields;
+        enderman_fields.emplace_back("Pos", nbt::make_list(nbt::List{
             nbt::Value{nbt::Tag::f64, 100.0},
             nbt::Value{nbt::Tag::f64, 5.0},
             nbt::Value{nbt::Tag::f64, 100.0}}));
-        zombie_fields.emplace_back("id",
-                                   nbt::Value{nbt::Tag::string, std::string{"minecraft:zombie"}});
+        enderman_fields.emplace_back("id",
+                                     nbt::Value{nbt::Tag::string, std::string{"minecraft:enderman"}});
         nbt::Compound old_item_fields;
         old_item_fields.emplace_back("Item", nbt::Value{nbt::Tag::compound, nbt::Compound{}});
         old_item_fields.emplace_back("id",
@@ -395,7 +396,7 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
             nbt::Value{nbt::Tag::f64, 7.0}}));
         vanilla_pig.emplace_back("id", nbt::Value{nbt::Tag::string, std::string{"minecraft:pig"}});
         nbt::List entity_list;
-        entity_list.push_back(nbt::make_compound(std::move(zombie_fields)));
+        entity_list.push_back(nbt::make_compound(std::move(enderman_fields)));
         entity_list.push_back(nbt::make_compound(std::move(old_item_fields)));
         entity_list.push_back(nbt::make_compound(std::move(vanilla_pig)));
         nbt::Compound level;
@@ -434,20 +435,26 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
             level_v != nullptr ? level_v->find("Entities") : nullptr;
         const auto* ents = ents_v != nullptr ? ents_v->get_if<nbt::List>() : nullptr;
         CYANE_CHECK(ents != nullptr);
-        bool zombie_kept = false;
+        // 末影人不在物种表里 → 原样透传；僵尸已建模（R-022 起）→ 由内存态接管
+        bool enderman_kept = false;
+        bool zombie_dropped = true;
         bool pig_rewritten = false;
         for (const auto& entry : *ents) {
             const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
+            if (id && *id == "minecraft:enderman") {
+                enderman_kept = true;
+            }
             if (id && *id == "minecraft:zombie") {
-                zombie_kept = true;
+                zombie_dropped = false;  // 建模后不再透传（内存态里没有就消失）
             }
             if (id && *id == "minecraft:cow") {
                 pig_rewritten = true;
             }
         }
-        CYANE_CHECK(zombie_kept);
+        CYANE_CHECK(enderman_kept);
+        CYANE_CHECK(zombie_dropped);
         CYANE_CHECK(pig_rewritten);
-        CYANE_CHECK_EQ(ents->size(), std::size_t{3});  // 僵尸 + 牛 + 内存态物品
+        CYANE_CHECK_EQ(ents->size(), std::size_t{3});  // 末影人 + 牛 + 内存态物品
     }
 }
 

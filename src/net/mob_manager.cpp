@@ -1,89 +1,308 @@
 #include "cyane/net/mob_manager.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <random>
+
+#include "cyane/world/mob_types.hpp"
 
 namespace cyane::net {
 namespace {
 
+constexpr double kPi = 3.14159265358979323846;
+
 // 1.12.2 被动生物类型 id
 constexpr std::array<std::int32_t, 4> kPassiveTypes = {90, 91, 92, 93};  // 猪 羊 牛 鸡
-
-std::uint32_t default_next_id() {
-    static std::atomic<std::uint32_t> next{1000};  // 与玩家实体 id 空间错开
-    return next.fetch_add(1, std::memory_order_relaxed);
-}
+constexpr std::int32_t kHostileScanInterval = 10;  // 目标扫描节流：每 0.5s
+constexpr std::int32_t kAttackIntervalTicks = 20;  // 近战挥击冷却（vanilla 20 tick）
 
 std::mt19937& rng() {
     thread_local std::mt19937 engine{std::random_device{}()};
     return engine;
 }
 
-std::uniform_real_distribution<double> dist01{0.0, 1.0};
+[[nodiscard]] double rand01() {
+    return std::uniform_real_distribution<double>(0.0, 1.0)(rng());
+}
+
+[[nodiscard]] std::int32_t rand_ticks(std::int32_t lo, std::int32_t hi) {
+    return std::uniform_int_distribution<std::int32_t>(lo, hi)(rng());
+}
+
+// 朝 (dir_x, dir_z) 的水平朝向（vanilla：0° 朝 +Z，90° 朝 -X）
+[[nodiscard]] float yaw_for(double dir_x, double dir_z) noexcept {
+    return static_cast<float>(std::atan2(-dir_x, dir_z) * 180.0 / kPi);
+}
+
+[[nodiscard]] std::uint32_t nearest_hostile_target(std::span<const PlayerSnapshot> players,
+                                                   const Mob& mob, double range) {
+    std::uint32_t best = 0;
+    double best_sq = range * range;
+    for (const auto& player : players) {
+        const double dy = std::abs(player.y - mob.pos.y);
+        if (dy > 4.0) {
+            continue;
+        }
+        const double dx = player.x - mob.pos.x;
+        const double dz = player.z - mob.pos.z;
+        const double dist_sq = dx * dx + dz * dz;
+        if (dist_sq < best_sq) {
+            best_sq = dist_sq;
+            best = player.entity_id;
+        }
+    }
+    return best;
+}
 
 }  // namespace
 
-void MobManager::spawn_passive(std::size_t count) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto& random = rng();
+void MobManager::spawn_passive(std::size_t count, world::World& world, double center_x,
+                               double center_z) {
     for (std::size_t i = 0; i < count; ++i) {
-        Mob m;
-        m.entity_id = default_next_id();
-        m.type = kPassiveTypes[static_cast<std::size_t>(dist01(random) * 3.999)];
-        // 出生点半径 4..kWanderRadius 内随机
-        const double angle = dist01(random) * 6.28318530718;
-        const double radius = 4.0 + dist01(random) * (kWanderRadius - 4.0);
-        m.pos.x = 0.5 + std::cos(angle) * radius;
-        m.pos.z = 0.5 + std::sin(angle) * radius;
-        m.pos.y = kSpawnY;
-        m.pos.yaw = static_cast<float>(dist01(random) * 360.0);
-        m.walking = false;
-        m.state_ticks = static_cast<std::int32_t>(dist01(random) * 100.0) + 20;
-        mobs_.push_back(m);
+        const double angle = rand01() * 2.0 * kPi;
+        const double radius = 4.0 + rand01() * (kWanderRadius - 4.0);
+        const double x = center_x + std::cos(angle) * radius;
+        const double z = center_z + std::sin(angle) * radius;
+        const auto ground = world.surface_y(static_cast<std::int32_t>(std::floor(x)),
+                                            static_cast<std::int32_t>(std::floor(z)));
+        const auto type = kPassiveTypes[static_cast<std::size_t>(rand01() * 3.999)];
+        (void)spawn(type, x, static_cast<double>(ground), z, static_cast<float>(rand01() * 360.0));
     }
 }
 
-std::vector<Mob> MobManager::tick() {
-    std::vector<Mob> moved;
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto& random = rng();
-    for (auto& m : mobs_) {
-        if (m.state_ticks > 0) {
-            --m.state_ticks;
-        }
-        if (m.state_ticks == 0) {
-            // 状态切换：60% 概率开始漫游，否则停留 1-4 秒
-            if (dist01(random) < 0.6) {
-                const double angle = dist01(random) * 6.28318530718;
-                m.dir_x = std::cos(angle);
-                m.dir_z = std::sin(angle);
-                m.walking = true;
-                m.state_ticks = static_cast<std::int32_t>(dist01(random) * 60.0) + 20;
-            } else {
-                m.walking = false;
-                m.state_ticks = static_cast<std::int32_t>(dist01(random) * 80.0) + 20;
-            }
-        }
-        if (!m.walking) {
+std::uint32_t MobManager::spawn(std::int32_t type, double x, double y, double z, float yaw) {
+    const auto species = world::mob_type(type);
+    if (!species) {
+        return 0;
+    }
+    Mob mob;
+    mob.entity_id = entity::allocate_entity_id();
+    mob.type = type;
+    mob.pos = entity::Position{x, y, z, yaw, 0.0f};
+    mob.health = species->health;
+    mob.home_x = x;
+    mob.home_z = z;
+    mob.state_ticks = rand_ticks(20, 100);
+    std::lock_guard<std::mutex> lock{mutex_};
+    mobs_.push_back(std::move(mob));
+    return mobs_.back().entity_id;
+}
+
+MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double from_z) {
+    std::lock_guard<std::mutex> lock{mutex_};
+    for (std::size_t i = 0; i < mobs_.size(); ++i) {
+        Mob& mob = mobs_[i];
+        if (mob.entity_id != id) {
             continue;
         }
-        // 出生点边界回拉
-        const double dist_sq = m.pos.x * m.pos.x + m.pos.z * m.pos.z;
-        if (dist_sq > kWanderRadius * kWanderRadius) {
-            const double back = std::sqrt(dist_sq);
-            m.dir_x = -m.pos.x / back;
-            m.dir_z = -m.pos.z / back;
-            m.pos.yaw = static_cast<float>(std::atan2(-m.dir_x, m.dir_z) * 180.0 / 3.14159265358979);
+        MobHurt out;
+        out.found = true;
+        out.x = mob.pos.x;
+        out.y = mob.pos.y;
+        out.z = mob.pos.z;
+        mob.health -= amount;
+        if (mob.health > 0.0f) {
+            out.health = mob.health;
+            // 击退：沿攻击者→生物方向推开（水平），并给被动生物一个逃窜状态
+            double dx = mob.pos.x - from_x;
+            double dz = mob.pos.z - from_z;
+            const double len = std::sqrt(dx * dx + dz * dz);
+            if (len < 1e-4) {
+                dx = 0.0;
+                dz = 0.0;
+            } else {
+                dx /= len;
+                dz /= len;
+            }
+            mob.velocity_x += dx * 0.4;
+            mob.velocity_z += dz * 0.4;
+            const auto species = world::mob_type(mob.type);
+            if (species && !species->hostile) {
+                mob.ai = MobAi::retreat;
+                mob.state_ticks = rand_ticks(60, 100);
+                mob.dir_x = dx;
+                mob.dir_z = dz;
+            }
+            return out;
         }
-        m.pos.x += m.dir_x * kWanderSpeed;
-        m.pos.z += m.dir_z * kWanderSpeed;
-        if (m.walking && m.state_ticks % 10 == 0) {
-            // 移动中缓慢更新朝向（每 0.5s 与方向同步）
-            m.pos.yaw = static_cast<float>(std::atan2(-m.dir_x, m.dir_z) * 180.0 / 3.14159265358979);
-        }
-        moved.push_back(m);
+        out.died = true;
+        out.health = 0.0f;
+        (void)remove_locked(id);
+        return out;
     }
-    return moved;
+    return {};
 }
 
+bool MobManager::remove_locked(std::uint32_t id) {
+    for (std::size_t i = 0; i < mobs_.size(); ++i) {
+        if (mobs_[i].entity_id == id) {
+            mobs_[i] = mobs_.back();
+            mobs_.pop_back();
+            return true;
+        }
+    }
+    return false;
 }
+
+MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapshot> players) {
+    MobTickResult result;
+    std::lock_guard<std::mutex> lock{mutex_};
+    for (auto& mob : mobs_) {
+        const auto species = world::mob_type(mob.type);
+        if (!species) {
+            continue;
+        }
+        if (mob.state_ticks > 0) {
+            --mob.state_ticks;
+        }
+        if (mob.attack_cooldown > 0) {
+            --mob.attack_cooldown;
+        }
+
+        // 敌对：周期性重选目标（打不到就放弃）；被动：受击才逃窜
+        if (species->hostile) {
+            if (mob.scan_ticks > 0) {
+                --mob.scan_ticks;
+            } else {
+                mob.scan_ticks = kHostileScanInterval;
+                const auto target =
+                    nearest_hostile_target(players, mob, static_cast<double>(species->follow_range));
+                if (target == 0) {
+                    if (mob.ai == MobAi::chase) {
+                        mob.ai = MobAi::idle;
+                        mob.state_ticks = rand_ticks(20, 60);
+                    }
+                } else {
+                    mob.target_player = target;
+                    if (mob.ai != MobAi::chase) {
+                        mob.ai = MobAi::chase;
+                    }
+                }
+            }
+        }
+
+        double step_x = 0.0;
+        double step_z = 0.0;
+        const auto walk = [&](double dir_x, double dir_z, double speed_scale) {
+            const double len = std::sqrt(dir_x * dir_x + dir_z * dir_z);
+            if (len < 1e-6) {
+                return;
+            }
+            const double speed = static_cast<double>(species->speed) * speed_scale;
+            step_x = dir_x / len * speed;
+            step_z = dir_z / len * speed;
+            mob.pos.yaw = yaw_for(dir_x, dir_z);
+        };
+
+        switch (mob.ai) {
+            case MobAi::idle:
+                if (mob.state_ticks <= 0) {
+                    if (rand01() < 0.6) {
+                        const double angle = rand01() * 2.0 * kPi;
+                        mob.dir_x = std::cos(angle);
+                        mob.dir_z = std::sin(angle);
+                        mob.ai = MobAi::wander;
+                        mob.state_ticks = rand_ticks(20, 80);
+                    } else {
+                        mob.state_ticks = rand_ticks(20, 100);
+                    }
+                }
+                break;
+            case MobAi::wander: {
+                if (mob.state_ticks <= 0) {
+                    mob.ai = MobAi::idle;
+                    mob.state_ticks = rand_ticks(20, 100);
+                    break;
+                }
+                // 远离生成点则折返（避免越走越远）
+                const double dx = mob.pos.x - mob.home_x;
+                const double dz = mob.pos.z - mob.home_z;
+                if (dx * dx + dz * dz > kWanderRadius * kWanderRadius) {
+                    mob.dir_x = -dx;
+                    mob.dir_z = -dz;
+                }
+                walk(mob.dir_x, mob.dir_z, kWanderSpeedScale);
+                break;
+            }
+            case MobAi::retreat:
+                if (mob.state_ticks <= 0) {
+                    mob.ai = MobAi::idle;
+                    mob.state_ticks = rand_ticks(20, 100);
+                    break;
+                }
+                walk(mob.dir_x, mob.dir_z, kRetreatSpeedScale);
+                break;
+            case MobAi::chase: {
+                const PlayerSnapshot* target = nullptr;
+                for (const auto& player : players) {
+                    if (player.entity_id == mob.target_player) {
+                        target = &player;
+                        break;
+                    }
+                }
+                if (target == nullptr) {
+                    mob.ai = MobAi::idle;
+                    mob.target_player = 0;
+                    mob.state_ticks = rand_ticks(20, 60);
+                    break;
+                }
+                const double dx = target->x - mob.pos.x;
+                const double dz = target->z - mob.pos.z;
+                const double dist = std::sqrt(dx * dx + dz * dz);
+                // 近战：进入攻击距离后停下挥击（冷却由 Server 侧事件落地）
+                if (dist > static_cast<double>(species->attack_range)) {
+                    mob.dir_x = dx;
+                    mob.dir_z = dz;
+                    walk(mob.dir_x, mob.dir_z, 1.0);
+                } else {
+                    mob.pos.yaw = yaw_for(dx, dz);
+                    if (mob.attack_cooldown <= 0) {
+                        mob.attack_cooldown = kAttackIntervalTicks;
+                        result.attacks.push_back(MobAttack{mob.entity_id, target->entity_id,
+                                                           species->attack_damage, mob.pos.x,
+                                                           mob.pos.z});
+                    }
+                }
+                break;
+            }
+        }
+
+        // 物理：重力 + 击退动量 + AI 位移，逐轴推进
+        mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y + world::kEntityGravity);
+        double dx = step_x + mob.velocity_x;
+        double dy = mob.velocity_y;
+        double dz = step_z + mob.velocity_z;
+        auto box = world::entity_box(mob.pos.x, mob.pos.y, mob.pos.z, species->width, species->height);
+        const auto before = mob.pos;
+        const auto outcome = world::move_with_collision(world, box, dx, dy, dz, 1.0);
+        mob.pos.x = (box.min_x + box.max_x) * 0.5;
+        mob.pos.y = box.min_y;
+        mob.pos.z = (box.min_z + box.max_z) * 0.5;
+        mob.on_ground = outcome.on_ground;
+        if (outcome.on_ground) {
+            mob.velocity_y = 0.0;
+        }
+        const bool hit_knock = outcome.blocked_x || outcome.blocked_z;
+        // 击退动量衰减；撞墙即止
+        mob.velocity_x = hit_knock ? 0.0 : mob.velocity_x * 0.6;
+        mob.velocity_z = hit_knock ? 0.0 : mob.velocity_z * 0.6;
+        if (std::abs(mob.velocity_x) < 0.001) {
+            mob.velocity_x = 0.0;
+        }
+        if (std::abs(mob.velocity_z) < 0.001) {
+            mob.velocity_z = 0.0;
+        }
+
+        const double moved_sq = (mob.pos.x - before.x) * (mob.pos.x - before.x) +
+                                (mob.pos.y - before.y) * (mob.pos.y - before.y) +
+                                (mob.pos.z - before.z) * (mob.pos.z - before.z);
+        if (moved_sq > 1e-8) {
+            result.moved.push_back(MobMove{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z,
+                                           mob.pos.yaw});
+        }
+    }
+    return result;
+}
+
+}  // namespace cyane::net

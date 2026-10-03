@@ -229,7 +229,8 @@ Result<std::size_t> WorldPersistence::load() {
                     restored_mobs.reserve(decoded->entities.mobs.size());
                     for (const auto& mob : decoded->entities.mobs) {
                         restored_mobs.push_back(
-                            net::MobState{mob.type, mob.x, mob.y, mob.z, mob.yaw, mob.pitch});
+                            net::MobState{mob.type, mob.x, mob.y, mob.z, mob.yaw, mob.pitch,
+                                          mob.health});
                     }
                     mobs_.restore(restored_mobs);
                     mob_chunks_.emplace(pos.x, pos.z);
@@ -333,7 +334,7 @@ Result<std::size_t> WorldPersistence::save() {
         write_set.emplace(pos->x, pos->z);
         mob_chunks_.emplace(pos->x, pos->z);
         chunks[{pos->x, pos->z}].entities.mobs.push_back(
-            world::StoredMob{mob.type, mob.x, mob.y, mob.z, mob.yaw, mob.pitch});
+            world::StoredMob{mob.type, mob.x, mob.y, mob.z, mob.yaw, mob.pitch, mob.health});
     }
 
     // 实体曾存在的区块无条件重写：拾取/漫游离开后清除磁盘旧副本

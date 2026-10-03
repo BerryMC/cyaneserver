@@ -111,6 +111,52 @@ struct BlockFaceDelta {
     return support.dx == dx && support.dy == dy && support.dz == dz;
 }
 
+// 实体碰撞用：该方块是否阻挡移动。默认固体，逐项排除无碰撞盒的方块
+// （气体/液体/花草/线缆/轨道/火把/压力板/按钮拉杆/告示牌/作物/传送门/地毯等）。
+[[nodiscard]] constexpr bool is_solid(std::uint16_t state) noexcept {
+    switch (block_id(state)) {
+        case 0:              // 空气
+        case 6:              // 树苗
+        case 8: case 9:      // 水
+        case 10: case 11:    // 岩浆
+        case 27: case 28:    // 铁轨
+        case 31:             // 草
+        case 32:             // 枯灌木
+        case 34: case 36:    // 活塞头 / 移动中的活塞
+        case 37: case 38:    // 花
+        case 39: case 40:    // 蘑菇
+        case 50:             // 火把
+        case 51:             // 火
+        case 55:             // 红石线
+        case 59:             // 小麦
+        case 63: case 68:    // 告示牌
+        case 65:             // 梯子
+        case 69:             // 拉杆
+        case 70: case 72: case 147: case 148:  // 压力板
+        case 75: case 76:    // 红石火把
+        case 77: case 143:   // 按钮
+        case 78:             // 雪层
+        case 83:             // 甘蔗
+        case 90: case 119:   // 传送门
+        case 104: case 105:  // 西瓜/南瓜茎
+        case 106:            // 藤蔓
+        case 111:            // 睡莲
+        case 115:            // 地狱疣
+        case 127:            // 可可豆
+        case 131: case 132:  // 绊线钩 / 绊线
+        case 140:            // 花盆
+        case 141: case 142:  // 胡萝卜 / 马铃薯
+        case 157:            // 激活铁轨
+        case 171:            // 地毯
+        case 175:            // 双植
+        case 176: case 177:  // 旗帜
+        case 244:            // 甜菜
+            return false;
+        default:
+            return true;
+    }
+}
+
 inline constexpr std::size_t kSectionBlockCount = 16 * 16 * 16;
 inline constexpr std::size_t kLightArrayBytes = kSectionBlockCount / 2;
 

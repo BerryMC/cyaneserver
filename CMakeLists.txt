@@ -167,6 +167,7 @@ if(CYANE_BUILD_TESTS)
     tests/test_anvil.cpp
     tests/test_player_data.cpp
     tests/test_world.cpp
+    tests/test_mobs.cpp
   )
   target_include_directories(cyane_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
   target_link_libraries(cyane_tests PRIVATE cyane::game)

@@ -191,6 +191,10 @@ private:
     void encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn, ByteWriter& out_meta) const;
     void send_existing_drops();
     void send_existing_mobs();
+    // 刷怪蛋：在指定位置生成生物并让附近玩家看到（返回是否生成成功）
+    bool spawn_mob_at(std::int32_t type, double x, double y, double z, float yaw);
+    // 生存模式消耗手持 1 个并回发该槽（创造模式不动）
+    void consume_held_item();
     // 玩家聊天命令处理
     bool handle_player_command(std::string_view text);
     // 发送聊天框反馈

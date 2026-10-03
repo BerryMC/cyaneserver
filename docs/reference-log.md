@@ -213,3 +213,16 @@
 - 落地：`world/blocks.hpp`（`door_block_from_item` + `block_state_from_item` 扩门物品、`is_wooden_door`/`is_door`/`is_button`/`is_lever`/`support_delta`/`supported_by`）、`world/block_drops.hpp`（门掉落门物品）、`net/block_ticks.{hpp,cpp}`（**世界级**按钮回弹调度，状态不在连接上，按下者断线也照常弹）、`connection_world.cpp`（放置/切换/破坏统一 door/button 判定；`break_unsupported_neighbors` 连带破坏+掉落）。
 - 测试：`door_items_map_to_door_blocks`、`door_drops_are_door_items`、`attached_block_support_directions`、`button_release_is_world_level`；探针活体验证：门物品放置出双半块、按下→（再次右键被忽略）→回弹音 id 109/0.3/0.5、断线后仍回弹、支撑破坏后按钮消失并掉出物品实体。
 - 旁注：`PlayerList.sendPacketNearby` 按玩家**当前坐标**的区块距离过滤广播目标，快照位置没更新的客户端收不到广播（探针自查时踩过）。
+
+### R-022 — 生物物种、刷怪蛋、实体物理参数（vanilla jar 对照）
+
+- 来源：`spigot-1.12.2` 的 `EntityTypes`/`Item` 静态注册（机械提取 id）、反编译各 `Entity*` 构造器与 `initAttributes()`、`EntitySkeletonAbstract`（射箭）、`EntityCreeper`（引信）、`PacketPlayOutSpawnEntityLiving`/`PacketPlayOutSpawnEntity`/`EntityTrackerEntry`（包格式与 object id）、vanilla server.jar 的 `assets/minecraft/loot_tables/entities/*.json`。
+- 结论（1.12.2）：
+  - **实体类型 id**（`EntityTypes` 注册自增）：苦力怕 50、骷髅 51、蜘蛛 52、僵尸 54；猪 90、羊 91、牛 92、鸡 93（与项目既有常量吻合）。SpawnMob(0x03) 用该 id；刷怪蛋 item **383** 的 damage 也是这个 id。
+  - **尺寸/血量/速度/攻击**（`setSize`/`initAttributes`）：僵尸 0.6×1.95、20 血、速度 0.23、近战 3.0、FOLLOW_RANGE 35；苦力怕 0.6×1.7、20 血、0.25、引信 30 tick、爆炸半径 3；骷髅 0.6×1.99、20 血、0.25（AttributeModifier 注入 0.3 概率加速，忽略）、射箭初速 1.6/间隔 20 tick/射程 15；蜘蛛 1.4×0.9、16 血、0.3、近战 2；猪 0.9×0.9、10 血；羊 0.9×1.3、8 血；牛 0.9×1.4、10 血；鸡 0.4×0.7、4 血。
+  - **掉落表**（loot_tables/entities）：僵尸 腐肉367×0–2 + 铁265/胡萝卜391/土豆392 各 2.5%；骷髅 箭262×0–2 + 骨352×0–2；苦力怕 火药289×0–2；蜘蛛 线287×0–2 + 蜘蛛眼375×0–1（仅玩家/驯服狼击杀，本服务端简化为无条件）；猪 排319×1–3；羊 羊肉423×1–2 + 毛方块35×1；牛 皮革334×0–2 + 牛肉363×1–3；鸡 羽毛288×0–2 + 生鸡肉365×1。
+  - **SpawnMob 0x03 字段序**（`PacketPlayOutSpawnEntityLiving.b`）：varint id | uuid(16) | varint type | f64 x/y/z | byte yaw/pitch/head | short vx/vy/vz | metadata（0xFF 终止）——与项目既有编码一致（黄金向量锁定）。
+  - **箭矢**：客户端 `SpawnObject` object id **60**（`EntityTrackerEntry` 对 `EntityArrow`/`EntityTippedArrow`/`EntitySpectralArrow` 均传 60），ObjectData = **射手实体 id**，速度 f=(mot×8000) clamp ±3.9；命中音 `entity.arrow.hit`(137)/`hit_player`(138)，射击音 `entity.arrow.shoot`(139)/`entity.skeleton.shoot`(407)。
+  - 音效 id（按 R-020 注册表序）：僵尸 485/484、骷髅 406/405、苦力怕 172/171、primed 173、蜘蛛 431/430、猪 354/353、羊 387/386、牛 168/167、鸡 164/162、玩家 367/366、爆炸 231、通用 233。
+- 落地：`world/mob_types.hpp`（物种表 + nbt↔type + 刷怪蛋映射）、`world/physics.hpp`（AABB 逐轴推进 + 上台阶 + 落地贴合；`blocks.hpp::is_solid` 非固体排除表）、`net/mob_manager.{hpp,cpp}`（血量/物理/AI 状态机 + 事件化 `tick(World, players)`；实体 id 统一走全局分配器，废除 1000+ 独立空间）、`net/packet_writers.hpp::write_spawn_mob`、连接侧刷怪蛋（点方块/对空两条路径）、`anvil.cpp` 改物种表（修"未知物种静默存成猪"）、`StoredMob`/`MobState` 增 `Health` 往返。
+- 测试：`tests/test_mobs.cpp`（物种表/刷怪蛋/碰撞表/落地/撞墙与上台阶/追击攻击/逃窜/受伤死亡/实体 id 同源/SpawnMob 黄金向量）。

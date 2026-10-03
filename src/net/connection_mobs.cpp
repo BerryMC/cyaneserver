@@ -1,31 +1,40 @@
 #include "cyane/net/connection.hpp"
 
+#include <algorithm>
+
 #include "cyane/net/mob_manager.hpp"
+#include "cyane/net/packet_writers.hpp"
 
 namespace cyane::net {
 
-namespace {
-// SpawnMob (0x03) 与移动广播共用：varint id | uuid(16) | varint type | x/y/z f64
-// | yaw i8 | pitch i8 | headPitch i8 | velocity 3×i16 | metadata(0xFF 空)
-void encode_spawn_mob(ByteWriter& out, const Mob& mob) {
-    out.varint(static_cast<std::int32_t>(mob.entity_id));
-    std::array<std::uint8_t, 16> uuid{};
-    uuid[15] = static_cast<std::uint8_t>(mob.entity_id & 0xFF);
-    uuid[14] = static_cast<std::uint8_t>((mob.entity_id >> 8) & 0xFF);
-    out.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid.data()), uuid.size()});
-    out.varint(mob.type);
-    out.f64(mob.pos.x);
-    out.f64(mob.pos.y);
-    out.f64(mob.pos.z);
-    out.u8(angle_byte(mob.pos.yaw));
-    out.u8(0);  // pitch
-    out.u8(angle_byte(mob.pos.yaw));  // headPitch
-    out.i16(0);
-    out.i16(0);
-    out.i16(0);
-    out.u8(0xFF);  // 空 metadata 终止符
+
+
+bool Connection::spawn_mob_at(std::int32_t type, double x, double y, double z, float yaw) {
+    if (context_.mobs == nullptr) {
+        return false;
+    }
+    const auto id = context_.mobs->spawn(type, x, y, z, yaw);
+    if (id == 0) {
+        return false;
+    }
+    const auto mob = context_.mobs->by_id(id);
+    if (!mob) {
+        return false;
+    }
+    ByteWriter spawn;
+    writers::write_spawn_mob(spawn, mob->entity_id, mob->type, mob->pos.x, mob->pos.y, mob->pos.z,
+                             mob->pos.yaw);
+    send_packet(proto::play_cb::kSpawnMob, spawn.data());
+    if (context_.hub != nullptr) {
+        if (const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(x),
+                                                           static_cast<std::int32_t>(z))) {
+            const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kSpawnMob, spawn.data());
+        }
+    }
+    return true;
 }
-}  // namespace
 
 void Connection::send_existing_mobs() {
     if (context_.mobs == nullptr) {
@@ -33,7 +42,8 @@ void Connection::send_existing_mobs() {
     }
     for (const auto& mob : context_.mobs->snapshot()) {
         ByteWriter spawn;
-        encode_spawn_mob(spawn, mob);
+        writers::write_spawn_mob(spawn, mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z,
+                                 mob.pos.yaw);
         send_packet(proto::play_cb::kSpawnMob, spawn.data());
     }
 }

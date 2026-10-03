@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "cyane/world/blocks.hpp"
+#include "cyane/world/mob_types.hpp"
 #include "cyane/world/nbt.hpp"
 
 namespace cyane::world {
@@ -24,10 +25,6 @@ constexpr std::string_view kItemEntityId = "minecraft:item";
 constexpr std::string_view kDispenserEntityId = "minecraft:dispenser";
 constexpr std::string_view kDropperEntityId = "minecraft:dropper";
 constexpr std::string_view kHopperEntityId = "minecraft:hopper";
-// 被动生物实体 id ↔ 1.12.2 SpawnMob 类型（90 猪 91 羊 92 牛 93 鸡）
-constexpr std::string_view kMobEntityIds[] = {"minecraft:pig", "minecraft:sheep",
-                                              "minecraft:cow", "minecraft:chicken"};
-constexpr std::int32_t kMobSpawnTypes[] = {90, 91, 92, 93};
 
 void compound_set(Compound& fields, std::string name, Value value) {
     for (auto& [key, existing] : fields) {
@@ -124,10 +121,9 @@ Value item_entity(const StoredEntity& entity) {
 // 最小集即可与原版互通：缺失字段（Age/Sheared/Attributes 等）由原版取默认值
 Value mob_entity(const StoredMob& mob) {
     Compound fields;
-    compound_set(fields, "id", nbt::make_string(std::string{kMobEntityIds
-                                                 [mob.type >= 90 && mob.type <= 93
-                                                      ? static_cast<std::size_t>(mob.type) - 90
-                                                      : 0]}));
+    const auto species = mob_type(mob.type);
+    compound_set(fields, "id",
+                 nbt::make_string(std::string{species ? species->nbt_id : "minecraft:pig"}));
     compound_set(fields, "Pos", nbt::make_list(List{nbt::make_f64(mob.x),
                                                     nbt::make_f64(mob.y),
                                                     nbt::make_f64(mob.z)}));
@@ -136,7 +132,7 @@ Value mob_entity(const StoredMob& mob) {
                                                        nbt::make_f64(0.0)}));
     compound_set(fields, "Rotation",
                  nbt::make_list(List{nbt::make_f32(mob.yaw), nbt::make_f32(mob.pitch)}));
-    compound_set(fields, "Health", nbt::make_f32(20.0F));
+    compound_set(fields, "Health", nbt::make_f32(mob.health));
     return nbt::make_compound(std::move(fields));
 }
 
@@ -177,35 +173,20 @@ bool read_item_entity(const Value& entry, StoredEntity& out) {
     return true;
 }
 
-// 判断实体类型是否由我们建模（载入/保存两侧统一管理）：item + 4 种被动生物
+// 判断实体类型是否由我们建模（载入/保存两侧统一管理）：item + 物种表里的生物
 [[nodiscard]] bool is_modeled_entity_id(std::string_view id) noexcept {
-    if (id == kItemEntityId) {
-        return true;
-    }
-    for (const auto mob_id : kMobEntityIds) {
-        if (id == mob_id) {
-            return true;
-        }
-    }
-    return false;
+    return id == kItemEntityId || mob_type_from_nbt(id).has_value();
 }
 
-[[nodiscard]] std::optional<std::int32_t> mob_spawn_type(std::string_view id) noexcept {
-    for (std::size_t i = 0; i < std::size(kMobEntityIds); ++i) {
-        if (id == kMobEntityIds[i]) {
-            return kMobSpawnTypes[i];
-        }
-    }
-    return std::nullopt;
-}
 
-// 解析一个生物实体条目（Pos + Rotation；Health 等运行时字段不持久化）
+
+// 解析一个生物实体条目（Pos + Rotation + Health；AI/速度等运行时状态不持久化）
 bool read_mob_entity(const Value& entry, StoredMob& out) {
     const auto id = entry.find("id") ? entry.find("id")->text() : std::nullopt;
     if (!id) {
         return false;
     }
-    const auto type = mob_spawn_type(*id);
+    const auto type = mob_type_from_nbt(*id);
     if (!type) {
         return false;
     }
@@ -237,6 +218,13 @@ bool read_mob_entity(const Value& entry, StoredMob& out) {
             if (const auto* pitch = (*rot_list)[1].get_if<float>()) {
                 out.pitch = *pitch;
             }
+        }
+    }
+    if (const Value* health = entry.find("Health"); health != nullptr) {
+        if (const auto* f = health->get_if<float>()) {
+            out.health = *f;
+        } else if (const auto* d = health->get_if<double>()) {
+            out.health = static_cast<float>(*d);
         }
     }
     return true;

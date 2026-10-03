@@ -5,6 +5,7 @@
 // 修改任何字段顺序/宽度必须同步更新测试并对照 wiki.vg 1.12.2 事实。
 // entityId 一律 varint（EntityStatus 除外，协议规定 int）。
 
+#include <array>
 #include <cstdint>
 #include <span>
 
@@ -42,6 +43,29 @@ inline void write_collect_item(ByteWriter& out, std::uint32_t collected, std::ui
     out.varint(static_cast<std::int32_t>(collected));
     out.varint(static_cast<std::int32_t>(collector));
     out.varint(static_cast<std::int32_t>(count));
+}
+
+// SpawnMob (0x03) / EntityLiving：varint id | uuid(16) | varint type | double x/y/z
+//   | byte yaw/pitch/head | short vx/vy/vz | metadata 终止符 0xFF
+// uuid 由实体 id 合成（本服务端不维护实体 UUID 表，客户端仅用它去重）
+inline void write_spawn_mob(ByteWriter& out, std::uint32_t entity_id, std::int32_t type, double x,
+                            double y, double z, float yaw) {
+    out.varint(static_cast<std::int32_t>(entity_id));
+    std::array<std::uint8_t, 16> uuid{};
+    uuid[15] = static_cast<std::uint8_t>(entity_id & 0xFF);
+    uuid[14] = static_cast<std::uint8_t>((entity_id >> 8) & 0xFF);
+    out.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid.data()), uuid.size()});
+    out.varint(type);
+    out.f64(x);
+    out.f64(y);
+    out.f64(z);
+    out.u8(angle_byte(yaw));
+    out.u8(0);           // pitch
+    out.u8(angle_byte(yaw));  // head pitch
+    out.i16(0);
+    out.i16(0);
+    out.i16(0);
+    out.u8(0xFF);  // 空 metadata
 }
 
 // EntityStatus (0x19)：int entityId | byte status（此包协议确为 int）
