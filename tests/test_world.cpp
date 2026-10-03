@@ -1,12 +1,14 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 
 #include "cyane/game/world_persistence.hpp"
 #include "cyane/net/container_store.hpp"
 #include "cyane/net/furnace_store.hpp"
 #include "cyane/net/item_drop.hpp"
 #include "cyane/proto/frame.hpp"
+#include "cyane/world/block_sounds.hpp"
 #include "cyane/world/level_dat.hpp"
 #include "cyane/world/nbt.hpp"
 #include "cyane/world/anvil.hpp"
@@ -18,9 +20,15 @@ namespace nbt = cyane::world::nbt;
 
 namespace {
 
+#ifdef CYANE_FIXTURE_DIR
+constexpr std::string_view kFixtureDir{CYANE_FIXTURE_DIR};
+#else
+constexpr std::string_view kFixtureDir{};
+#endif
+
 [[nodiscard]] std::filesystem::path fixture_path(const char* name) {
     for (const std::string& candidate :
-         {std::string{name}, std::string{"tests/fixtures/"} + name,
+         {std::string{kFixtureDir} + name, std::string{"tests/fixtures/"} + name,
           std::string{"../tests/fixtures/"} + name}) {
         if (std::filesystem::exists(candidate)) {
             return candidate;
@@ -439,4 +447,48 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
         CYANE_CHECK(pig_rewritten);
         CYANE_CHECK_EQ(ents->size(), std::size_t{3});  // 僵尸 + 牛 + 内存态物品
     }
+}
+
+// 音效名必须命中客户端注册表：1.12.2 只注册 click_on/click_off 变体，没有裸 .click；
+// 类别/音量/音高取自 vanilla 对应 Block* 类（按钮与拉杆 0.3 音量、按下 0.6 回弹 0.5）。
+CYANE_TEST(toggle_sound_matches_vanilla_registry) {
+    const auto stone_button = world::toggle_sound(77);
+    CYANE_CHECK(stone_button.has_value());
+    CYANE_CHECK_EQ(stone_button->on, std::string_view{"block.stone_button.click_on"});
+    CYANE_CHECK_EQ(stone_button->off, std::string_view{"block.stone_button.click_off"});
+    CYANE_CHECK_EQ(stone_button->volume, 0.3f);
+    CYANE_CHECK_EQ(stone_button->on_pitch, 0.6f);
+    CYANE_CHECK_EQ(stone_button->off_pitch, 0.5f);
+    CYANE_CHECK_EQ(stone_button->radius, 16);
+
+    const auto wood_button = world::toggle_sound(143);
+    CYANE_CHECK(wood_button.has_value());
+    CYANE_CHECK_EQ(wood_button->on, std::string_view{"block.wood_button.click_on"});
+    CYANE_CHECK_EQ(wood_button->off, std::string_view{"block.wood_button.click_off"});
+
+    const auto lever = world::toggle_sound(69);
+    CYANE_CHECK(lever.has_value());
+    CYANE_CHECK_EQ(lever->on, std::string_view{"block.lever.click"});
+    CYANE_CHECK_EQ(lever->off, std::string_view{"block.lever.click"});
+    CYANE_CHECK_EQ(lever->volume, 0.3f);
+
+    const auto wood_door = world::toggle_sound(64);
+    const auto iron_door = world::toggle_sound(71);
+    CYANE_CHECK(wood_door.has_value() && iron_door.has_value());
+    CYANE_CHECK_EQ(wood_door->on, std::string_view{"block.wooden_door.open"});
+    CYANE_CHECK_EQ(wood_door->off, std::string_view{"block.wooden_door.close"});
+    CYANE_CHECK_EQ(iron_door->on, std::string_view{"block.iron_door.open"});
+    CYANE_CHECK_EQ(iron_door->off, std::string_view{"block.iron_door.close"});
+
+    const auto trapdoor = world::toggle_sound(96);
+    const auto gate = world::toggle_sound(107);
+    CYANE_CHECK(trapdoor.has_value() && gate.has_value());
+    CYANE_CHECK_EQ(trapdoor->off, std::string_view{"block.wooden_trapdoor.close"});
+    CYANE_CHECK_EQ(gate->on, std::string_view{"block.fence_gate.open"});
+    CYANE_CHECK_EQ(gate->off, std::string_view{"block.fence_gate.close"});
+    CYANE_CHECK_EQ(gate->volume, 1.0f);
+    CYANE_CHECK_EQ(gate->radius, 64);
+
+    CYANE_CHECK(!world::toggle_sound(1).has_value());    // 石头
+    CYANE_CHECK(!world::toggle_sound(54).has_value());   // 箱子
 }

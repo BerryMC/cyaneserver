@@ -21,6 +21,11 @@ inline constexpr std::uint8_t kSpectator = 3;
 inline constexpr std::uint8_t kHardcoreFlag = 0x08;
 }
 
+// PacketPlayOutNamedSoundEffect 的 SoundCategory 序数（EnumSoundCategory 声明顺序）
+namespace sound_category {
+inline constexpr std::int32_t kBlocks = 4;
+}
+
 // PacketPlayOutAbilities 的 flags 位
 namespace abilities {
 inline constexpr std::uint8_t kInvulnerable = 0x01;

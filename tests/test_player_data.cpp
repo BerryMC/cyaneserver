@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 
 #include "cyane/game/player_data.hpp"
 #include "cyane/world/nbt.hpp"
@@ -10,13 +11,20 @@ namespace nbt = cyane::world::nbt;
 
 namespace {
 
+#ifdef CYANE_FIXTURE_DIR
+constexpr std::string_view kFixtureDir{CYANE_FIXTURE_DIR};
+#else
+constexpr std::string_view kFixtureDir{};
+#endif
+
 constexpr std::int16_t kApple = 260;
 constexpr std::int16_t kDiamondChestplate = 311;
 
 [[nodiscard]] std::filesystem::path fixture_path() {
-    for (const auto* candidate : {"vanilla_player_oracle.dat",
-                                  "tests/fixtures/vanilla_player_oracle.dat",
-                                  "../tests/fixtures/vanilla_player_oracle.dat"}) {
+    for (const std::string& candidate : {std::string{kFixtureDir} + "vanilla_player_oracle.dat",
+                                         std::string{"vanilla_player_oracle.dat"},
+                                         std::string{"tests/fixtures/vanilla_player_oracle.dat"},
+                                         std::string{"../tests/fixtures/vanilla_player_oracle.dat"}}) {
         if (std::filesystem::exists(candidate)) {
             return candidate;
         }

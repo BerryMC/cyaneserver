@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 #include "cyane/core/bytes.hpp"
 
@@ -48,6 +49,19 @@ inline void write_collect_item(ByteWriter& out, std::uint32_t collected, std::ui
 inline void write_entity_status(ByteWriter& out, std::uint32_t entity_id, std::uint8_t status) {
     out.i32(static_cast<std::int32_t>(entity_id));
     out.u8(status);
+}
+
+// Named Sound Effect (0x49)：string name | varint category | int x*8 y*8 z*8 | f32 vol | f32 pitch
+inline void write_named_sound(ByteWriter& out, std::string_view name, std::int32_t category,
+                              std::int32_t x, std::int32_t y, std::int32_t z, float volume,
+                              float pitch) {
+    out.string(name);
+    out.varint(category);
+    out.i32(x * 8 + 8);
+    out.i32(y * 8 + 8);
+    out.i32(z * 8 + 8);
+    out.f32(volume);
+    out.f32(pitch);
 }
 
 // DestroyEntities (0x32)：varint count | varint[] ids

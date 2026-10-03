@@ -187,3 +187,13 @@
   - 镐/斧/锹速度倍率：wood=2、stone=4、iron=6、diamond=8、gold=12（锹对泥土/沙/砾石类，斧对木类，镐对石/金属类）。
   - 交互方块 meta 开关位：拉杆(69) 0x8；活板门(96)/栅栏门(107) 0x4；木门(64) 0x4（上下半同翻）。
 - 落地：`item/item_tools.hpp`（工具识别/等级/速度）、`world/block_drops.hpp::harvest_rule + block_drops(state, tool)`、`connection_world.cpp`（右键切换方块 + 挖掘传入手持工具）。
+
+### R-020 — 交互方块音效（vanilla jar 对照修正）
+
+- 来源：`spigot-1.12.2` 反编译 `BlockButtonAbstract`/`BlockStoneButton`/`BlockWoodButton`/`BlockLever`/`BlockDoor`/`BlockTrapdoor`/`BlockFenceGate`；`javap` 读 `SoundEffects` 静态初始化与 `SoundCategory` 枚举序；`vanilla/{server,client}.jar` 的音效名字符串对照。
+- 结论（1.12.2）：
+  - 按钮与拉杆走 **Named Sound Effect (0x49)**：`SoundCategory.BLOCKS`（枚举序 **4**，序 0 是 MASTER），音量 **0.3F**。按钮按下 = `block.stone_button.click_on` / `block.wood_button.click_on`（音高 0.6），回弹 = 对应 `click_off`（音高 0.5）；拉杆始终 `block.lever.click`，音高开 0.6 / 关 0.5。
+  - 按钮音效名**只有 `click_on`/`click_off` 两个变体，没有裸 `.click`**；且木按钮是 `block.wood_button.*`（不是 `wooden_button`）。名字不在注册表内时客户端只记一条 `Unable to play unknown soundEvent` 后丢弃 → 该次交互无声。
+  - 门/活板门/栅栏门在 vanilla 走 **World Event (0x25)** 数字 id（`BlockDoor.e()/g()`、`BlockTrapdoor.a()`、`BlockFenceGate` 内的 1005–1014/1036/1037 常量），而非命名音效。
+- 落地：`world/block_sounds.hpp`（方向 → 名字/音量/音高/广播半径表）、`net/packet_writers.hpp::write_named_sound`、`proto/play_fields.hpp::sound_category::kBlocks`、`connection_world.cpp::send_block_sound`（统一 0x49，按原版半径广播：按钮/拉杆 16 格、门类 64 格）。门类改用 0x49 的 `open`/`close` 名而非 0x25 数字 id：听觉等价，尚未做字节级对齐。
+- 测试：`packet_named_sound_encodes_block_center`（黄金向量）、`toggle_sound_matches_vanilla_registry`。

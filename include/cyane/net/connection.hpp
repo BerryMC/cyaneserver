@@ -174,7 +174,7 @@ private:
     [[nodiscard]] bool merge_into_range(item::ItemStack& moving, std::size_t lo, std::size_t hi);
     // 手持食物且未满血：消耗 1 个并回血（返回是否进食）
     [[nodiscard]] bool eat_held_food();
-    // Named Sound Effect (0x49)：向视距内广播方块交互音效
+    // Named Sound Effect (0x49)：向 16 格内玩家（含自己）广播方块交互音效
     void send_block_sound(std::int32_t x, std::int32_t y, std::int32_t z,
                           std::uint16_t block_id, bool on);
     void kill_player();

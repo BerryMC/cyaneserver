@@ -151,7 +151,6 @@ if(CYANE_BUILD_TESTS)
     tests/test_log.cpp
     tests/test_time.cpp
     tests/test_crypto.cpp
-    tests/test_crypto.cpp
     tests/test_generated.cpp
   tests/test_server.cpp
   tests/test_bytes.cpp
@@ -170,6 +169,10 @@ if(CYANE_BUILD_TESTS)
   )
   target_include_directories(cyane_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
   target_link_libraries(cyane_tests PRIVATE cyane::game)
+  # 测试既要在构建目录里跑（CI/常规开发），也要在任意树外目录里跑：注入 fixture 绝对路径
+  target_compile_definitions(cyane_tests PRIVATE
+    CYANE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/"
+  )
   configure_file(
     tests/fixtures/vanilla_player_oracle.dat
     "${CMAKE_CURRENT_BINARY_DIR}/vanilla_player_oracle.dat"

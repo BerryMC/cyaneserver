@@ -8,6 +8,7 @@
 #include "cyane/core/log.hpp"
 #include "cyane/item/item_traits.hpp"
 #include "cyane/world/block_drops.hpp"
+#include "cyane/world/block_sounds.hpp"
 #include "cyane/world/chunk_codec.hpp"
 
 namespace cyane::net {
@@ -416,32 +417,22 @@ bool Connection::handle_play_use_item(ByteSpan payload) {
 
 void Connection::send_block_sound(std::int32_t x, std::int32_t y, std::int32_t z,
                                   std::uint16_t block_id, bool on) {
-    // Named Sound Effect (0x49)：string name | varint category | int x*8 y*8 z*8 | f32 vol | f32 pitch
-    const char* name;
-    if (block_id == 77) {
-        name = on ? "block.stone_button.click_on" : "block.stone_button.click_off";
-    } else if (block_id == 143) {
-        name = on ? "block.wood_button.click_on" : "block.wood_button.click_off";
-    } else if (block_id == 64 || block_id == 71) {
-        name = "block.wooden_door.open";
-    } else if (block_id == 107) {
-        name = "block.fence_gate.open";
-    } else if (block_id == 69) {
-        name = on ? "block.lever.click" : "block.lever.click";
-    } else if (block_id == 96) {
-        name = "block.wooden_trapdoor.open";
-    } else {
+    const auto sound = world::toggle_sound(block_id);
+    if (!sound) {
         return;
     }
     ByteWriter out;
-    out.string(name);
-    out.varint(0);  // category: master
-    out.i32(x * 8 + 8);
-    out.i32(y * 8 + 8);
-    out.i32(z * 8 + 8);
-    out.f32(1.0f);
-    out.f32(on ? 0.6f : 0.5f);
+    writers::write_named_sound(out, on ? sound->on : sound->off, proto::sound_category::kBlocks, x, y,
+                               z, sound->volume, on ? sound->on_pitch : sound->off_pitch);
     send_packet(proto::play_cb::kSoundEffect, out.data());
+    // 附近玩家也要听到（自己上面已单发，这里的 exclude 是自己）
+    if (context_.hub != nullptr) {
+        if (const auto cpos = world::ChunkPos::from_world(x, z)) {
+            const std::int32_t radius = std::max(1, sound->radius / 16);
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kSoundEffect, out.data());
+        }
+    }
 }
 
 void Connection::send_chunk(world::ChunkPos pos) {
