@@ -128,6 +128,10 @@ Result<bool> RegionFile::write_chunk(int cx, int cz, ByteSpan uncompressed) {
         write_u32(base, static_cast<std::uint32_t>(payload_size));
         base[4] = std::byte{kVersionZlib};
         std::memcpy(base + 5, compressed->data(), compressed->size());
+        for (std::size_t sc = old_loc; sc < old_loc + needed; ++sc) {
+            dirty_sectors_.insert(sc);
+        }
+        dirty_sectors_.insert(0);  // 位置表
         dirty_ = true;
         return true;
     }
@@ -153,12 +157,50 @@ Result<bool> RegionFile::write_chunk(int cx, int cz, ByteSpan uncompressed) {
     ts[1] = std::byte{static_cast<std::uint8_t>(now >> 16)};
     ts[2] = std::byte{static_cast<std::uint8_t>(now >> 8)};
     ts[3] = std::byte{static_cast<std::uint8_t>(now)};
+    for (std::size_t sc = sector; sc < sector + needed; ++sc) {
+        dirty_sectors_.insert(sc);
+    }
+    dirty_sectors_.insert(0);  // 位置表
+    dirty_sectors_.insert(1);  // 时间戳表
     dirty_ = true;
     return true;
 }
 
-Result<void> RegionFile::save(const std::filesystem::path& path) const {
+Result<void> RegionFile::save(const std::filesystem::path& path) {
     std::filesystem::create_directories(path.parent_path());
+    // 已有文件且只有部分扇区脏：pwrite 增量写入（vanilla/Cuberite 同策略）
+    std::error_code ec;
+    const bool file_exists = std::filesystem::exists(path, ec);
+    if (file_exists && !dirty_sectors_.empty()) {
+        std::FILE* fp = std::fopen(path.string().c_str(), "r+b");
+        if (fp == nullptr) {
+            return make_error(ErrorCode::io, "cannot open region for pwrite: " + path.string());
+        }
+        for (const auto sc : dirty_sectors_) {
+            const auto offset = sc * kSectorBytes;
+            if (offset + kSectorBytes > data_.size()) {
+                break;  // 越界保护（不应发生）
+            }
+            if (std::fseek(fp, static_cast<long>(offset), SEEK_SET) != 0 ||
+                std::fwrite(data_.data() + offset, 1, kSectorBytes, fp) != kSectorBytes) {
+                std::fclose(fp);
+                return make_error(ErrorCode::io, "pwrite sector failed: " + path.string());
+            }
+        }
+        // 文件可能因新分配扇区而增长：写入 data_ 尾部新增数据
+        std::fflush(fp);
+        std::fseek(fp, 0, SEEK_END);
+        const auto cur_size = static_cast<std::size_t>(std::ftell(fp));
+        if (cur_size < data_.size()) {
+            std::fwrite(data_.data() + cur_size, 1, data_.size() - cur_size, fp);
+        }
+        std::fclose(fp);
+        dirty_sectors_.clear();
+        dirty_ = false;
+        return {};
+    }
+
+    // 新文件或全量写入：tmp + rename 原子替换
     const auto tmp = path.string() + ".tmp";
     {
         std::ofstream out{tmp, std::ios::binary | std::ios::trunc};
@@ -171,11 +213,12 @@ Result<void> RegionFile::save(const std::filesystem::path& path) const {
             return make_error(ErrorCode::io, "cannot write region tmp file: " + tmp);
         }
     }
-    std::error_code ec;
     std::filesystem::rename(tmp, path, ec);
     if (ec) {
         return make_error(ErrorCode::io, "cannot replace region file: " + ec.message());
     }
+    dirty_sectors_.clear();
+    dirty_ = false;
     return {};
 }
 

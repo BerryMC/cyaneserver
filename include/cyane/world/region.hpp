@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <set>
 #include <span>
 #include <vector>
 
@@ -30,7 +31,8 @@ public:
     // 写入并压缩区块；返回 true 表示文件镜像已变化（需要 save）
     [[nodiscard]] Result<bool> write_chunk(int cx, int cz, ByteSpan uncompressed);
 
-    [[nodiscard]] Result<void> save(const std::filesystem::path& path) const;
+    // 增量落盘：只 pwrite 自上次 save 以来变化的扇区（vanilla / Cuberite 同策略）
+    [[nodiscard]] Result<void> save(const std::filesystem::path& path);
     [[nodiscard]] bool dirty() const noexcept { return dirty_; }
 
 private:
@@ -59,6 +61,8 @@ private:
     std::vector<std::byte> data_;
     std::vector<bool> used_;
     bool dirty_{false};
+    // 自上次 save 以来被 write_chunk 修改过的扇区号（含位置/时间戳头部扇区）
+    std::set<std::size_t> dirty_sectors_;
 };
 
 } // namespace cyane::world
