@@ -136,8 +136,9 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     }
     set_block_and_broadcast(bx, by, bz, world::kStateAir);
     if (!creative && context_.item_drops != nullptr && prev != world::kStateAir) {
-        // 方块特性掉落表：石头→圆石、矿石→矿物等
-        for (const auto& drop : world::block_drops(prev)) {
+        // 方块特性掉落表 + 采集资格：无正确工具时方块破坏但不掉落（vanilla 行为）
+        const auto tool = item::tool_of(inventory_.hotbar_item(selected_slot_).id);
+        for (const auto& drop : world::block_drops(prev, tool)) {
             drop_stack(bx + 0.5, by + 0.25, bz + 0.5,
                        item::ItemStack{drop.item_id, drop.count, drop.damage}, bx, bz);
         }
@@ -205,6 +206,36 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
             clicked == world::block_id(world::kStateCraftingTable)) {
             open_crafting_table(detail::block_key(cx, cy, cz));
             return true;
+        }
+        // 可切换方块：拉杆/活板门/栅栏门/木门——翻转 meta 开关位
+        if (context_.world != nullptr && !sneaking_) {
+            const auto clicked_state = context_.world->block_at(cx, cy, cz);
+            const auto cid = world::block_id(clicked_state);
+            std::uint16_t toggle_bit = 0;
+            // 拉杆 69：0x8 = 拉下；活板门 96：0x4 = 开；栅栏门 107：0x4 = 开；木门 64：0x4 = 开（上下半同翻）
+            if (cid == 69) {
+                toggle_bit = 0x8;
+            } else if (cid == 96 || cid == 107) {
+                toggle_bit = 0x4;
+            } else if (cid == 64) {
+                // 木门：门由上下两个半块组成，meta 0x8 标上半——找另一半一起翻
+                std::int32_t other_y = cy;
+                const auto this_meta = world::state_meta(clicked_state);
+                other_y = (this_meta & 0x8) != 0 ? cy - 1 : cy + 1;
+                const auto other_state = context_.world->block_at(cx, other_y, cz);
+                if (world::block_id(other_state) == 64) {
+                    const auto other_open = world::state_meta(other_state) ^ 0x4;
+                    set_block_and_broadcast(cx, other_y, cz,
+                                            static_cast<std::uint16_t>((world::block_id(other_state) << 4) | other_open));
+                }
+                toggle_bit = 0x4;
+            }
+            if (toggle_bit != 0) {
+                const auto new_meta = world::state_meta(clicked_state) ^ toggle_bit;
+                set_block_and_broadcast(cx, cy, cz,
+                                        static_cast<std::uint16_t>((cid << 4) | new_meta));
+                return true;
+            }
         }
         // 小容器：发射器/投掷器/漏斗
         if (context_.containers != nullptr) {

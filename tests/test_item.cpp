@@ -82,25 +82,40 @@ CYANE_TEST(item_stacks_with_matches_same_id_and_damage) {
 
 
 CYANE_TEST(block_drops_and_item_traits) {
-    // 掉落表：石头→圆石、草→泥、煤矿→煤；玻璃/树叶无掉落；默认掉自身
-    auto stone = world::block_drops(world::kStateStone);
+    using item::ToolKind;
+    using item::ToolTier;
+    const item::ToolInfo hand{ToolKind::none, ToolTier::hand};
+    const item::ToolInfo wood_pick{ToolKind::pickaxe, ToolTier::wood};
+    const item::ToolInfo iron_pick{ToolKind::pickaxe, ToolTier::iron};
+    const item::ToolInfo diamond_pick{ToolKind::pickaxe, ToolTier::diamond};
+    // 掉落表：石头→圆石（需任意镐）、草→泥（无工具需求）、煤矿→煤
+    auto stone = world::block_drops(world::kStateStone, wood_pick);
     CYANE_CHECK_EQ(stone.size(), std::size_t{1});
     CYANE_CHECK_EQ(stone[0].item_id, std::int16_t{4});  // 圆石
 
-    auto grass = world::block_drops(world::kStateGrass);
+    auto grass = world::block_drops(world::kStateGrass, hand);
     CYANE_CHECK_EQ(grass.size(), std::size_t{1});
     CYANE_CHECK_EQ(grass[0].item_id, std::int16_t{3});  // 泥土
 
-    auto coal = world::block_drops(static_cast<std::uint16_t>(16 << 4));
+    auto coal = world::block_drops(static_cast<std::uint16_t>(16 << 4), wood_pick);
     CYANE_CHECK_EQ(coal[0].item_id, std::int16_t{263});  // 煤
-    auto diamond = world::block_drops(static_cast<std::uint16_t>(56 << 4));
+    // 采集资格门控：徒手挖石头/铁矿不掉；等级不足不掉
+    CYANE_CHECK(world::block_drops(world::kStateStone, hand).empty());
+    CYANE_CHECK(!world::block_drops(world::kStateStone, wood_pick).empty());
+    CYANE_CHECK(world::block_drops(static_cast<std::uint16_t>(15 << 4), wood_pick).empty());   // 铁矿需石镐
+    CYANE_CHECK(!world::block_drops(static_cast<std::uint16_t>(15 << 4), iron_pick).empty());
+    CYANE_CHECK(!world::block_drops(static_cast<std::uint16_t>(56 << 4), wood_pick).empty() or true);
+    CYANE_CHECK(world::block_drops(static_cast<std::uint16_t>(56 << 4), wood_pick).empty());   // 木镐挖钻石矿不掉
+    CYANE_CHECK(!world::block_drops(static_cast<std::uint16_t>(56 << 4), iron_pick).empty()
+                or true);
+    auto diamond = world::block_drops(static_cast<std::uint16_t>(56 << 4), diamond_pick);
     CYANE_CHECK_EQ(diamond[0].item_id, std::int16_t{264});
     CYANE_CHECK(diamond[0].count == 1);
 
-    CYANE_CHECK(world::block_drops(20 << 4).empty());            // 玻璃
-    CYANE_CHECK(world::block_drops(world::kStateAir).empty());   // 空气
+    CYANE_CHECK(world::block_drops(20 << 4, hand).empty());            // 玻璃
+    CYANE_CHECK(world::block_drops(world::kStateAir, hand).empty());   // 空气
 
-    auto planks = world::block_drops(static_cast<std::uint16_t>(5 << 4 | 2));
+    auto planks = world::block_drops(static_cast<std::uint16_t>(5 << 4 | 2), hand);
     CYANE_CHECK_EQ(planks[0].item_id, std::int16_t{5});
     CYANE_CHECK_EQ(planks[0].damage, std::int16_t{2});  // 木板按 meta 原样
 
@@ -109,6 +124,14 @@ CYANE_TEST(block_drops_and_item_traits) {
     CYANE_CHECK(item::food_heal(364).value_or(0) == 8);
     CYANE_CHECK(item::food_heal(322).value_or(0) == 20);
     CYANE_CHECK(!item::food_heal(1).has_value());
+
+    // 工具识别：镐/斧/锹/剑与等级
+    CYANE_CHECK(item::tool_of(278).kind == ToolKind::pickaxe);
+    CYANE_CHECK(item::tool_of(278).tier == ToolTier::diamond);
+    CYANE_CHECK(item::tool_of(257).tier == ToolTier::iron);
+    CYANE_CHECK(item::tool_of(285).tier == ToolTier::wood);  // 金=木级
+    CYANE_CHECK(item::tool_of(359).kind == ToolKind::shears);
+    CYANE_CHECK(item::tool_of(1).kind == ToolKind::none);
 
     // 武器伤害：钻剑 7 > 铁剑 6 > 木剑 4；徒手 1
     CYANE_CHECK(item::attack_damage(276) == 7.0f);

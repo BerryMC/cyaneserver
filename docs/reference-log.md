@@ -177,3 +177,13 @@
 - "很高"则是另一面：surface_y 之前的旧版本直接用 level.dat 的 SpawnY=64，而该世界地表在 y~15，玩家从 y64 自由下落。
 - 修复：`load_or_default` 增 spawn_x/y/z 参数作新玩家默认位置；连接层传入 `spawn_point()` 预置的 `player_pos_`（含逐列地表探测）。有 .dat 时仍读存档 Pos 覆盖。
 - 测试：`new_player_defaults_to_world_spawn_not_origin`；probe 实测新玩家落在 (-15.5,4,246.5)，所在区块在已发送集合内。
+
+### R-019 — 采集等级与交互方块（Cuberite 对照）
+
+- 来源：Cuberite `Items/ItemPickaxe.h`（CanHarvestBlock 分级表）、`BlockInfo.cpp`（GetHardness）、`Items/ItemShovel.h`（速度倍率）。
+- 结论（1.12.2）：
+  - 镐等级：wood/gold=1、stone=2、iron=3、diamond=4；金镐能力等同木镐。
+  - 采集门控：黑曜石→4；钻石/金/绿宝石矿及块、红石矿→3；铁/青金矿及块→2；石头系/煤矿/砂石/砖/熔炉等→1。不满足时**方块仍被破坏但不掉落**。
+  - 镐/斧/锹速度倍率：wood=2、stone=4、iron=6、diamond=8、gold=12（锹对泥土/沙/砾石类，斧对木类，镐对石/金属类）。
+  - 交互方块 meta 开关位：拉杆(69) 0x8；活板门(96)/栅栏门(107) 0x4；木门(64) 0x4（上下半同翻）。
+- 落地：`item/item_tools.hpp`（工具识别/等级/速度）、`world/block_drops.hpp::harvest_rule + block_drops(state, tool)`、`connection_world.cpp`（右键切换方块 + 挖掘传入手持工具）。
