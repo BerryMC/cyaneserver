@@ -135,6 +135,19 @@ bool Connection::handle_play_digging(ByteSpan payload) {
         }
     }
     set_block_and_broadcast(bx, by, bz, world::kStateAir);
+    // 门双半块：破坏任一半同步清除另一半
+    {
+        const auto prev_id = world::block_id(prev);
+        if (prev_id == 64 || prev_id == 71) {
+            const auto prev_meta = world::state_meta(prev);
+            const std::int32_t other_y = (prev_meta & 0x08) != 0 ? by - 1 : by + 1;
+            const auto other = context_.world != nullptr ? context_.world->block_at(bx, other_y, bz)
+                                                         : world::kStateAir;
+            if (world::block_id(other) == prev_id) {
+                set_block_and_broadcast(bx, other_y, bz, world::kStateAir);
+            }
+        }
+    }
     if (!creative && context_.item_drops != nullptr && prev != world::kStateAir) {
         // 方块特性掉落表 + 采集资格：无正确工具时方块破坏但不掉落（vanilla 行为）
         const auto tool = item::tool_of(inventory_.hotbar_item(selected_slot_).id);
@@ -276,10 +289,17 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
     {
         const auto sid = world::block_id(state);
         if (sid == 77 || sid == 143 || sid == 69) {
-            // face→meta：0=底 1=顶 2=北 3=南 4=西 5=东（1.12.2 按钮面位）
-            state = static_cast<std::uint16_t>((sid << 4) | (*face & 0x07));
+            // 1.12.2 按钮/拉杆 meta：0=贴天花板 1=贴地板 2-5=墙面（南北西东）。
+            // 点击面决定按钮贴在哪个面：顶/底直接映射；墙面取对面
+            // （点北面→按钮贴在北侧→朝南→meta 4；点南→朝北→meta 3，
+            //  点西→朝东→meta 5；点东→朝西→meta 2）
+            // Cuberite BlockMetaDataToBlockFace 权威映射：
+            // meta 0=贴底 1=贴东面 2=贴西面 3=贴南面 4=贴北面 5/6=贴地板
+            // 点击面→meta：底→0 顶→5 北→4 南→3 西→2 东→1
+            static constexpr std::uint8_t face_meta[] = {0, 5, 4, 3, 2, 1};
+            state = static_cast<std::uint16_t>((sid << 4) | face_meta[*face & 0x07]);
         } else if (sid == 96 || sid == 107) {
-            // 活板门/栅栏门：低 2 位朝向 = face 对应
+            // 活板门/栅栏门：低 2 位朝向 = 点击面（0-3：南北西东）
             state = static_cast<std::uint16_t>((sid << 4) | (*face & 0x03));
         }
     }
@@ -304,6 +324,24 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         rollback.position(tx, ty, tz);
         rollback.varint(static_cast<std::int32_t>(target));
         send_packet(proto::play_cb::kBlockChange, rollback.data());
+        return true;
+    }
+    // 门（木 64 / 铁 71）是双半方块：下半 + 上半（meta 0x8 标上半）
+    if (world::block_id(state) == 64 || world::block_id(state) == 71) {
+        const auto did = world::block_id(state);
+        const auto facing = world::state_meta(state) & 0x03;
+        set_block_and_broadcast(tx, ty, tz, static_cast<std::uint16_t>((did << 4) | facing));
+        // 上半：meta 0x8 标上半 + 同朝向
+        set_block_and_broadcast(tx, ty + 1, tz, static_cast<std::uint16_t>((did << 4) | 0x08 | facing));
+        // 上半放置后跳过后续通用放置（已处理）
+        if (context_.game_mode != proto::game_mode::kCreative) {
+            const std::size_t hs = item::PlayerInventory::hotbar_slot(selected_slot_);
+            item::ItemStack after = held;
+            if (after.count > 0) { --after.count; }
+            if (after.count == 0) { after = item::ItemStack::air(); }
+            inventory_.set_slot(hs, after);
+            send_slot(0, static_cast<std::int16_t>(hs), after);
+        }
         return true;
     }
     set_block_and_broadcast(tx, ty, tz, state);

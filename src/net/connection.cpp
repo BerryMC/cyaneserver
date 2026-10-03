@@ -161,7 +161,7 @@ void Connection::tick(std::uint64_t now_ms) {
                 const auto st = context_.world->block_at(bx, by, bz);
                 const auto cid = world::block_id(st);
                 if (cid == 77 || cid == 143) {
-                    set_block_and_broadcast(bx, by, bz, static_cast<std::uint16_t>(st & ~0x80));
+                    set_block_and_broadcast(bx, by, bz, static_cast<std::uint16_t>(st & ~0x08));
                 }
             }
             pressed_buttons_[i] = pressed_buttons_.back();
