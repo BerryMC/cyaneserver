@@ -84,6 +84,7 @@ public:
     [[nodiscard]] std::vector<std::string> player_names() const;
     // 世界存档：立即把方块编辑与箱子/熔炉落盘（控制台 save 命令）
     void save_world_now();
+    void request_save() { save_pending_.store(true, std::memory_order_relaxed); }
 
 private:
     explicit Server(ServerConfig config);
@@ -109,6 +110,9 @@ private:
     std::atomic<bool> running_{true};
     std::unique_ptr<game::PlayerDataStore> player_data_store_;
     std::uint64_t ticks_since_save_{0};
+    std::atomic<bool> save_pending_{false};
+    std::chrono::steady_clock::time_point last_save_time_{std::chrono::steady_clock::now()};
+    static constexpr std::uint64_t kMinSaveIntervalMs = 5000;  // 断开触发保存的最小间隔
 };
 
 }

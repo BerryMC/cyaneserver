@@ -251,6 +251,19 @@ Result<std::size_t> WorldPersistence::load() {
     return loaded;
 }
 
+bool WorldPersistence::needs_save() const {
+    if (!world_.dirty_chunks().empty()) {
+        return true;
+    }
+    std::lock_guard<std::mutex> lock{cache_mutex_};
+    for (const auto& [key, file] : regions_) {
+        if (file.dirty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 Result<std::size_t> WorldPersistence::save() {
     // 写出集合 = 脏区块 ∪ 有方块实体的区块（箱子内容变更不一定伴随方块编辑）
     struct ChunkData {

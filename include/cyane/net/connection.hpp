@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <utility>
 #include <vector>
 #include <memory>
@@ -57,6 +58,8 @@ struct ConnectionContext {
     bool online_mode{true};
     std::int32_t compression_threshold{proto::kDefaultCompressionThreshold};
     std::string disconnect_message{"CyaneServer"};
+    // 玩家断开时触发世界存档（仅写脏区块，Server 注入）
+    std::function<void()> save_world;
     entity::PlayerManager* player_manager{nullptr};
     PlayerHub* hub{nullptr};
     ItemDropManager* item_drops{nullptr};
@@ -171,6 +174,9 @@ private:
     [[nodiscard]] bool merge_into_range(item::ItemStack& moving, std::size_t lo, std::size_t hi);
     // 手持食物且未满血：消耗 1 个并回血（返回是否进食）
     [[nodiscard]] bool eat_held_food();
+    // Named Sound Effect (0x49)：向视距内广播方块交互音效
+    void send_block_sound(std::int32_t x, std::int32_t y, std::int32_t z,
+                          std::uint16_t block_id, bool on);
     void kill_player();
     void respawn_player();
     // 掉落物：生成、给自己补发已有、拾取入包

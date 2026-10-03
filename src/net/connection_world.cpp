@@ -232,7 +232,7 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
             } else if (cid == 77 || cid == 143) {
                 toggle_bit = 0x8;  // 按钮：按下后由 Connection::tick 延迟回弹
                 const std::int64_t bkey = detail::block_key(cx, cy, cz);
-                const auto delay = cid == 77 ? 20u : 10u;  // 石 1s / 木 0.5s
+                const auto delay = cid == 77 ? 20u : 15u;  // 石 1s / 木 0.75s（vanilla 1.12.2）
                 pressed_buttons_.emplace_back(bkey, now_ms_ + delay * 50);
             } else if (cid == 96 || cid == 107) {
                 toggle_bit = 0x4;
@@ -251,8 +251,10 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
             }
             if (toggle_bit != 0) {
                 const auto new_meta = world::state_meta(clicked_state) ^ toggle_bit;
+                const bool turning_on = (new_meta & toggle_bit) != 0;
                 set_block_and_broadcast(cx, cy, cz,
                                         static_cast<std::uint16_t>((cid << 4) | new_meta));
+                send_block_sound(cx, cy, cz, cid, turning_on);
                 return true;
             }
         }
@@ -410,6 +412,36 @@ bool Connection::handle_play_use_item(ByteSpan payload) {
     (void)payload;  // 1.12.2: varint hand，进食逻辑只关心手持物品
     (void)eat_held_food();  // 吃不下（满血/非食物）不算协议错误——返回 false 会断连
     return true;
+}
+
+void Connection::send_block_sound(std::int32_t x, std::int32_t y, std::int32_t z,
+                                  std::uint16_t block_id, bool on) {
+    // Named Sound Effect (0x49)：string name | varint category | int x*8 y*8 z*8 | f32 vol | f32 pitch
+    const char* name;
+    if (block_id == 77) {
+        name = on ? "block.stone_button.click_on" : "block.stone_button.click_off";
+    } else if (block_id == 143) {
+        name = on ? "block.wood_button.click_on" : "block.wood_button.click_off";
+    } else if (block_id == 64 || block_id == 71) {
+        name = "block.wooden_door.open";
+    } else if (block_id == 107) {
+        name = "block.fence_gate.open";
+    } else if (block_id == 69) {
+        name = on ? "block.lever.click" : "block.lever.click";
+    } else if (block_id == 96) {
+        name = "block.wooden_trapdoor.open";
+    } else {
+        return;
+    }
+    ByteWriter out;
+    out.string(name);
+    out.varint(0);  // category: master
+    out.i32(x * 8 + 8);
+    out.i32(y * 8 + 8);
+    out.i32(z * 8 + 8);
+    out.f32(1.0f);
+    out.f32(on ? 0.6f : 0.5f);
+    send_packet(proto::play_cb::kSoundEffect, out.data());
 }
 
 void Connection::send_chunk(world::ChunkPos pos) {

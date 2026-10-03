@@ -62,6 +62,9 @@ void Connection::teardown() noexcept {
     alive_ = false;
     save_player_data();
     broadcast_despawn();
+    if (context_.save_world) {
+        context_.save_world();  // 方块编辑即时落盘（门/按钮等状态不丢）
+    }
     if (context_.player_manager != nullptr && player_id_ != 0) {
         context_.player_manager->remove(player_id_);
     }

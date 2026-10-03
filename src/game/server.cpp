@@ -252,6 +252,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.world = server->world_.get();
     context.tick_stats = &server->stats_;
     context.view_distance = server->config_.view_distance;
+    context.save_world = [srv = server.get()] { srv->request_save(); };
     context.max_players = static_cast<std::int32_t>(server->config_.max_players);
     context.game_mode = server->config_.game_mode == "survival" ? proto::game_mode::kSurvival
                          : (server->config_.game_mode == "spectator" ? proto::game_mode::kSpectator
@@ -359,15 +360,28 @@ void Server::tick() {
     // 在线数 = 已进入 play 阶段的玩家（hub 注册表），而非活跃 TCP 连接——
     // 后者会把 server list ping 的握手连接也计成玩家
     status_->set_online(hub_ != nullptr ? static_cast<std::int32_t>(hub_->size()) : 0);
-    // 周期性世界存档（autosave_interval 秒，0 = 关闭）
-    if (persistence_ != nullptr && config_.autosave_interval > 0 &&
+    // 周期性世界存档（autosave_interval 秒，0 = 关闭）+ 断开触发的防抖保存
+    const bool autosave_due = config_.autosave_interval > 0 &&
         ++ticks_since_save_ >= static_cast<std::uint64_t>(config_.autosave_interval) *
-                                   static_cast<std::uint64_t>(config_.tick_rate)) {
-        ticks_since_save_ = 0;
-        if (auto saved = persistence_->save(); !saved) {
-            log::warn("autosave failed: {}", saved.error().message);
-        } else if (*saved > 0) {
-            log::debug("autosaved {} chunks", *saved);
+                               static_cast<std::uint64_t>(config_.tick_rate);
+    const bool disconnect_save = save_pending_.exchange(false, std::memory_order_relaxed);
+    if (persistence_ != nullptr && (autosave_due || disconnect_save) &&
+        persistence_->needs_save()) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto since_last = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    now - last_save_time_).count();
+        if (disconnect_save && !autosave_due &&
+            static_cast<std::uint64_t>(since_last) < kMinSaveIntervalMs) {
+            // 距上次保存不足最小间隔：推迟到下一个 autosave 窗口（或下次触发）
+            save_pending_.store(true, std::memory_order_relaxed);
+        } else {
+            ticks_since_save_ = 0;
+            last_save_time_ = now;
+            if (auto saved = persistence_->save(); !saved) {
+                log::warn("world save failed: {}", saved.error().message);
+            } else if (*saved > 0) {
+                log::info("saved {} chunks to {}", *saved, config_.world_dir);
+            }
         }
     }
     if (furnaces_ != nullptr) {

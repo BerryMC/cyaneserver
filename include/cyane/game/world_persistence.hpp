@@ -29,10 +29,14 @@ public:
           item_drops_{item_drops}, mobs_{mobs}, world_dir_{std::move(world_dir)} {}
 
     // 读取 world_dir/region/*.mca；返回载入的区块数。目录不存在视为空世界。
+    // 启动预加载全部区块至 World 内存（按需 loader 释放后可重入）。
     [[nodiscard]] Result<std::size_t> load();
 
     // 全量保存（只写有编辑/有实体的区块）；返回写出的区块数
     [[nodiscard]] Result<std::size_t> save();
+
+    // 是否有脏数据需要保存（脏区块/脏 region 文件）
+    [[nodiscard]] bool needs_save() const;
 
     // 注入按需加载回调：区块被视距释放后玩家回来时，从 region 缓存重读
     // 真实地形并恢复方块实体（容器/熔炉以内存态优先，不覆盖运行时改动）。
