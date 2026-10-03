@@ -75,6 +75,14 @@ struct HarvestRule {
         case 63: return {{323, 0, 1}};           // 告示牌（立）→ 牌
         case 68: return {{323, 0, 1}};           // 告示牌（墙）
         case 26: return {{355, static_cast<std::int16_t>(meta), 1}};  // 床 → 床物品
+        // 门是纯物品，item id 与 block id 不同值（默认分支的"掉自身"对门不成立）
+        case 64: return {{324, 0, 1}};   // 橡木门
+        case 71: return {{330, 0, 1}};   // 铁门
+        case 193: return {{427, 0, 1}};  // 云杉门
+        case 194: return {{428, 0, 1}};  // 白桦门
+        case 195: return {{429, 0, 1}};  // 丛林木门
+        case 196: return {{430, 0, 1}};  // 金合欢门
+        case 197: return {{431, 0, 1}};  // 深色橡木门
         case 13: {                                // 砾石 → 10% 燧石，否则砾石
             static std::mt19937 engine{std::random_device{}()};
             if (std::uniform_int_distribution<int>(0, 99)(engine) < 10) {

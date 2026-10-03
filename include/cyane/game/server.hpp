@@ -16,6 +16,7 @@
 #include "cyane/game/player_data.hpp"
 #include "cyane/game/world_persistence.hpp"
 #include "cyane/item/crafting.hpp"
+#include "cyane/net/block_ticks.hpp"
 #include "cyane/net/crafting_table_store.hpp"
 #include "cyane/net/mob_manager.hpp"
 #include "cyane/game/status.hpp"
@@ -95,6 +96,7 @@ private:
     std::unique_ptr<game::ServerStatus> status_;
     std::unique_ptr<entity::PlayerManager> player_manager_;
     std::unique_ptr<net::PlayerHub> hub_;
+    std::unique_ptr<net::BlockTicks> block_ticks_;
     std::unique_ptr<net::ItemDropManager> item_drops_;
     std::unique_ptr<net::ContainerStore> containers_;
     std::unique_ptr<net::FurnaceStore> furnaces_;

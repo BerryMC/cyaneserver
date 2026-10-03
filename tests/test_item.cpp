@@ -139,3 +139,52 @@ CYANE_TEST(block_drops_and_item_traits) {
     CYANE_CHECK(item::attack_damage(268) == 4.0f);
     CYANE_CHECK(item::attack_damage(0) == 1.0f);
 }
+
+// 门是纯物品（1.12.2 的 item id ≠ block id）：映射缺失时服务端当"非方块物品"忽略放置，
+// 客户端本地预测画出的门在重进（重新收区块）后消失。
+CYANE_TEST(door_items_map_to_door_blocks) {
+    using world::block_state_from_item;
+    CYANE_CHECK_EQ(block_state_from_item(324, 0), std::uint16_t{64 << 4});   // 橡木门
+    CYANE_CHECK_EQ(block_state_from_item(330, 0), std::uint16_t{71 << 4});   // 铁门
+    CYANE_CHECK_EQ(block_state_from_item(427, 0), std::uint16_t{193 << 4});  // 云杉门
+    CYANE_CHECK_EQ(block_state_from_item(428, 0), std::uint16_t{194 << 4});  // 白桦门
+    CYANE_CHECK_EQ(block_state_from_item(429, 0), std::uint16_t{195 << 4});  // 丛林木门
+    CYANE_CHECK_EQ(block_state_from_item(430, 0), std::uint16_t{196 << 4});  // 金合欢门
+    CYANE_CHECK_EQ(block_state_from_item(431, 0), std::uint16_t{197 << 4});  // 深色橡木门
+    CYANE_CHECK_EQ(block_state_from_item(260, 0), world::kStateAir);         // 苹果：不可放置
+    CYANE_CHECK_EQ(block_state_from_item(1, 3), static_cast<std::uint16_t>((1 << 4) | 3));
+
+    CYANE_CHECK(world::is_wooden_door(64) && world::is_wooden_door(197) && !world::is_wooden_door(71));
+    CYANE_CHECK(world::is_door(71) && world::is_door(193));
+    CYANE_CHECK(world::is_button(77) && world::is_button(143) && !world::is_button(69));
+    CYANE_CHECK(world::is_lever(69));
+}
+
+// 门的掉落物是门物品本身——默认分支的"掉自身（id 同值）"对门不成立
+CYANE_TEST(door_drops_are_door_items) {
+    const auto first_drop = [](std::uint16_t state) {
+        const auto drops = world::block_drops(state, item::ToolInfo{});
+        return drops.empty() ? std::int16_t{-1} : drops.front().item_id;
+    };
+    CYANE_CHECK_EQ(first_drop(static_cast<std::uint16_t>((64 << 4) | 0x08)), std::int16_t{324});
+    CYANE_CHECK_EQ(first_drop(static_cast<std::uint16_t>(71 << 4)), std::int16_t{330});
+    CYANE_CHECK_EQ(first_drop(static_cast<std::uint16_t>(193 << 4)), std::int16_t{427});
+    CYANE_CHECK_EQ(first_drop(static_cast<std::uint16_t>(197 << 4)), std::int16_t{431});
+    CYANE_CHECK_EQ(first_drop(static_cast<std::uint16_t>(77 << 4)), std::int16_t{77});  // 按钮掉自身
+}
+
+// 附着方块（按钮/拉杆）的支撑方向：meta 低 3 位 = FACING（0=下 1=东 2=西 3=南 4=北 5=上）
+CYANE_TEST(attached_block_support_directions) {
+    using world::supported_by;
+    const auto button = [](std::uint16_t meta) {
+        return static_cast<std::uint16_t>((77 << 4) | meta);
+    };
+    CYANE_CHECK(supported_by(button(5), 0, -1, 0));  // 贴地板：支撑在下
+    CYANE_CHECK(supported_by(button(0), 0, 1, 0));   // 贴天花板：支撑在上
+    CYANE_CHECK(supported_by(button(1), -1, 0, 0));  // 朝东：支撑在西
+    CYANE_CHECK(supported_by(button(2), 1, 0, 0));   // 朝西：支撑在东
+    CYANE_CHECK(supported_by(button(3), 0, 0, -1));  // 朝南：支撑在北
+    CYANE_CHECK(supported_by(button(4), 0, 0, 1));   // 朝北：支撑在南
+    CYANE_CHECK(!supported_by(button(5), 0, 1, 0));
+    CYANE_CHECK(!supported_by(button(1), 1, 0, 0));
+}

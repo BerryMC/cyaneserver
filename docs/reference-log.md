@@ -190,10 +190,26 @@
 
 ### R-020 — 交互方块音效（vanilla jar 对照修正）
 
-- 来源：`spigot-1.12.2` 反编译 `BlockButtonAbstract`/`BlockStoneButton`/`BlockWoodButton`/`BlockLever`/`BlockDoor`/`BlockTrapdoor`/`BlockFenceGate`；`javap` 读 `SoundEffects` 静态初始化与 `SoundCategory` 枚举序；`vanilla/{server,client}.jar` 的音效名字符串对照。
+- 来源：`spigot-1.12.2` 反编译 `BlockButtonAbstract`/`BlockStoneButton`/`BlockWoodButton`/`BlockLever`/`BlockDoor`/`BlockTrapdoor`/`BlockFenceGate`；`javap` 读 `SoundEffect`/`SoundEffects`/`PacketPlayOutNamedSoundEffect`/`World`/`SoundCategory`；`vanilla/{server,client}.jar` 的音效注册序对照。
 - 结论（1.12.2）：
-  - 按钮与拉杆走 **Named Sound Effect (0x49)**：`SoundCategory.BLOCKS`（枚举序 **4**，序 0 是 MASTER），音量 **0.3F**。按钮按下 = `block.stone_button.click_on` / `block.wood_button.click_on`（音高 0.6），回弹 = 对应 `click_off`（音高 0.5）；拉杆始终 `block.lever.click`，音高开 0.6 / 关 0.5。
-  - 按钮音效名**只有 `click_on`/`click_off` 两个变体，没有裸 `.click`**；且木按钮是 `block.wood_button.*`（不是 `wooden_button`）。名字不在注册表内时客户端只记一条 `Unable to play unknown soundEvent` 后丢弃 → 该次交互无声。
+  - **Named Sound Effect (0x49) 的首字段是 SoundEffect 注册表 id（VarInt），不是音效名字**：`PacketPlayOutNamedSoundEffect.a/b` 走 `SoundEffect.a` 的 id↔对象映射。按名字发（把长度前缀当 id、名字首字节当类别序数）会让客户端抛 `ArrayIndexOutOfBoundsException` 断连——实测按下按钮报的 `98` 正是 `'b'`。
+  - 注册表 id 由 `SoundEvent.b()` 按名字顺序从 0 分配；客户端 `qe/qf` 与服务端 `SoundEffect` 两侧的序列**逐条一致（实测 549 条）**。本项目所需 id 抄自该序列，落在 `tests/fixtures/sound_registry_ids.txt`。
+  - 位置字段 = `(方块坐标 + 0.5) × 8`：`World.a(EntityHuman, BlockPosition, ...)` 先把方块坐标加 0.5，`PacketPlayOutNamedSoundEffect` 构造再 ×8 —— 即 `x*8+4`（不是 `x*8+8`）。
+  - 按钮与拉杆走 0x49：`SoundCategory.BLOCKS`（枚举序 **4**，序 0 是 MASTER），音量 **0.3F**。按钮按下 = `block.stone_button.click_on` / `block.wood_button.click_on`（音高 0.6），回弹 = 对应 `click_off`（音高 0.5）；拉杆始终 `block.lever.click`，音高开 0.6 / 关 0.5。
+  - 按钮音效**只有 `click_on`/`click_off` 两个变体，没有裸 `.click`**；木按钮是 `block.wood_button.*`（不是 `wooden_button`）。
   - 门/活板门/栅栏门在 vanilla 走 **World Event (0x25)** 数字 id（`BlockDoor.e()/g()`、`BlockTrapdoor.a()`、`BlockFenceGate` 内的 1005–1014/1036/1037 常量），而非命名音效。
-- 落地：`world/block_sounds.hpp`（方向 → 名字/音量/音高/广播半径表）、`net/packet_writers.hpp::write_named_sound`、`proto/play_fields.hpp::sound_category::kBlocks`、`connection_world.cpp::send_block_sound`（统一 0x49，按原版半径广播：按钮/拉杆 16 格、门类 64 格）。门类改用 0x49 的 `open`/`close` 名而非 0x25 数字 id：听觉等价，尚未做字节级对齐。
-- 测试：`packet_named_sound_encodes_block_center`（黄金向量）、`toggle_sound_matches_vanilla_registry`。
+  - **客户端预测决定要不要回发给操作者**：按下按钮（`BlockButtonAbstract.a`）、开关门/活板门/栅栏门都把自己（`entityhuman`）传给 `World.a`，`PlayerList.sendPacketNearby` 里 `if_acmpeq` 跳过该玩家——因为客户端已本地播放，服务端再发就是双响；按钮**回弹**（`BlockButtonAbstract.b`）与拉杆传 `null`，所有人都收得到。实测印证：按下按钮会双响、回弹无声（回弹没有任何本地预测）。
+- 落地：`world/block_sounds.hpp`（方向 → 注册表 id/名字/音量/音高/广播半径/是否本地预测表）、`net/packet_writers.hpp::write_named_sound`、`proto/play_fields.hpp::sound_category::kBlocks`、`connection_world.cpp::send_block_sound`（统一 0x49，预测音效不回发操作者、按原版半径广播附近玩家：按钮/拉杆 16 格、门类 64 格）、`connection.cpp::tick`（按钮到期回弹时补发回弹音）。门类用 0x49 的 `open`/`close` 而非 0x25 数字 id：听觉等价，尚未做字节级对齐。
+- 测试：`packet_named_sound_encodes_registry_id_and_block_center`（黄金向量，含多字节 varint id）、`toggle_sound_matches_vanilla_registry`（表内 id 与 fixture 注册表逐条对齐）。
+
+### R-021 — 门物品映射、按钮回弹与附着方块掉落
+
+- 来源：`spigot-1.12.2` 的 `Block`/`Item` 静态注册表（id + 名字机械提取）、反编译 `BlockButtonAbstract`/`ItemDoor`、`PlayerList.sendPacketNearby` 字节码。
+- 结论（1.12.2）：
+  - **门是纯物品，item id ≠ block id**：324 橡木门 / 330 铁门 / 427–431 云杉·白桦·丛林·金合欢·深色橡木门 → 方块 64 / 71 / 193–197。同一份提取里 54=箱子、61=熔炉、77/143=按钮、154=漏斗 与项目既有常量完全一致（交叉验证）。未映射时服务端把门当"非方块物品"忽略放置，客户端本地预测画出的门在重进（重收区块）后消失——即"放门→退出服务器→重进→门消失"。
+  - 附着方块（按钮/拉杆）的支撑：`BlockButtonAbstract.a` 用 `pos.shift(FACING.opposite())` 取支撑格，支撑没了就 `dropBlock + setAir`；meta 低 3 位 = FACING（`fromLegacyData`：0=下 1=东 2=西 3=南 4=北 5=上）。该掉落走方块自身的 dropBlock，**不受创造模式影响**（与玩家挖方块不同）。
+  - 已按下（POWERED）的按钮再次右键：`interact` 直接 `return true`，不自作回弹。
+  - 方块 id 表（`Block` 静态注册）：木门 64、铁门 71、云杉/白桦/丛林/金合欢/深色橡木门 193–197。
+- 落地：`world/blocks.hpp`（`door_block_from_item` + `block_state_from_item` 扩门物品、`is_wooden_door`/`is_door`/`is_button`/`is_lever`/`support_delta`/`supported_by`）、`world/block_drops.hpp`（门掉落门物品）、`net/block_ticks.{hpp,cpp}`（**世界级**按钮回弹调度，状态不在连接上，按下者断线也照常弹）、`connection_world.cpp`（放置/切换/破坏统一 door/button 判定；`break_unsupported_neighbors` 连带破坏+掉落）。
+- 测试：`door_items_map_to_door_blocks`、`door_drops_are_door_items`、`attached_block_support_directions`、`button_release_is_world_level`；探针活体验证：门物品放置出双半块、按下→（再次右键被忽略）→回弹音 id 109/0.3/0.5、断线后仍回弹、支撑破坏后按钮消失并掉出物品实体。
+- 旁注：`PlayerList.sendPacketNearby` 按玩家**当前坐标**的区块距离过滤广播目标，快照位置没更新的客户端收不到广播（探针自查时踩过）。

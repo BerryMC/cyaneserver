@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <span>
-#include <string_view>
 
 #include "cyane/core/bytes.hpp"
 
@@ -51,15 +50,16 @@ inline void write_entity_status(ByteWriter& out, std::uint32_t entity_id, std::u
     out.u8(status);
 }
 
-// Named Sound Effect (0x49)：string name | varint category | int x*8 y*8 z*8 | f32 vol | f32 pitch
-inline void write_named_sound(ByteWriter& out, std::string_view name, std::int32_t category,
+// Named Sound Effect (0x49)：varint soundId | varint category | int (x+0.5)*8 ... | f32 vol | f32 pitch
+// 1.12.2 的 soundId 是 SoundEffect 注册表 id，不是名字。
+inline void write_named_sound(ByteWriter& out, std::int32_t sound_id, std::int32_t category,
                               std::int32_t x, std::int32_t y, std::int32_t z, float volume,
                               float pitch) {
-    out.string(name);
+    out.varint(sound_id);
     out.varint(category);
-    out.i32(x * 8 + 8);
-    out.i32(y * 8 + 8);
-    out.i32(z * 8 + 8);
+    out.i32(x * 8 + 4);
+    out.i32(y * 8 + 4);
+    out.i32(z * 8 + 4);
     out.f32(volume);
     out.f32(pitch);
 }

@@ -221,6 +221,8 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.crafting = server->crafting_.get();
     server->hub_ = std::make_unique<net::PlayerHub>();
     context.hub = server->hub_.get();
+    server->block_ticks_ = std::make_unique<net::BlockTicks>();
+    context.block_ticks = server->block_ticks_.get();
     server->item_drops_ = std::make_unique<net::ItemDropManager>();
     context.item_drops = server->item_drops_.get();
     server->containers_ = std::make_unique<net::ContainerStore>();
@@ -357,6 +359,10 @@ void Server::save_world_now() {
 }
 
 void Server::tick() {
+    // 延迟方块更新（按钮回弹）：到期清位并广播，与按下者是否在线无关
+    if (block_ticks_ != nullptr && world_ != nullptr && hub_ != nullptr) {
+        block_ticks_->tick(now_ms(), *world_, *hub_, config_.view_distance);
+    }
     // 在线数 = 已进入 play 阶段的玩家（hub 注册表），而非活跃 TCP 连接——
     // 后者会把 server list ping 的握手连接也计成玩家
     status_->set_online(hub_ != nullptr ? static_cast<std::int32_t>(hub_->size()) : 0);

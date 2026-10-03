@@ -14,6 +14,10 @@
 
 namespace cyane::net {
 
+// broadcast_near 的 exclude 参数：0 不是合法玩家实体 id（未进入 play 的连接为 0），
+// 传入即"不排除任何人"——音效、方块更新等每个人都该收到的广播用它。
+inline constexpr std::uint32_t kNoExclude = 0;
+
 // 玩家在广播中心里的一条位置/身份快照
 struct PlayerSnapshot {
     std::uint32_t entity_id{0};

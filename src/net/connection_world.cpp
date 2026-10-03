@@ -1,6 +1,7 @@
 #include "cyane/net/connection.hpp"
 
 #include <algorithm>
+#include <array>
 #include <vector>
 
 #include "connection_detail.hpp"
@@ -139,7 +140,7 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     // 门双半块：破坏任一半同步清除另一半
     {
         const auto prev_id = world::block_id(prev);
-        if (prev_id == 64 || prev_id == 71) {
+        if (world::is_door(prev_id)) {
             const auto prev_meta = world::state_meta(prev);
             const std::int32_t other_y = (prev_meta & 0x08) != 0 ? by - 1 : by + 1;
             const auto other = context_.world != nullptr ? context_.world->block_at(bx, other_y, bz)
@@ -149,6 +150,8 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             }
         }
     }
+    // 附着型方块（按钮/拉杆）：支撑方块没了就一起破坏并掉落
+    break_unsupported_neighbors(bx, by, bz);
     if (!creative && context_.item_drops != nullptr && prev != world::kStateAir) {
         // 方块特性掉落表 + 采集资格：无正确工具时方块破坏但不掉落（vanilla 行为）
         const auto tool = item::tool_of(inventory_.hotbar_item(selected_slot_).id);
@@ -227,26 +230,31 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
             const auto cid = world::block_id(clicked_state);
             std::uint16_t toggle_bit = 0;
             // 拉杆 69：0x8 = 拉下；按钮 77/143：0x8 = 按下（延迟回弹）；
-            // 活板门 96：0x4 = 开；栅栏门 107：0x4 = 开；木门 64：0x4 = 开（上下半同翻）
+            // 活板门 96：0x4 = 开；栅栏门 107：0x4 = 开；木门：0x4 = 开（上下半同翻）
             if (cid == 69) {
                 toggle_bit = 0x8;
-            } else if (cid == 77 || cid == 143) {
-                toggle_bit = 0x8;  // 按钮：按下后由 Connection::tick 延迟回弹
-                const std::int64_t bkey = detail::block_key(cx, cy, cz);
+            } else if (world::is_button(cid)) {
+                // 已按下的按钮：vanilla 直接忽略（不自作回弹）
+                if ((clicked_state & 0x08) != 0) {
+                    return true;
+                }
+                toggle_bit = 0x8;
+                // 回弹交给世界级调度：按下的玩家中途断线也要弹起来
                 const auto delay = cid == 77 ? 20u : 15u;  // 石 1s / 木 0.75s（vanilla 1.12.2）
-                pressed_buttons_.emplace_back(bkey, now_ms_ + delay * 50);
+                if (context_.block_ticks != nullptr) {
+                    context_.block_ticks->schedule_button_release(cx, cy, cz, now_ms_ + delay * 50);
+                }
             } else if (cid == 96 || cid == 107) {
                 toggle_bit = 0x4;
-            } else if (cid == 64) {
-                // 木门：门由上下两个半块组成，meta 0x8 标上半——找另一半一起翻
-                std::int32_t other_y = cy;
+            } else if (world::is_wooden_door(cid)) {
+                // 门由上下两个半块组成，meta 0x8 标上半——找另一半一起翻
                 const auto this_meta = world::state_meta(clicked_state);
-                other_y = (this_meta & 0x8) != 0 ? cy - 1 : cy + 1;
+                const std::int32_t other_y = (this_meta & 0x8) != 0 ? cy - 1 : cy + 1;
                 const auto other_state = context_.world->block_at(cx, other_y, cz);
-                if (world::block_id(other_state) == 64) {
+                if (world::block_id(other_state) == cid) {
                     const auto other_open = world::state_meta(other_state) ^ 0x4;
                     set_block_and_broadcast(cx, other_y, cz,
-                                            static_cast<std::uint16_t>((world::block_id(other_state) << 4) | other_open));
+                                            static_cast<std::uint16_t>((cid << 4) | other_open));
                 }
                 toggle_bit = 0x4;
             }
@@ -329,8 +337,8 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         send_packet(proto::play_cb::kBlockChange, rollback.data());
         return true;
     }
-    // 门（木 64 / 铁 71）是双半方块：下半 + 上半（meta 0x8 标上半）
-    if (world::block_id(state) == 64 || world::block_id(state) == 71) {
+    // 门（木门 64/193-197、铁门 71）是双半方块：下半 + 上半（meta 0x8 标上半）
+    if (world::is_door(world::block_id(state))) {
         const auto did = world::block_id(state);
         const auto facing = world::state_meta(state) & 0x03;
         set_block_and_broadcast(tx, ty, tz, static_cast<std::uint16_t>((did << 4) | facing));
@@ -422,15 +430,50 @@ void Connection::send_block_sound(std::int32_t x, std::int32_t y, std::int32_t z
         return;
     }
     ByteWriter out;
-    writers::write_named_sound(out, on ? sound->on : sound->off, proto::sound_category::kBlocks, x, y,
-                               z, sound->volume, on ? sound->on_pitch : sound->off_pitch);
-    send_packet(proto::play_cb::kSoundEffect, out.data());
-    // 附近玩家也要听到（自己上面已单发，这里的 exclude 是自己）
+    writers::write_named_sound(out, on ? sound->on_id : sound->off_id, proto::sound_category::kBlocks,
+                               x, y, z, sound->volume, on ? sound->on_pitch : sound->off_pitch);
+    // 客户端已本地预测的音效不再回发给操作者（否则双响）
+    if (!(on ? sound->on_predicted : sound->off_predicted)) {
+        send_packet(proto::play_cb::kSoundEffect, out.data());
+    }
+    // 附近玩家始终要听到（自己上面可能已单发，这里的 exclude 是自己）
     if (context_.hub != nullptr) {
         if (const auto cpos = world::ChunkPos::from_world(x, z)) {
             const std::int32_t radius = std::max(1, sound->radius / 16);
             context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
                                          proto::play_cb::kSoundEffect, out.data());
+        }
+    }
+}
+
+void Connection::break_unsupported_neighbors(std::int32_t x, std::int32_t y, std::int32_t z) {
+    if (context_.world == nullptr) {
+        return;
+    }
+    // 六个方向：只有支撑指向 (x,y,z) 的按钮/拉杆会掉（vanilla 邻接更新里同判）
+    static constexpr std::array<world::BlockFaceDelta, 6> kNeighbors{{{-1, 0, 0}, {1, 0, 0},
+                                                                      {0, -1, 0}, {0, 1, 0},
+                                                                      {0, 0, -1}, {0, 0, 1}}};
+    for (const auto& offset : kNeighbors) {
+        const std::int32_t nx = x + offset.dx;
+        const std::int32_t ny = y + offset.dy;
+        const std::int32_t nz = z + offset.dz;
+        const auto state = context_.world->block_at(nx, ny, nz);
+        const auto id = world::block_id(state);
+        if (!world::is_button(id) && !world::is_lever(id)) {
+            continue;
+        }
+        // 只处理支撑正好是破坏点 (x,y,z) 的那些方块
+        if (!world::supported_by(state, x - nx, y - ny, z - nz)) {
+            continue;
+        }
+        set_block_and_broadcast(nx, ny, nz, world::kStateAir);
+        // vanilla 走方块自身的 dropBlock：与环境破坏同理，不受创造模式影响
+        if (context_.item_drops != nullptr) {
+            for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
+                drop_stack(nx + 0.5, ny + 0.25, nz + 0.5,
+                           item::ItemStack{drop.item_id, drop.count, drop.damage}, nx, nz);
+            }
         }
     }
 }

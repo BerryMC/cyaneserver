@@ -2,8 +2,10 @@
 #include <filesystem>
 #include <fstream>
 #include <string_view>
+#include <unordered_map>
 
 #include "cyane/game/world_persistence.hpp"
+#include "cyane/net/block_ticks.hpp"
 #include "cyane/net/container_store.hpp"
 #include "cyane/net/furnace_store.hpp"
 #include "cyane/net/item_drop.hpp"
@@ -449,46 +451,192 @@ CYANE_TEST(merged_save_preserves_non_item_entities) {
     }
 }
 
-// 音效名必须命中客户端注册表：1.12.2 只注册 click_on/click_off 变体，没有裸 .click；
-// 类别/音量/音高取自 vanilla 对应 Block* 类（按钮与拉杆 0.3 音量、按下 0.6 回弹 0.5）。
+// 真实地形区块（走 merged 无损编码）上放门后保存重载：门必须还在
+CYANE_TEST(door_survives_merged_save_on_vanilla_chunk) {
+    const auto path = fixture_path("vanilla_region_chunk.bin");
+    CYANE_CHECK(!path.empty());
+    if (path.empty()) {
+        return;
+    }
+    const auto blob = read_file(path);
+    const auto dir = std::filesystem::temp_directory_path() / "cyane_test_door_merged";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir / "region");
+    {
+        Bytes file(3 * 4096, std::byte{0});
+        file[2] = std::byte{2};
+        file[3] = std::byte{1};
+        std::memcpy(file.data() + 8192, blob.data(), blob.size());
+        std::ofstream out{dir / "region" / "r.0.0.mca", std::ios::binary | std::ios::trunc};
+        out.write(reinterpret_cast<const char*>(file.data()),
+                  static_cast<std::streamsize>(file.size()));
+    }
+
+    constexpr std::uint16_t kLower = static_cast<std::uint16_t>((64 << 4) | 0x01);
+    constexpr std::uint16_t kUpper = static_cast<std::uint16_t>((64 << 4) | 0x08 | 0x01);
+    std::int32_t dx = 0;
+    std::int32_t dy = 0;
+    std::int32_t dz = 0;
+    {
+        world::World world;
+        net::ContainerStore chests;
+        net::FurnaceStore furnaces;
+        net::ItemDropManager drops;
+        net::MobManager mobs;
+        game::WorldPersistence persistence(world, chests, furnaces, drops, mobs, dir.string());
+        CYANE_CHECK(persistence.load().has_value());
+        CYANE_CHECK(!world.source_nbt(world::ChunkPos{0, 0}).empty());  // 确为 merged 路径
+
+        // 找一个地表以上的空气格放门（保留原区块其余方块）
+        for (std::int32_t y = 250; y > 1; --y) {
+            if (world.block_at(3, y, 3) == world::kStateAir) {
+                dy = y;
+                break;
+            }
+        }
+        CYANE_CHECK(dy > 1);
+        dx = 3;
+        dz = 3;
+        world.set_block(dx, dy, dz, kLower);
+        world.set_block(dx, dy + 1, dz, kUpper);
+        const auto saved = persistence.save();
+        CYANE_CHECK(saved.has_value());
+    }
+    {
+        world::World world;
+        net::ContainerStore chests;
+        net::FurnaceStore furnaces;
+        net::ItemDropManager drops;
+        net::MobManager mobs;
+        game::WorldPersistence persistence(world, chests, furnaces, drops, mobs, dir.string());
+        CYANE_CHECK(persistence.load().has_value());
+        CYANE_CHECK_EQ(world.block_at(dx, dy, dz), kLower);
+        CYANE_CHECK_EQ(world.block_at(dx, dy + 1, dz), kUpper);
+    }
+    std::filesystem::remove_all(dir);
+}
+
+// 门是双半方块：放置后必须能落盘并在重载后原样恢复（曾出现放门→重进→门消失）
+CYANE_TEST(placed_door_survives_save_and_reload) {
+    constexpr std::uint16_t kLower = static_cast<std::uint16_t>((64 << 4) | 0x01);
+    constexpr std::uint16_t kUpper = static_cast<std::uint16_t>((64 << 4) | 0x08 | 0x01);
+    const auto dir = std::filesystem::temp_directory_path() / "cyane_test_door";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir / "region");
+    {
+        world::World world;
+        net::ContainerStore chests;
+        net::FurnaceStore furnaces;
+        net::ItemDropManager drops;
+        net::MobManager mobs;
+        game::WorldPersistence persistence(world, chests, furnaces, drops, mobs, dir.string());
+        world.set_block(5, 100, 7, kLower);
+        world.set_block(5, 101, 7, kUpper);
+        const auto saved = persistence.save();
+        CYANE_CHECK(saved.has_value());
+        CYANE_CHECK_EQ(*saved, std::size_t{1});
+    }
+    {
+        world::World world;
+        net::ContainerStore chests;
+        net::FurnaceStore furnaces;
+        net::ItemDropManager drops;
+        net::MobManager mobs;
+        game::WorldPersistence persistence(world, chests, furnaces, drops, mobs, dir.string());
+        CYANE_CHECK(persistence.load().has_value());
+        CYANE_CHECK_EQ(world.block_at(5, 100, 7), kLower);
+        CYANE_CHECK_EQ(world.block_at(5, 101, 7), kUpper);
+    }
+    std::filesystem::remove_all(dir);
+}
+
+// 音效表必须与客户端注册表一致：0x49 走 id（1.12.2 的首字段是 SoundEffect 注册表 id，不是名字），
+// id → 名字的对应由 vanilla 注册顺序决定。fixture 从 client.jar 的 SoundEvent.b() 提取，
+// 已核对与服务端 SoundEffect.b() 顺序完全一致。
 CYANE_TEST(toggle_sound_matches_vanilla_registry) {
+    const auto path = fixture_path("sound_registry_ids.txt");
+    CYANE_CHECK(!path.empty());
+    std::unordered_map<std::int32_t, std::string> registry;
+    std::ifstream in{path};
+    std::int32_t id = 0;
+    std::string name;
+    while (in >> id >> name) {
+        registry.emplace(id, name);
+    }
+    CYANE_CHECK_EQ(registry.size(), std::size_t{549});
+
+    const auto check = [&registry](std::uint16_t block_id, std::string_view on, std::string_view off) {
+        const auto sound = world::toggle_sound(block_id);
+        CYANE_CHECK(sound.has_value());
+        if (!sound) {
+            return;
+        }
+        CYANE_CHECK_EQ(sound->on, on);
+        CYANE_CHECK_EQ(sound->off, off);
+        CYANE_CHECK_EQ(registry.at(sound->on_id), std::string{on});
+        CYANE_CHECK_EQ(registry.at(sound->off_id), std::string{off});
+    };
+
+    check(77, "block.stone_button.click_on", "block.stone_button.click_off");
+    check(143, "block.wood_button.click_on", "block.wood_button.click_off");
+    check(69, "block.lever.click", "block.lever.click");
+    check(64, "block.wooden_door.open", "block.wooden_door.close");
+    check(71, "block.iron_door.open", "block.iron_door.close");
+    check(96, "block.wooden_trapdoor.open", "block.wooden_trapdoor.close");
+    check(107, "block.fence_gate.open", "block.fence_gate.close");
+
+    // 类别/音量/音高取自 vanilla Block* 类：按钮与拉杆 0.3 音量、按下 0.6 回弹 0.5
     const auto stone_button = world::toggle_sound(77);
-    CYANE_CHECK(stone_button.has_value());
-    CYANE_CHECK_EQ(stone_button->on, std::string_view{"block.stone_button.click_on"});
-    CYANE_CHECK_EQ(stone_button->off, std::string_view{"block.stone_button.click_off"});
     CYANE_CHECK_EQ(stone_button->volume, 0.3f);
     CYANE_CHECK_EQ(stone_button->on_pitch, 0.6f);
     CYANE_CHECK_EQ(stone_button->off_pitch, 0.5f);
     CYANE_CHECK_EQ(stone_button->radius, 16);
+    CYANE_CHECK_EQ(world::toggle_sound(69)->volume, 0.3f);
+    CYANE_CHECK_EQ(world::toggle_sound(107)->volume, 1.0f);
+    CYANE_CHECK_EQ(world::toggle_sound(107)->radius, 64);  // 门类的 World Event 广播半径
 
-    const auto wood_button = world::toggle_sound(143);
-    CYANE_CHECK(wood_button.has_value());
-    CYANE_CHECK_EQ(wood_button->on, std::string_view{"block.wood_button.click_on"});
-    CYANE_CHECK_EQ(wood_button->off, std::string_view{"block.wood_button.click_off"});
-
-    const auto lever = world::toggle_sound(69);
-    CYANE_CHECK(lever.has_value());
-    CYANE_CHECK_EQ(lever->on, std::string_view{"block.lever.click"});
-    CYANE_CHECK_EQ(lever->off, std::string_view{"block.lever.click"});
-    CYANE_CHECK_EQ(lever->volume, 0.3f);
-
-    const auto wood_door = world::toggle_sound(64);
-    const auto iron_door = world::toggle_sound(71);
-    CYANE_CHECK(wood_door.has_value() && iron_door.has_value());
-    CYANE_CHECK_EQ(wood_door->on, std::string_view{"block.wooden_door.open"});
-    CYANE_CHECK_EQ(wood_door->off, std::string_view{"block.wooden_door.close"});
-    CYANE_CHECK_EQ(iron_door->on, std::string_view{"block.iron_door.open"});
-    CYANE_CHECK_EQ(iron_door->off, std::string_view{"block.iron_door.close"});
-
-    const auto trapdoor = world::toggle_sound(96);
-    const auto gate = world::toggle_sound(107);
-    CYANE_CHECK(trapdoor.has_value() && gate.has_value());
-    CYANE_CHECK_EQ(trapdoor->off, std::string_view{"block.wooden_trapdoor.close"});
-    CYANE_CHECK_EQ(gate->on, std::string_view{"block.fence_gate.open"});
-    CYANE_CHECK_EQ(gate->off, std::string_view{"block.fence_gate.close"});
-    CYANE_CHECK_EQ(gate->volume, 1.0f);
-    CYANE_CHECK_EQ(gate->radius, 64);
+    // 客户端是否本地预测：按钮「按下」与开关门由客户端自己播（服务端不再回发，否则双响），
+    // 按钮「回弹」与拉杆不预测（服务端必须发）
+    CYANE_CHECK(stone_button->on_predicted);
+    CYANE_CHECK(!stone_button->off_predicted);
+    CYANE_CHECK(world::toggle_sound(143)->on_predicted);
+    CYANE_CHECK(!world::toggle_sound(143)->off_predicted);
+    CYANE_CHECK(!world::toggle_sound(69)->on_predicted);
+    CYANE_CHECK(!world::toggle_sound(69)->off_predicted);
+    CYANE_CHECK(world::toggle_sound(64)->on_predicted && world::toggle_sound(64)->off_predicted);
+    CYANE_CHECK(world::toggle_sound(107)->on_predicted && world::toggle_sound(107)->off_predicted);
 
     CYANE_CHECK(!world::toggle_sound(1).has_value());    // 石头
     CYANE_CHECK(!world::toggle_sound(54).has_value());   // 箱子
+}
+
+// 按钮回弹是"世界级"延迟更新：计时不在按下的连接上，按下者断线也必须照常弹起
+CYANE_TEST(button_release_is_world_level) {
+    constexpr std::uint16_t kPressed = static_cast<std::uint16_t>((77 << 4) | 0x08);
+    constexpr std::uint16_t kReleased = static_cast<std::uint16_t>(77 << 4);
+    world::World world;
+    net::PlayerHub hub;
+    net::BlockTicks ticks;
+
+    world.set_block(-3, 70, 5, kPressed);
+    ticks.schedule_button_release(-3, 70, 5, 1000);
+    CYANE_CHECK_EQ(ticks.pending(), std::size_t{1});
+    ticks.tick(999, world, hub, 8);
+    CYANE_CHECK_EQ(world.block_at(-3, 70, 5), kPressed);  // 未到期：仍然是按下的
+    ticks.tick(1000, world, hub, 8);
+    CYANE_CHECK_EQ(world.block_at(-3, 70, 5), kReleased);
+    CYANE_CHECK_EQ(ticks.pending(), std::size_t{0});
+
+    // 期间方块被破坏：回弹什么都不做
+    world.set_block(-3, 70, 5, kPressed);
+    ticks.schedule_button_release(-3, 70, 5, 2000);
+    world.set_block(-3, 70, 5, world::kStateAir);
+    ticks.tick(2000, world, hub, 8);
+    CYANE_CHECK_EQ(world.block_at(-3, 70, 5), world::kStateAir);
+
+    // 已提前回弹（0x8 已清）：不再重复广播，也不改变状态
+    world.set_block(-3, 70, 5, kReleased);
+    ticks.schedule_button_release(-3, 70, 5, 3000);
+    ticks.tick(3000, world, hub, 8);
+    CYANE_CHECK_EQ(world.block_at(-3, 70, 5), kReleased);
 }

@@ -15,6 +15,13 @@ using Clock = std::chrono::steady_clock;
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - since).count());
 }
 
+// 单调毫秒时间戳（steady_clock 纪元）。跨线程比较"何时到期"统一用它。
+[[nodiscard]] inline std::uint64_t now_ms() noexcept {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch())
+            .count());
+}
+
 [[nodiscard]] constexpr double nanos_to_ms(std::uint64_t nanos) noexcept {
     return static_cast<double>(nanos) * 1e-6;
 }

@@ -25,6 +25,7 @@
 #include "cyane/entity/player_manager.hpp"
 #include "cyane/item/crafting.hpp"
 #include "cyane/item/player_inventory.hpp"
+#include "cyane/net/block_ticks.hpp"
 #include "cyane/net/container_store.hpp"
 #include "cyane/net/crafting_table_store.hpp"
 #include "cyane/net/furnace_store.hpp"
@@ -62,6 +63,7 @@ struct ConnectionContext {
     std::function<void()> save_world;
     entity::PlayerManager* player_manager{nullptr};
     PlayerHub* hub{nullptr};
+    BlockTicks* block_ticks{nullptr};  // 世界级延迟方块更新（按钮回弹）
     ItemDropManager* item_drops{nullptr};
     MobManager* mobs{nullptr};
     ContainerStore* containers{nullptr};
@@ -177,6 +179,8 @@ private:
     // Named Sound Effect (0x49)：向 16 格内玩家（含自己）广播方块交互音效
     void send_block_sound(std::int32_t x, std::int32_t y, std::int32_t z,
                           std::uint16_t block_id, bool on);
+    // 破坏 (x,y,z) 后，附着在它上面的按钮/拉杆失去支撑：一起破坏并掉落
+    void break_unsupported_neighbors(std::int32_t x, std::int32_t y, std::int32_t z);
     void kill_player();
     void respawn_player();
     // 掉落物：生成、给自己补发已有、拾取入包
@@ -283,8 +287,6 @@ private:
     bool small_open_{false};
     std::size_t small_slots_{0};
     static constexpr std::uint8_t kSmallWindowId = 5;
-    // 已按下的按钮（block_key | 释放 tick）——tick 中到期回弹并广播
-    std::vector<std::pair<std::int64_t, std::uint64_t>> pressed_buttons_;
     // 打开期间的 3x3 格与最近一次结果（点击就地改，同步写回 CraftingTableStore）
     std::array<item::ItemStack, world::CraftingTableStore::kGridCells> table_grid_{};
     item::ItemStack table_result_{};

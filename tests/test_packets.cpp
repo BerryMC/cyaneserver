@@ -130,12 +130,14 @@ CYANE_TEST(packet_angle_byte_wraps) {
     CYANE_CHECK_EQ(net::writers::angle_byte(360.0f), 0u);
 }
 
-// Named Sound Effect (0x49)：位置是方块中心 ×8 的定点数（负坐标按补码），类别为 SoundCategory 序数，
-// 音量/音高为 f32。
-CYANE_TEST(packet_named_sound_encodes_block_center) {
+// Named Sound Effect (0x49)：soundId 为 SoundEffect 注册表 id（VarInt，可多字节），位置是
+// (方块坐标+0.5)×8 的定点数（负坐标按补码），类别为 SoundCategory 序数，音量/音高为 f32。
+CYANE_TEST(packet_named_sound_encodes_registry_id_and_block_center) {
     ByteWriter out;
-    net::writers::write_named_sound(out, "block.lever.click", 4, 10, 64, -3, 0.3f, 0.6f);
-    CYANE_CHECK(payload_is(out,
-                           "11 62 6c 6f 63 6b 2e 6c 65 76 65 72 2e 63 6c 69 63 6b 04 00 00 00 58 "
-                           "00 00 02 08 ff ff ff f0 3e 99 99 9a 3f 19 99 9a"));
+    net::writers::write_named_sound(out, 62, 4, 10, 64, -3, 0.3f, 0.6f);
+    CYANE_CHECK(payload_is(out, "3e 04 00 00 00 54 00 00 02 04 ff ff ff ec 3e 99 99 9a 3f 19 99 9a"));
+
+    ByteWriter big;
+    net::writers::write_named_sound(big, 300, 4, 0, 0, 0, 1.0f, 1.0f);
+    CYANE_CHECK(payload_is(big, "ac 02 04 00 00 00 04 00 00 00 04 00 00 00 04 3f 80 00 00 3f 80 00 00"));
 }

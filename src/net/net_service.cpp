@@ -72,13 +72,10 @@ public:
 
     void sweep() {
         // 先驱动每连接的周期逻辑（KeepAlive/超时），再回收已死连接
-        const std::uint64_t now_ms = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count());
+        const std::uint64_t timestamp_ms = cyane::now_ms();
         for (auto& connection : connections_) {
             if (connection->alive()) {
-                connection->tick(now_ms);
+                connection->tick(timestamp_ms);
             }
         }
         const auto removed = std::erase_if(connections_, [](const std::unique_ptr<Connection>& connection) {

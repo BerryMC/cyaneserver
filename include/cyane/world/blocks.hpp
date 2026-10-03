@@ -24,11 +24,29 @@ inline constexpr std::uint16_t kStateDropper = 158 << 4;       // 投掷器
 
 // 1.12.2 中方块型物品的 item id 与 block id 同值（id < 256），
 // 物品 damage 即方块 meta，故状态 = itemId<<4 | (damage & 0xF)。
+// 门是例外：纯物品、item id 与 block id 不同值（见 door_block_from_item）。
 // 返回 kStateAir 表示该物品不是可放置方块。
+[[nodiscard]] constexpr std::uint16_t door_block_from_item(std::int16_t item_id) noexcept {
+    switch (item_id) {
+        case 324: return 64;   // 橡木门
+        case 330: return 71;   // 铁门
+        case 427: return 193;  // 云杉门
+        case 428: return 194;  // 白桦门
+        case 429: return 195;  // 丛林木门
+        case 430: return 196;  // 金合欢门
+        case 431: return 197;  // 深色橡木门
+        default: return 0;
+    }
+}
+
 [[nodiscard]] constexpr std::uint16_t block_state_from_item(std::int16_t item_id,
                                                             std::int16_t damage) noexcept {
-    if (item_id <= 0 || item_id >= 256) {
+    if (item_id <= 0) {
         return kStateAir;
+    }
+    if (item_id >= 256) {
+        const auto door = door_block_from_item(item_id);
+        return door != 0 ? static_cast<std::uint16_t>(door << 4) : kStateAir;
     }
     return static_cast<std::uint16_t>((static_cast<std::uint16_t>(item_id) << 4) |
                                       (static_cast<std::uint16_t>(damage) & 0x0F));
@@ -51,6 +69,46 @@ struct BlockFaceDelta {
         case 5: return {1, 0, 0};   // east
         default: return {};
     }
+}
+
+// 木门：64（橡木）+ 193..197（云杉/白桦/丛林/金合欢/深色橡木），可手动开关
+[[nodiscard]] constexpr bool is_wooden_door(std::uint16_t block_id) noexcept {
+    return block_id == 64 || (block_id >= 193 && block_id <= 197);
+}
+
+// 门类（含铁门 71）：上下双半方块
+[[nodiscard]] constexpr bool is_door(std::uint16_t block_id) noexcept {
+    return is_wooden_door(block_id) || block_id == 71;
+}
+
+[[nodiscard]] constexpr bool is_button(std::uint16_t block_id) noexcept {
+    return block_id == 77 || block_id == 143;
+}
+
+// 拉杆（69）：附着型方块，支撑没了同样掉落
+[[nodiscard]] constexpr bool is_lever(std::uint16_t block_id) noexcept {
+    return block_id == 69;
+}
+
+// 附着型方块（按钮/拉杆）meta 低 3 位 = FACING（EnumDirection，由支撑方块指向自身；
+// BlockButtonAbstract.fromLegacyData：0=下 1=东 2=西 3=南 4=北 5=上）。
+// 返回从自身指向支撑方块的偏移——支撑方块没了，该方块就该掉落。
+[[nodiscard]] constexpr BlockFaceDelta support_delta(std::uint16_t meta) noexcept {
+    switch (meta & 0x07) {
+        case 0: return {0, 1, 0};    // 贴天花板：支撑在上方
+        case 1: return {-1, 0, 0};   // 朝东：支撑在西侧
+        case 2: return {1, 0, 0};    // 朝西：支撑在东侧
+        case 3: return {0, 0, -1};   // 朝南：支撑在北侧
+        case 4: return {0, 0, 1};    // 朝北：支撑在南侧
+        default: return {0, -1, 0};  // 贴地板：支撑在下方
+    }
+}
+
+// 附着方块 state 的支撑是否位于相对自身 (dx,dy,dz) 处（破坏支撑后据此判定掉落）
+[[nodiscard]] constexpr bool supported_by(std::uint16_t state, std::int32_t dx, std::int32_t dy,
+                                          std::int32_t dz) noexcept {
+    const auto support = support_delta(state_meta(state));
+    return support.dx == dx && support.dy == dy && support.dz == dz;
 }
 
 inline constexpr std::size_t kSectionBlockCount = 16 * 16 * 16;
