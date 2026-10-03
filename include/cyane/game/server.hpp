@@ -17,6 +17,7 @@
 #include "cyane/game/world_persistence.hpp"
 #include "cyane/item/crafting.hpp"
 #include "cyane/net/block_ticks.hpp"
+#include "cyane/net/projectile_manager.hpp"
 #include "cyane/net/crafting_table_store.hpp"
 #include "cyane/net/mob_manager.hpp"
 #include "cyane/game/status.hpp"
@@ -91,12 +92,20 @@ private:
     explicit Server(ServerConfig config);
 
     void tick();
+    // 苦力怕爆炸：范围伤害（玩家+生物）+ 破坏方块（含掉落）+ 音效/Explosion 包
+    void apply_explosion(double x, double y, double z, float power);
+    // 骷髅射箭：生成箭实体并广播 SpawnObject + 射击音效
+    void fire_arrow(const net::MobShot& shot);
+    // 服务端侧生成掉落物（爆炸破坏方块等非玩家来源），广播给附近玩家
+    void spawn_drop_world(double x, double y, double z, item::ItemStack stack, std::int32_t bx,
+                          std::int32_t bz);
 
     ServerConfig config_;
     std::unique_ptr<game::ServerStatus> status_;
     std::unique_ptr<entity::PlayerManager> player_manager_;
     std::unique_ptr<net::PlayerHub> hub_;
     std::unique_ptr<net::BlockTicks> block_ticks_;
+    std::unique_ptr<net::ProjectileManager> projectiles_;
     std::unique_ptr<net::ItemDropManager> item_drops_;
     std::unique_ptr<net::ContainerStore> containers_;
     std::unique_ptr<net::FurnaceStore> furnaces_;

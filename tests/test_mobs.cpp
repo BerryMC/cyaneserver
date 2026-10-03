@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "cyane/net/mob_manager.hpp"
+#include "cyane/net/projectile_manager.hpp"
 #include "cyane/net/packet_writers.hpp"
 #include "cyane/world/mob_types.hpp"
 #include "cyane/world/physics.hpp"
@@ -218,4 +219,111 @@ CYANE_TEST(packet_spawn_mob_encodes_vanilla_layout) {
     const auto yaw_byte = std::to_integer<int>(data[18 + 24]);
     CYANE_CHECK_EQ(yaw_byte, 64);
     CYANE_CHECK_EQ(std::to_integer<int>(data.back()), 0xFF);  // 空 metadata 终止符
+}
+
+// 苦力怕：追近后点燃引信（停住），30 tick 后自爆（explosion + death 事件）
+CYANE_TEST(creeper_fuse_then_explodes) {
+    world::World world;
+    net::MobManager mobs;
+    const auto id = mobs.spawn(50, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    const std::vector<net::PlayerSnapshot> players = {player_at(7, 2.0, kGroundY, 0.5)};
+    bool fused = false;
+    for (int i = 0; i < 200 && !fused; ++i) {
+        (void)mobs.tick(world, players);
+        const auto creeper = mobs.by_id(id);
+        fused = creeper && creeper->fuse_ticks >= 0;
+    }
+    CYANE_CHECK(fused);
+    // 引信期间苦力怕不再移动（站定）
+    const auto before = mobs.by_id(id);
+    CYANE_CHECK(before.has_value());
+    const auto x_before = before->pos.x;
+    (void)mobs.tick(world, players);
+    const auto during = mobs.by_id(id);
+    CYANE_CHECK(during.has_value());
+    CYANE_CHECK_NEAR(during->pos.x, x_before, 0.001);
+
+    // 走完引信（<=30 tick）：爆炸 + 自爆死亡
+    bool exploded = false;
+    bool died = false;
+    for (int i = 0; i < 40 && !exploded; ++i) {
+        const auto result = mobs.tick(world, players);
+        exploded = !result.explosions.empty();
+        died = !result.deaths.empty();
+    }
+    CYANE_CHECK(exploded);
+    CYANE_CHECK(died);
+    CYANE_CHECK_EQ(mobs.size(), std::size_t{0});
+    CYANE_CHECK_EQ(mobs.by_id(id).has_value(), false);
+}
+
+// 骷髅：射程内按间隔射箭（shots 事件），目标在远处仍保持追击
+CYANE_TEST(skeleton_shoots_from_range) {
+    world::World world;
+    net::MobManager mobs;
+    const auto id = mobs.spawn(51, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    const std::vector<net::PlayerSnapshot> players = {player_at(7, 10.5, kGroundY, 0.5)};
+    int shots = 0;
+    double x_min = 99.0;
+    for (int i = 0; i < 120; ++i) {
+        const auto result = mobs.tick(world, players);
+        shots += static_cast<int>(result.shots.size());
+        const auto skeleton = mobs.by_id(id);
+        if (skeleton) {
+            x_min = std::min(x_min, skeleton->pos.x);
+        }
+    }
+    CYANE_CHECK(shots >= 2);                       // 6 秒内至少射 2 箭
+    CYANE_CHECK(x_min < 6.0);                      // 玩家在射程内：骷髅原地射击，不近身
+    const auto last = mobs.tick(world, players);
+    for (const auto& shot : last.shots) {
+        CYANE_CHECK_EQ(shot.target_player, std::uint32_t{7});
+    }
+    CYANE_CHECK(!last.shots.empty() || shots >= 2);
+}
+
+// 箭：重力下坠、命中固体方块产生 ArrowHit、命中后箭消失
+CYANE_TEST(projectile_flies_hits_block_and_dies) {
+    world::World world;
+    net::PlayerHub hub;
+    net::MobManager mobs;
+    net::ProjectileManager arrows;
+    arrows.spawn(1, 0.5, 4.5, 0.5, 0.5, 0.0, 0.0, 2.0f);  // 朝 +x 平射
+    bool hit = false;
+    for (int i = 0; i < 40 && !hit; ++i) {
+        const auto hits = arrows.tick(world, hub, mobs);
+        for (const auto& event : hits) {
+            CYANE_CHECK(!event.hit_player && !event.hit_mob);
+            hit = true;
+        }
+    }
+    CYANE_CHECK(hit);  // 40 tick 内必命中（0.5 格/tick 平射）
+    CYANE_CHECK(hit);
+    CYANE_CHECK_EQ(arrows.size(), std::size_t{0});
+}
+
+// 箭命中玩家：hit_player 带目标 id
+CYANE_TEST(projectile_hits_player) {
+    world::World world;
+    net::PlayerHub hub;
+    net::MobManager mobs;
+    net::ProjectileManager arrows;
+    // 注册一个玩家快照在箭的弹道上
+    net::PlayerSnapshot victim;
+    victim.entity_id = 9;
+    victim.x = 4.0;
+    victim.y = static_cast<double>(kGroundY);
+    victim.z = 0.5;
+    (void)hub.register_player(victim);
+    arrows.spawn(1, 0.5, kGroundY + 0.9, 0.5, 0.7, 0.0, 0.0, 2.0f);
+    bool hit = false;
+    for (int i = 0; i < 30 && !hit; ++i) {
+        for (const auto& event : arrows.tick(world, hub, mobs)) {
+            hit = event.hit_player;
+            if (hit) {
+                CYANE_CHECK_EQ(event.target_player, std::uint32_t{9});
+            }
+        }
+    }
+    CYANE_CHECK(hit);
 }

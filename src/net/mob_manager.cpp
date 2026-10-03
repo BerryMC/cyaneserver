@@ -16,6 +16,8 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr std::array<std::int32_t, 4> kPassiveTypes = {90, 91, 92, 93};  // 猪 羊 牛 鸡
 constexpr std::int32_t kHostileScanInterval = 10;  // 目标扫描节流：每 0.5s
 constexpr std::int32_t kAttackIntervalTicks = 20;  // 近战挥击冷却（vanilla 20 tick）
+constexpr std::int32_t kFuseTicks = 30;            // 苦力怕引信（EntityCreeper.maxFuseTicks）
+constexpr std::int32_t kShootIntervalTicks = 40;   // 骷髅射箭间隔（BowShoot 20，保守取 40）
 
 std::mt19937& rng() {
     thread_local std::mt19937 engine{std::random_device{}()};
@@ -251,6 +253,48 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 const double dz = target->z - mob.pos.z;
                 const double dist = std::sqrt(dx * dx + dz * dz);
                 // 近战：进入攻击距离后停下挥击（冷却由 Server 侧事件落地）
+                if (mob.fuse_ticks >= 0) {
+                    // 苦力怕引信期：站定不再移动（vanilla 引信期不寻路）
+                    mob.pos.yaw = yaw_for(dx, dz);
+                    --mob.fuse_ticks;
+                    if (mob.fuse_ticks < 0) {
+                        result.explosions.push_back(
+                            MobExplosion{mob.pos.x, mob.pos.y, mob.pos.z, 3.0f});
+                        MobDeath death{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z};
+                        (void)remove_locked(mob.entity_id);
+                        result.deaths.push_back(death);
+                    }
+                    break;
+                }
+                const bool in_range = dist <= static_cast<double>(species->attack_range);
+                if (species->explodes) {
+                    if (in_range) {
+                        mob.fuse_ticks = kFuseTicks;
+                    } else {
+                        mob.dir_x = dx;
+                        mob.dir_z = dz;
+                        walk(mob.dir_x, mob.dir_z, 1.0);
+                    }
+                    break;
+                }
+                if (species->ranged) {
+                    // 骷髅：射程内停下射击（过近则后撤保持距离）
+                    if (dist < 4.0) {
+                        mob.dir_x = -dx;
+                        mob.dir_z = -dz;
+                        walk(mob.dir_x, mob.dir_z, 1.0);
+                    } else {
+                        mob.pos.yaw = yaw_for(dx, dz);
+                    }
+                    if (in_range && mob.attack_cooldown <= 0) {
+                        mob.attack_cooldown = kShootIntervalTicks;
+                        result.shots.push_back(MobShot{mob.entity_id, target->entity_id, mob.pos.x,
+                                                       mob.pos.y + static_cast<double>(species->height) * 0.85,
+                                                       mob.pos.z,
+                                                       target->x, target->y + 1.0, target->z});
+                    }
+                    break;
+                }
                 if (dist > static_cast<double>(species->attack_range)) {
                     mob.dir_x = dx;
                     mob.dir_z = dz;

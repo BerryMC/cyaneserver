@@ -69,6 +69,31 @@ inline void write_spawn_mob(ByteWriter& out, std::uint32_t entity_id, std::int32
     out.u8(0xFF);  // 空 metadata
 }
 
+// SpawnObject (0x00)：varint id | uuid(16) | byte type | f64 x/y/z | byte pitch/yaw
+//   | i32 data | short vx/vy/vz（速度单位 1/8000，data≠0 时客户端才读速度）
+inline void write_spawn_object(ByteWriter& out, std::uint32_t entity_id, std::uint8_t object_type,
+                               double x, double y, double z, float yaw, float pitch,
+                               std::int32_t data, double vx, double vy, double vz) {
+    out.varint(static_cast<std::int32_t>(entity_id));
+    std::array<std::uint8_t, 16> uuid{};
+    uuid[15] = static_cast<std::uint8_t>(entity_id & 0xFF);
+    uuid[14] = static_cast<std::uint8_t>((entity_id >> 8) & 0xFF);
+    out.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid.data()), uuid.size()});
+    out.u8(object_type);
+    out.f64(x);
+    out.f64(y);
+    out.f64(z);
+    out.u8(angle_byte(pitch));
+    out.u8(angle_byte(yaw));
+    out.i32(data);
+    auto clamp_i16 = [](double v) {
+        return static_cast<std::int16_t>(std::clamp(v, -3.9, 3.9) * 8000.0);
+    };
+    out.i16(clamp_i16(vx));
+    out.i16(clamp_i16(vy));
+    out.i16(clamp_i16(vz));
+}
+
 // EntityVelocity (0x3E)：varint id | short vx/vy/vz（单位 = 1/8000 格/tick）
 inline void write_entity_velocity(ByteWriter& out, std::uint32_t entity_id, double vx, double vy,
                                   double vz) {

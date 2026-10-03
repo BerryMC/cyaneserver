@@ -50,6 +50,26 @@ struct Mob {
     double home_z{0.0};
     std::uint32_t target_player{0};  // 敌对目标玩家实体 id（0 = 无）
     std::int32_t attack_cooldown{0};
+    std::int32_t fuse_ticks{-1};   // 苦力怕引信（-1 = 未点燃）
+};
+
+// 骷髅射出的箭：起点与目标（Server 负责生成投射物实体）
+struct MobShot {
+    std::uint32_t mob_id{0};
+    std::uint32_t target_player{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    double tx{0.0};
+    double ty{0.0};
+    double tz{0.0};
+};
+
+struct MobExplosion {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    float power{3.0f};  // vanilla 苦力怕 explosionRadius=3
 };
 
 // 持久化形状：类型 + 位置 + 朝向 + 血量（存档 Entities 列表）
@@ -92,6 +112,8 @@ struct MobTickResult {
     std::vector<MobMove> moved;
     std::vector<MobAttack> attacks;
     std::vector<MobDeath> deaths;
+    std::vector<MobShot> shots;        // 骷髅射箭
+    std::vector<MobExplosion> explosions;  // 苦力怕引爆（自爆即死亡）
 };
 
 // 受伤结果：是否命中、是否致死、剩余血量
