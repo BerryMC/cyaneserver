@@ -212,9 +212,15 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
             const auto clicked_state = context_.world->block_at(cx, cy, cz);
             const auto cid = world::block_id(clicked_state);
             std::uint16_t toggle_bit = 0;
-            // 拉杆 69：0x8 = 拉下；活板门 96：0x4 = 开；栅栏门 107：0x4 = 开；木门 64：0x4 = 开（上下半同翻）
+            // 拉杆 69：0x8 = 拉下；按钮 77/143：0x8 = 按下（延迟回弹）；
+            // 活板门 96：0x4 = 开；栅栏门 107：0x4 = 开；木门 64：0x4 = 开（上下半同翻）
             if (cid == 69) {
                 toggle_bit = 0x8;
+            } else if (cid == 77 || cid == 143) {
+                toggle_bit = 0x8;  // 按钮：按下后由 Connection::tick 延迟回弹
+                const std::int64_t bkey = detail::block_key(cx, cy, cz);
+                const auto delay = cid == 77 ? 20u : 10u;  // 石 1s / 木 0.5s
+                pressed_buttons_.emplace_back(bkey, now_ms_ + delay * 50);
             } else if (cid == 96 || cid == 107) {
                 toggle_bit = 0x4;
             } else if (cid == 64) {
@@ -262,9 +268,20 @@ bool Connection::handle_play_block_place(ByteSpan payload) {
         (void)eat_held_food();
         return true;
     }
-    const std::uint16_t state = world::block_state_from_item(held.id, held.damage);
+    std::uint16_t state = world::block_state_from_item(held.id, held.damage);
     if (state == world::kStateAir) {
         return true;  // 空手或非方块物品：忽略
+    }
+    // 贴面方块（按钮/拉杆等）meta 编码贴合面——否则客户端渲染在错误朝向
+    {
+        const auto sid = world::block_id(state);
+        if (sid == 77 || sid == 143 || sid == 69) {
+            // face→meta：0=底 1=顶 2=北 3=南 4=西 5=东（1.12.2 按钮面位）
+            state = static_cast<std::uint16_t>((sid << 4) | (*face & 0x07));
+        } else if (sid == 96 || sid == 107) {
+            // 活板门/栅栏门：低 2 位朝向 = face 对应
+            state = static_cast<std::uint16_t>((sid << 4) | (*face & 0x03));
+        }
     }
     const auto delta = world::face_delta(*face);
     const std::int32_t tx = cx + delta.dx;

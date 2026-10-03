@@ -7,6 +7,7 @@
 #include "connection_detail.hpp"
 #include "cyane/proto/frame.hpp"
 #include "cyane/proto/json.hpp"
+#include "cyane/world/blocks.hpp"
 
 namespace cyane::net {
 
@@ -147,6 +148,26 @@ void Connection::tick(std::uint64_t now_ms) {
     sync_furnace_progress();
     // 限流发出待发表中的区块（避免跨区块/登录时一次性灌爆 outbox）
     send_pending_chunks(kChunkPerTick);
+    // 按钮回弹：到期后清除 0x8 位并广播
+    if (!pressed_buttons_.empty()) {
+        for (std::size_t i = 0; i < pressed_buttons_.size();) {
+            const auto [bkey, release_ms] = pressed_buttons_[i];
+            if (now_ms < release_ms) {
+                ++i;
+                continue;
+            }
+            const auto [bx, by, bz] = world::unpack_block_pos(bkey);
+            if (context_.world != nullptr) {
+                const auto st = context_.world->block_at(bx, by, bz);
+                const auto cid = world::block_id(st);
+                if (cid == 77 || cid == 143) {
+                    set_block_and_broadcast(bx, by, bz, static_cast<std::uint16_t>(st & ~0x80));
+                }
+            }
+            pressed_buttons_[i] = pressed_buttons_.back();
+            pressed_buttons_.pop_back();
+        }
+    }
     // 首次进入 play：以当前时间作为存活基线
     if (last_keepalive_recv_ms_ == 0) {
         last_keepalive_recv_ms_ = now_ms;

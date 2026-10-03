@@ -3,6 +3,8 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <utility>
+#include <vector>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -275,6 +277,8 @@ private:
     bool small_open_{false};
     std::size_t small_slots_{0};
     static constexpr std::uint8_t kSmallWindowId = 5;
+    // 已按下的按钮（block_key | 释放 tick）——tick 中到期回弹并广播
+    std::vector<std::pair<std::int64_t, std::uint64_t>> pressed_buttons_;
     // 打开期间的 3x3 格与最近一次结果（点击就地改，同步写回 CraftingTableStore）
     std::array<item::ItemStack, world::CraftingTableStore::kGridCells> table_grid_{};
     item::ItemStack table_result_{};
