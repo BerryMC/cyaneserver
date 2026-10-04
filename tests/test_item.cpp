@@ -188,3 +188,98 @@ CYANE_TEST(attached_block_support_directions) {
     CYANE_CHECK(!supported_by(button(5), 0, 1, 0));
     CYANE_CHECK(!supported_by(button(1), 1, 0, 0));
 }
+
+// 回归：真实客户端从创造栏拿起刷怪蛋发来的 slot 带 EntityTag NBT（damage=0）。
+// read_slot 曾对任何 NBT 直接返回 nullopt → 上层断连（"connection -1 read error"）。
+// 现在解析 NBT、把 EntityTag.id 翻译成 damage、跳过后继续读流。
+// NBT 条目顺序 = tag 字节 → 名字 → 载荷；字符串 = u16 长度 + 字节。
+namespace {
+
+void put_named(cyane::ByteWriter& out, std::string_view name) {
+    out.u8(static_cast<std::uint8_t>(name.size() >> 8));
+    out.u8(static_cast<std::uint8_t>(name.size() & 0xFF));
+    out.bytes(cyane::ByteSpan{reinterpret_cast<const std::byte*>(name.data()), name.size()});
+}
+
+}  // namespace
+
+CYANE_TEST(spawn_egg_slot_with_entity_tag_round_trips) {
+    cyane::ByteWriter payload;
+    payload.i16(383);  // 刷怪蛋
+    payload.u8(1);
+    payload.i16(0);    // damage=0（1.12.2 创造栏蛋的实体类型只在 NBT 里）
+    payload.u8(0x0A);  // 根 TAG_Compound
+    put_named(payload, "");
+    payload.u8(0x0A);  // EntityTag: Compound
+    put_named(payload, "EntityTag");
+    payload.u8(0x08);  // id: String
+    put_named(payload, "id");
+    put_named(payload, "minecraft:zombie");
+    payload.u8(0x00);  // EntityTag 结束
+    payload.u8(0x00);  // 根结束
+
+    cyane::ByteReader reader{payload.data()};
+    const auto egg = cyane::item::read_slot(reader);
+    CYANE_CHECK(egg.has_value());
+    if (egg) {
+        CYANE_CHECK_EQ(egg->id, std::int16_t{383});
+        CYANE_CHECK_EQ(egg->damage, std::int16_t{54});  // EntityTag.id → 类型 id
+        CYANE_CHECK_EQ(egg->count, std::uint8_t{1});
+    }
+    CYANE_CHECK(reader.empty());  // NBT 被精确跳过，流不脱节
+
+    // 回发：damage=54 的蛋重建 EntityTag，客户端渲染/放置语义与原版一致
+    cyane::ByteWriter out;
+    cyane::item::write_slot(out, ItemStack{383, 1, 54});
+    cyane::ByteReader back{out.data()};
+    const auto rebuilt = cyane::item::read_slot(back);
+    CYANE_CHECK(rebuilt.has_value());
+    if (rebuilt) {
+        CYANE_CHECK_EQ(rebuilt->id, std::int16_t{383});
+        CYANE_CHECK_EQ(rebuilt->damage, std::int16_t{54});
+    }
+    CYANE_CHECK(back.empty());
+
+    // 黄金向量：2(id)+1(count)+2(damage)+NBT[1+2 | 1+2+9 | 1+2+2 | 2+16 | 1 | 1] = 45
+    const auto& data = out.data();
+    CYANE_CHECK_EQ(data.size(), std::size_t{45});
+    CYANE_CHECK_EQ(std::to_integer<int>(data[5]), 0x0A);   // 根 TAG_Compound
+    CYANE_CHECK_EQ(std::to_integer<int>(data[8]), 0x0A);   // EntityTag 条目 tag
+    CYANE_CHECK_EQ(std::to_integer<int>(data[20]), 0x08);  // "id" 条目 tag
+    // 末尾 = "minecraft:zombie"(16) + 两层结束符 00 00
+    const std::string_view zombie{"minecraft:zombie"};
+    bool zombie_tail = data.size() == 45;
+    for (std::size_t i = 0; zombie_tail && i < zombie.size(); ++i) {
+        zombie_tail = std::to_integer<char>(data[27 + i]) == zombie[i];
+    }
+    CYANE_CHECK(zombie_tail);
+    CYANE_CHECK_EQ(std::to_integer<int>(data[43]), 0x00);  // EntityTag 结束
+    CYANE_CHECK_EQ(std::to_integer<int>(data[44]), 0x00);  // 根结束
+}
+
+// 带未知 NBT 的普通物品：解析跳过不脱节，id/damage 保留（附魔等原版 NBT 不再断连）
+CYANE_TEST(enchanted_item_slot_is_accepted_and_skipped) {
+    cyane::ByteWriter payload;
+    payload.i16(276);  // 钻石剑
+    payload.u8(1);
+    payload.i16(0);
+    payload.u8(0x0A);  // 根
+    put_named(payload, "");
+    payload.u8(0x0A);  // display: Compound
+    put_named(payload, "display");
+    payload.u8(0x08);  // Name: String
+    put_named(payload, "Name");
+    put_named(payload, "x");
+    payload.u8(0x00);
+    payload.u8(0x00);
+
+    CYANE_CHECK_EQ(payload.data().size(), std::size_t{30});
+    cyane::ByteReader reader{payload.data()};
+    const auto sword = cyane::item::read_slot(reader);
+    CYANE_CHECK(sword.has_value());
+    if (sword) {
+        CYANE_CHECK_EQ(sword->id, std::int16_t{276});
+        CYANE_CHECK_EQ(sword->damage, std::int16_t{0});
+    }
+    CYANE_CHECK(reader.empty());
+}

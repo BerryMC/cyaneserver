@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <span>
 #include <string>
 #include <string_view>
@@ -121,6 +122,8 @@ public:
 
 // 解析根为命名 compound 的 NBT（Anvil 区块载荷）
 [[nodiscard]] Result<Value> parse(ByteSpan data);
+// 同 parse，另返回消耗的字节数（网络槽位等 "NBT 后还有数据" 的流式场景用）
+[[nodiscard]] Result<std::pair<Value, std::size_t>> parse_with_size(ByteSpan data);
 // 解析压缩载荷（版本字节 1=gzip / 2=zlib），返回解压后的 NBT 根
 [[nodiscard]] Result<Value> parse_region_payload(ByteSpan payload);
 // 自嗅探压缩容器：gzip 魔数 1f8b（原版 .dat）、zlib 0x78、或未压缩 raw NBT 0x0A

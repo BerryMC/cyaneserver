@@ -364,6 +364,18 @@ Result<Value> parse(ByteSpan data) {
     return reader.root();
 }
 
+Result<std::pair<Value, std::size_t>> parse_with_size(ByteSpan data) {
+    if (data.size() > kMaxNbtBytes) {
+        return make_error(ErrorCode::world, "nbt payload too large");
+    }
+    Reader reader{data};
+    auto root = reader.root();
+    if (!root) {
+        return std::unexpected{std::move(root.error())};
+    }
+    return std::pair{std::move(*root), reader.consumed()};
+}
+
 Result<Value> parse_region_payload(ByteSpan payload) {
     if (payload.empty()) {
         return make_error(ErrorCode::world, "empty region payload");
