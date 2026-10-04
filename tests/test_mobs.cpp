@@ -1,3 +1,5 @@
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <string_view>
 #include <vector>
@@ -300,6 +302,68 @@ CYANE_TEST(projectile_flies_hits_block_and_dies) {
     CYANE_CHECK(hit);  // 40 tick 内必命中（0.5 格/tick 平射）
     CYANE_CHECK(hit);
     CYANE_CHECK_EQ(arrows.size(), std::size_t{0});
+}
+
+// 苦力怕点燃事件：进入 3 格触发一次（不重复），引信中不再触发
+CYANE_TEST(creeper_ignition_event_fires_once) {
+    world::World world;
+    net::MobManager mobs;
+    (void)mobs.spawn(50, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    const std::vector<net::PlayerSnapshot> players = {player_at(7, 2.0, kGroundY, 0.5)};
+    int ignitions = 0;
+    for (int i = 0; i < 60; ++i) {
+        const auto result = mobs.tick(world, players);
+        ignitions += static_cast<int>(result.ignitions.size());
+    }
+    CYANE_CHECK_EQ(ignitions, 1);  // 只在点燃瞬间发一次
+}
+
+// 逃窜速度：受击后 1.3×（低于疾跑，可追上）
+CYANE_TEST(retreat_speed_is_below_sprint) {
+    world::World world;
+    net::MobManager mobs;
+    const auto id = mobs.spawn(90, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    (void)mobs.damage(id, 1.0f, 1.5, 0.5);
+    const auto pig = mobs.by_id(id);
+    CYANE_CHECK(pig.has_value());
+    // 每 tick 位移 = speed × 1.1 = 0.275 b/t（猪）——低于疾跑 0.28 b/t，可追上
+    const double per_tick =
+        net::MobManager::kRetreatSpeedScale * static_cast<double>(world::mob_type(90)->speed);
+    CYANE_CHECK(per_tick < 0.28);
+    CYANE_CHECK_NEAR(per_tick, 0.275, 0.001);
+}
+
+// Explosion (0x1C) 黄金向量：位置 f32×3（字段虽是 double 但按 float 写出）+ 半径 +
+// 记录数 + byte×3 记录 + 动量。位置写成 f64 曾让客户端把记录数读成垃圾值 → OOM。
+CYANE_TEST(packet_explosion_uses_float_layout) {
+    ByteWriter out;
+    std::array<std::array<std::int8_t, 3>, 2> records{{{1, 0, -2}, {-1, -1, 0}}};
+    net::writers::write_explosion(out, 4.5, 4.0, -3.5, 3.0f, records);
+    // 12(pos) + 4(radius) + 4(count) + 6(records) + 12(motion) = 38
+    CYANE_CHECK_EQ(out.data().size(), std::size_t{38});
+    // 逐字节比较（线格式大端）：f32 4.5f = 40 90 00 00
+    const auto f32_is = [&](std::size_t off, std::uint8_t a, std::uint8_t b, std::uint8_t c,
+                            std::uint8_t d) {
+        return std::to_integer<int>(out.data()[off]) == a &&
+               std::to_integer<int>(out.data()[off + 1]) == b &&
+               std::to_integer<int>(out.data()[off + 2]) == c &&
+               std::to_integer<int>(out.data()[off + 3]) == d;
+    };
+    CYANE_CHECK(f32_is(0, 0x40, 0x90, 0x00, 0x00));   // 4.5f
+    CYANE_CHECK(f32_is(4, 0x40, 0x80, 0x00, 0x00));   // 4.0f
+    CYANE_CHECK(f32_is(8, 0xC0, 0x60, 0x00, 0x00));   // -3.5f
+    CYANE_CHECK(f32_is(12, 0x40, 0x40, 0x00, 0x00));  // 3.0f 半径
+    // 记录数 = 2（i32 大端，紧随半径）
+    CYANE_CHECK_EQ(std::to_integer<int>(out.data()[16]), 0x00);
+    CYANE_CHECK_EQ(std::to_integer<int>(out.data()[19]), 0x02);
+    // 记录字节：01 00 fe | ff ff 00
+    CYANE_CHECK_EQ(std::to_integer<int>(out.data()[20]), 0x01);
+    CYANE_CHECK_EQ(std::to_integer<int>(out.data()[22]), 0xFE);  // -2
+    CYANE_CHECK_EQ(std::to_integer<int>(out.data()[23]), 0xFF);  // -1
+    // 动量 0：末 12 字节全 0
+    for (std::size_t i = 26; i < 38; ++i) {
+        CYANE_CHECK_EQ(std::to_integer<int>(out.data()[i]), 0x00);
+    }
 }
 
 // 箭命中玩家：hit_player 带目标 id

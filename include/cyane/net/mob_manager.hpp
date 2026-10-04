@@ -53,6 +53,14 @@ struct Mob {
     std::int32_t fuse_ticks{-1};   // 苦力怕引信（-1 = 未点燃）
 };
 
+// 苦力怕点燃：Server 据此广播引信音效与白闪 metadata
+struct MobIgnition {
+    std::uint32_t mob_id{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+};
+
 // 骷髅射出的箭：起点与目标（Server 负责生成投射物实体）
 struct MobShot {
     std::uint32_t mob_id{0};
@@ -114,6 +122,7 @@ struct MobTickResult {
     std::vector<MobDeath> deaths;
     std::vector<MobShot> shots;        // 骷髅射箭
     std::vector<MobExplosion> explosions;  // 苦力怕引爆（自爆即死亡）
+    std::vector<MobIgnition> ignitions;    // 苦力怕点燃（引信开始）
 };
 
 // 受伤结果：是否命中、是否致死、剩余血量
@@ -204,7 +213,7 @@ public:
 
     static constexpr double kWanderSpeedScale = 1.0;  // 漫游用物种速度
     static constexpr double kWanderRadius = 24.0;     // 距生成点最大半径
-    static constexpr double kRetreatSpeedScale = 1.6; // 受击逃窜加速
+    static constexpr double kRetreatSpeedScale = 1.1; // 受击逃窜略快于漫游（所有被动种仍低于疾跑 0.28 b/t）
 
 private:
     [[nodiscard]] bool remove_locked(std::uint32_t id);

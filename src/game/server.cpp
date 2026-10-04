@@ -488,6 +488,29 @@ void Server::tick() {
                 }
             }
         }
+        // 苦力怕点燃：引信音效 + 白闪 metadata（index 16 VarInt=1）
+        for (const auto& ignition : mob_events.ignitions) {
+            ByteWriter sound;
+            net::writers::write_named_sound(sound, 173 /*entity.creeper.primed*/,
+                                            proto::sound_category::kBlocks,
+                                            static_cast<std::int32_t>(ignition.x),
+                                            static_cast<std::int32_t>(ignition.y),
+                                            static_cast<std::int32_t>(ignition.z), 1.0f, 1.0f);
+            ByteWriter meta;
+            meta.varint(static_cast<std::int32_t>(ignition.mob_id));
+            meta.u8(16);   // EntityCreeper 状态字段
+            meta.varint(1);  // VarInt（serializer 序 1）；1 = 引信中（客户端播白闪动画）
+            meta.varint(1);
+            meta.u8(0xFF);
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(ignition.x),
+                                                           static_cast<std::int32_t>(ignition.z));
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSoundEffect,
+                                     sound.data());
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityMetadata,
+                                     meta.data());
+            }
+        }
         // 骷髅射箭
         for (const auto& shot : mob_events.shots) {
             fire_arrow(shot);
@@ -580,24 +603,74 @@ void Server::fire_arrow(const net::MobShot& shot) {
 }
 
 void Server::apply_explosion(double x, double y, double z, float power) {
-    // 音效 + Explosion 包（记录数 0：粒子由客户端按 record 数生成，这里只做震动/音效）
+    const double power_d = static_cast<double>(power);
+    const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
+
+    // 破坏方块：以 (x,y,z) 为中心的球（半径 power），基岩/空气跳过，30% 掉落。
+    // 同时收集受影响方块相对爆心的 byte 偏移——1.12.2 的 Explosion 包记录就是它们，
+    // 客户端据此播放爆炸粒子动画。
+    std::vector<std::array<std::int8_t, 3>> records;
+    if (world_ != nullptr) {
+        static thread_local std::mt19937 rng{std::random_device{}()};
+        std::uniform_int_distribution<int> drop_chance(1, 100);
+        const auto x0 = static_cast<std::int32_t>(std::floor(x - power_d));
+        const auto x1 = static_cast<std::int32_t>(std::floor(x + power_d));
+        const auto y0 = std::max(0, static_cast<std::int32_t>(std::floor(y - power_d)));
+        const auto y1 = std::min(255, static_cast<std::int32_t>(std::floor(y + power_d)));
+        const auto z0 = static_cast<std::int32_t>(std::floor(z - power_d));
+        const auto z1 = static_cast<std::int32_t>(std::floor(z + power_d));
+        for (auto by = y0; by <= y1; ++by) {
+            for (auto bz = z0; bz <= z1; ++bz) {
+                for (auto bx = x0; bx <= x1; ++bx) {
+                    const double dx = bx + 0.5 - x;
+                    const double dy = by + 0.5 - y;
+                    const double dz = bz + 0.5 - z;
+                    if (dx * dx + dy * dy + dz * dz > power_d * power_d) {
+                        continue;
+                    }
+                    const auto state = world_->block_at(bx, by, bz);
+                    if (state == world::kStateAir || world::block_id(state) == 7) {
+                        continue;  // 空气 / 基岩
+                    }
+                    world_->set_block(bx, by, bz, world::kStateAir);
+                    if (drop_chance(rng) <= 30) {
+                        for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
+                            const auto cpos2 = world::ChunkPos::from_world(bx, bz);
+                            spawn_drop_world(bx + 0.5, by + 0.25, bz + 0.5,
+                                             item::ItemStack{drop.item_id, drop.count, drop.damage},
+                                             cpos2 ? cpos2->x : 0, cpos2 ? cpos2->z : 0);
+                        }
+                    }
+                    ByteWriter change;
+                    change.position(bx, by, bz);
+                    change.varint(0);
+                    const auto cpos = world::ChunkPos::from_world(bx, bz);
+                    if (cpos) {
+                        hub_->broadcast_near(cpos->x, cpos->z, radius, 0,
+                                             proto::play_cb::kBlockChange, change.data());
+                    }
+                    records.push_back({static_cast<std::int8_t>(bx - static_cast<std::int32_t>(std::floor(x))),
+                                       static_cast<std::int8_t>(by - static_cast<std::int32_t>(std::floor(y))),
+                                       static_cast<std::int8_t>(bz - static_cast<std::int32_t>(std::floor(z)))});
+                }
+            }
+        }
+    }
+
+    // 爆炸音效 + Explosion 包。1.12.2 布局（PacketPlayOutExplosion.b）：位置 f32×3
+    // （字段虽声明 double 但按 float 写出！）、半径 f32、记录数 i32、每条记录 byte×3、
+    // 玩家动量 f32×3。位置写成 f64 会把半径/记录数读串位——记录数是垃圾值时客户端
+    // 按其分配内存直接 OOM。
     ByteWriter sound;
     net::writers::write_named_sound(sound, 231 /*entity.generic.explode*/,
                                     proto::sound_category::kBlocks, static_cast<std::int32_t>(x),
                                     static_cast<std::int32_t>(y), static_cast<std::int32_t>(z),
                                     1.0f, 1.0f);
     ByteWriter explosion;
-    explosion.f64(x);
-    explosion.f64(y);
-    explosion.f64(z);
-    explosion.f32(0.0f);  // radius 字段 1.12.2 客户端忽略（现仅历史遗留）
-    explosion.i32(0);     // record count = 0
-    explosion.f32(0.0f);
-    explosion.f32(0.0f);
-    explosion.f32(0.0f);  // 玩家动量 0
+    net::writers::write_explosion(explosion, x, y, z, power, records);
+
     const auto center = world::ChunkPos::from_world(static_cast<std::int32_t>(x),
                                                      static_cast<std::int32_t>(z));
-    const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
     if (center) {
         hub_->broadcast_near(center->x, center->z, radius, 0, proto::play_cb::kSoundEffect,
                              sound.data());
@@ -605,8 +678,7 @@ void Server::apply_explosion(double x, double y, double z, float power) {
                              explosion.data());
     }
 
-    // 范围伤害：玩家按距离衰减（3 格内全额），走 hub 邮箱
-    const double power_d = static_cast<double>(power);
+    // 范围伤害：玩家按距离衰减（≤2×power 格内，峰值 power×7），走 hub 邮箱（含击退）
     for (const auto& player : hub_->others(net::kNoExclude)) {
         const double dx = player.x - x;
         const double dy = (player.y + 0.9) - y;
@@ -632,51 +704,6 @@ void Server::apply_explosion(double x, double y, double z, float power) {
         const float damage = static_cast<float>((1.0 - dist / (power_d * 2.0)) * power_d * 7.0);
         if (damage > 0.5f) {
             mobs_->damage(mob.entity_id, damage, x, z);
-        }
-    }
-    // 破坏方块：以 (x,y,z) 为中心的球（半径 power），基岩/空气跳过，30% 掉落
-    if (world_ != nullptr) {
-        const auto x0 = static_cast<std::int32_t>(std::floor(x - power_d));
-        const auto x1 = static_cast<std::int32_t>(std::floor(x + power_d));
-        const auto y0 = static_cast<std::int32_t>(std::floor(y - power_d));
-        const auto y1 = static_cast<std::int32_t>(std::floor(y + power_d));
-        const auto z0 = static_cast<std::int32_t>(std::floor(z - power_d));
-        const auto z1 = static_cast<std::int32_t>(std::floor(z + power_d));
-        static thread_local std::mt19937 rng{std::random_device{}()};
-        std::uniform_int_distribution<int> drop_chance(1, 100);
-        for (auto by = std::max(0, y0); by <= std::min(255, y1); ++by) {
-            for (auto bz = z0; bz <= z1; ++bz) {
-                for (auto bx = x0; bx <= x1; ++bx) {
-                    const double dx = bx + 0.5 - x;
-                    const double dy = by + 0.5 - y;
-                    const double dz = bz + 0.5 - z;
-                    if (dx * dx + dy * dy + dz * dz > power_d * power_d) {
-                        continue;
-                    }
-                    const auto state = world_->block_at(bx, by, bz);
-                    if (state == world::kStateAir || world::block_id(state) == 7) {
-                        continue;  // 空气 / 基岩
-                    }
-                    world_->set_block(bx, by, bz, world::kStateAir);
-                    if (drop_chance(rng) <= 30) {
-                        for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
-                            const auto cpos2 =
-                                world::ChunkPos::from_world(bx, bz);
-                            item::ItemStack stack{drop.item_id, drop.count, drop.damage};
-                            spawn_drop_world(bx + 0.5, by + 0.25, bz + 0.5, std::move(stack),
-                                             cpos2 ? cpos2->x : 0, cpos2 ? cpos2->z : 0);
-                        }
-                    }
-                    ByteWriter change;
-                    change.position(bx, by, bz);
-                    change.varint(0);
-                    const auto cpos = world::ChunkPos::from_world(bx, bz);
-                    if (cpos) {
-                        hub_->broadcast_near(cpos->x, cpos->z, radius, 0,
-                                             proto::play_cb::kBlockChange, change.data());
-                    }
-                }
-            }
         }
     }
 }

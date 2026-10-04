@@ -128,6 +128,27 @@ inline void write_named_sound(ByteWriter& out, std::int32_t sound_id, std::int32
     out.f32(pitch);
 }
 
+// Explosion (0x1C)：位置 f32×3（1.12.2 字段虽声明 double 但按 float 写出！）、半径 f32、
+// 记录数 i32、每条记录 byte×3（受影响方块相对爆心偏移）、玩家动量 f32×3。
+// 位置写成 f64 会让客户端把半径/记录数读串位——记录数为垃圾值时客户端按其
+// 分配内存直接 OOM（线上事故 R-022）。
+inline void write_explosion(ByteWriter& out, double x, double y, double z, float power,
+                            std::span<const std::array<std::int8_t, 3>> records) {
+    out.f32(static_cast<float>(x));
+    out.f32(static_cast<float>(y));
+    out.f32(static_cast<float>(z));
+    out.f32(power);
+    out.i32(static_cast<std::int32_t>(records.size()));
+    for (const auto& record : records) {
+        out.u8(static_cast<std::uint8_t>(record[0]));
+        out.u8(static_cast<std::uint8_t>(record[1]));
+        out.u8(static_cast<std::uint8_t>(record[2]));
+    }
+    out.f32(0.0f);  // 玩家动量（击退经 EntityVelocity 单独下发）
+    out.f32(0.0f);
+    out.f32(0.0f);
+}
+
 // DestroyEntities (0x32)：varint count | varint[] ids
 inline void write_destroy_entities(ByteWriter& out, std::span<const std::uint32_t> ids) {
     out.varint(static_cast<std::int32_t>(ids.size()));

@@ -269,6 +269,10 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 const bool in_range = dist <= static_cast<double>(species->attack_range);
                 if (species->explodes) {
                     if (in_range) {
+                        if (mob.fuse_ticks < 0) {
+                            result.ignitions.push_back(
+                                MobIgnition{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z});
+                        }
                         mob.fuse_ticks = kFuseTicks;
                     } else {
                         mob.dir_x = dx;
@@ -331,6 +335,12 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         // 击退动量衰减；撞墙即止
         mob.velocity_x = hit_knock ? 0.0 : mob.velocity_x * 0.6;
         mob.velocity_z = hit_knock ? 0.0 : mob.velocity_z * 0.6;
+        // 漫游/逃窜撞墙：立即换方向（避免顶墙 grinding 到状态结束）
+        if (hit_knock && (mob.ai == MobAi::wander || mob.ai == MobAi::retreat)) {
+            const double angle = rand01() * 2.0 * kPi;
+            mob.dir_x = std::cos(angle);
+            mob.dir_z = std::sin(angle);
+        }
         if (std::abs(mob.velocity_x) < 0.001) {
             mob.velocity_x = 0.0;
         }
