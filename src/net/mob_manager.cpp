@@ -123,7 +123,7 @@ MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double
             const auto species = world::mob_type(mob.type);
             if (species && !species->hostile) {
                 mob.ai = MobAi::retreat;
-                mob.state_ticks = 100;  // PathfinderGoalPanic：hurtTimestamp 后 100 tick
+                mob.state_ticks = 100;  // EntityAIPanic：hurtTimestamp 后 100 tick
                 mob.dir_x = -dx;
                 mob.dir_z = -dz;
                 const double escape = std::sqrt(mob.dir_x * mob.dir_x + mob.dir_z * mob.dir_z);
@@ -244,7 +244,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     mob.state_ticks = rand_ticks(20, 100);
                     break;
                 }
-                walk(mob.dir_x, mob.dir_z, kRetreatSpeedScale);
+                walk(mob.dir_x, mob.dir_z, static_cast<double>(species->panic_scale));
                 break;
             case MobAi::chase: {
                 const PlayerSnapshot* target = nullptr;
@@ -378,11 +378,10 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             }
         }
 
-        // 物理：vanilla travel 动量模型——先摩擦（用上一 tick 落地状态）再加 AI 加速度，
-        // 按 new 动量位移。稳态位移 = 加速度/(1-摩擦)。
-        const double friction = mob.on_ground ? 0.546 : 0.91;
-        mob.velocity_x = mob.velocity_x * friction + step_x;
-        mob.velocity_z = mob.velocity_z * friction + step_z;
+        // 物理：vanilla travel 动量模型——AI 加速度叠加后按动量位移，位移后按当前
+        // 落地状态施加摩擦（地面 slipperiness 0.6×0.91 = 0.546，空中 0.91）。
+        mob.velocity_x += step_x;
+        mob.velocity_z += step_z;
         mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y + world::kEntityGravity);
         double dx = mob.velocity_x;
         double dy = mob.velocity_y;
@@ -398,9 +397,10 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             mob.velocity_y = 0.0;
         }
         const bool hit_knock = outcome.blocked_x || outcome.blocked_z;
-        // 撞墙即止（摩擦已在步首应用）
-        mob.velocity_x = hit_knock ? 0.0 : mob.velocity_x;
-        mob.velocity_z = hit_knock ? 0.0 : mob.velocity_z;
+        // 位移后摩擦（travel：f6 在 move 之后乘上）；撞墙即止
+        const double friction = outcome.on_ground ? 0.546 : 0.91;
+        mob.velocity_x = hit_knock ? 0.0 : mob.velocity_x * friction;
+        mob.velocity_z = hit_knock ? 0.0 : mob.velocity_z * friction;
         // 漫游/逃窜撞墙：立即换方向（避免顶墙 grinding 到状态结束）
         if (hit_knock && (mob.ai == MobAi::wander || mob.ai == MobAi::retreat)) {
             const double angle = rand01() * 2.0 * kPi;

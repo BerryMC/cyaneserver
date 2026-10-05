@@ -33,6 +33,7 @@ struct MobType {
     float health{20.0f};
     float speed{0.25f};  // 格/tick
     float stroll_scale{1.0f};  // RandomStroll 速度倍率（各 Entity*.r() 的构造参数）
+    float panic_scale{1.25f};  // EntityAIPanic 倍率（猪/羊 1.25、牛 2.0、鸡 1.4）
     float attack_damage{2.0f};
     float follow_range{16.0f};  // 目标选择距离（GenericAttributes.FOLLOW_RANGE 默认 16）
     float attack_range{1.2f};   // 进入攻击/开火的距离（骷髅为射程，苦力怕为引信触发距离）
@@ -81,17 +82,17 @@ struct MobType {
                            .death_sound = 353, .drops = {{{319, 0, 1, 3}, {}, {}, {}}}};
         case 91:  // 羊
             return MobType{.type = 91, .name = "sheep", .nbt_id = "minecraft:sheep", .width = 0.9f,
-                           .height = 1.3f, .health = 8.0f, .speed = 0.23f, .hurt_sound = 387,
+                           .height = 1.3f, .health = 8.0f, .speed = 0.23f, .panic_scale = 1.25f, .hurt_sound = 387,
                            .death_sound = 386,
                            .drops = {{{423, 0, 1, 2}, {35, 0, 1, 1}, {}, {}}}};
         case 92:  // 牛
             return MobType{.type = 92, .name = "cow", .nbt_id = "minecraft:cow", .width = 0.9f,
-                           .height = 1.4f, .health = 10.0f, .speed = 0.2f, .hurt_sound = 168,
+                           .height = 1.4f, .health = 10.0f, .speed = 0.2f, .panic_scale = 2.0f, .hurt_sound = 168,
                            .death_sound = 167,
                            .drops = {{{334, 0, 0, 2}, {363, 0, 1, 3}, {}, {}}}};
         case 93:  // 鸡
             return MobType{.type = 93, .name = "chicken", .nbt_id = "minecraft:chicken", .width = 0.4f,
-                           .height = 0.7f, .health = 4.0f, .speed = 0.25f, .hurt_sound = 164,
+                           .height = 0.7f, .health = 4.0f, .speed = 0.25f, .panic_scale = 1.4f, .hurt_sound = 164,
                            .death_sound = 162, .drops = {{{288, 0, 0, 2}, {365, 0, 1, 1}, {}, {}}}};
         default:
             return std::nullopt;

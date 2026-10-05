@@ -320,7 +320,7 @@ CYANE_TEST(creeper_ignition_event_fires_once) {
     CYANE_CHECK_EQ(ignitions, 1);  // 只在点燃瞬间发一次
 }
 
-// 逃窜速度：PathfinderGoalPanic(this, 2.0) → 猪 0.25×2 = 0.5 b/t（vanilla 逃窜比疾跑快）
+// 逃窜：EntityAIPanic 倍率按物种（猪 1.25/牛 2.0/鸡 1.4），持续 100 tick
 CYANE_TEST(retreat_speed_is_below_sprint) {
     world::World world;
     net::MobManager mobs;
@@ -330,9 +330,12 @@ CYANE_TEST(retreat_speed_is_below_sprint) {
     CYANE_CHECK(pig.has_value());
     CYANE_CHECK(pig->ai == net::MobAi::retreat);
     CYANE_CHECK_EQ(pig->state_ticks, 100);  // hurtTimestamp 后 100 tick
-    const double per_tick =
-        net::MobManager::kRetreatSpeedScale * static_cast<double>(world::mob_type(90)->speed);
-    CYANE_CHECK_NEAR(per_tick, 0.5, 0.001);
+    // 猪 Panic 1.25：aim = 0.3125，加速度 = aim²，稳态 ≈ 0.215 格/t（≈ 步行速度）
+    CYANE_CHECK_NEAR(static_cast<double>(world::mob_type(90)->panic_scale) *
+                         static_cast<double>(world::mob_type(90)->speed),
+                     0.3125, 0.001);
+    const auto cow = world::mob_type(92);
+    CYANE_CHECK_NEAR(static_cast<double>(cow->panic_scale), 2.0, 0.001);
 }
 
 // 苦力怕引信可熄灭（PathfinderGoalSwell.e()：目标超出 7 格 → state=-1，引信逐 tick 回退）

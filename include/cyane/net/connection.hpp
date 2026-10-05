@@ -203,6 +203,9 @@ private:
     void encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn, ByteWriter& out_meta) const;
     void send_existing_drops();
     void send_existing_mobs();
+    // 区块送达后补发该区块内的生物与掉落物（客户端 spawnEntity 需要区块已加载；
+    // 生成包先于区块到达会进 entitySpawnQueue，区块期间被卸载就永久不可见）
+    void send_chunk_entities(std::int32_t cx, std::int32_t cz);
     // 刷怪蛋：在指定位置生成生物并让附近玩家看到（返回是否生成成功）
     bool spawn_mob_at(std::int32_t type, double x, double y, double z, float yaw);
     // 生存模式消耗手持 1 个并回发该槽（创造模式不动）

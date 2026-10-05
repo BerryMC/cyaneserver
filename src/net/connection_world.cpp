@@ -490,6 +490,7 @@ void Connection::send_pending_chunks(std::size_t limit) {
         pending_chunks_.pop_front();
         pending_chunk_keys_.erase(detail::chunk_key(pos));
         send_chunk(pos);
+        send_chunk_entities(pos.x, pos.z);
         --limit;
     }
 }

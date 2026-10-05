@@ -231,9 +231,8 @@ public:
         return mobs_.size();
     }
 
-    static constexpr double kWanderSpeedScale = 1.0;  // 漫游用物种速度（随机漫步倍率在 MobType.stroll_scale）
+    static constexpr double kWanderSpeedScale = 1.0;  // 漫游用物种速度（倍率在 MobType.stroll_scale）
     static constexpr double kWanderRadius = 24.0;     // 距生成点最大半径
-    static constexpr double kRetreatSpeedScale = 2.0; // PathfinderGoalPanic(this, 2.0)：逃窜 2 倍导航速度
 
 private:
     [[nodiscard]] bool remove_locked(std::uint32_t id);
