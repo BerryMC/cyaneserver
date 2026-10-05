@@ -235,18 +235,24 @@ struct BlockKeyPos {
             return 1.14f;
         case 30:                      // 蛛网 4
             return 1.29f;
-        case 5: case 12: case 13: case 14: case 18: case 19:
-        case 20: case 24: case 25: case 26: case 35:
+        case 5: case 18: case 20: case 25: case 26:
         case 43: case 44: case 53: case 67: case 85: case 96: case 108:
         case 109: case 114: case 128: case 134: case 135: case 136:
-        case 156: case 163: case 164:  // 木板/砂岩/羊毛/楼梯/栅栏/木门类 3
+        case 156: case 163: case 164:  // 木板/羊毛/楼梯/栅栏/木门类 3
             return 0.99f;
         case 54: case 58: case 146:   // 箱子/工作台 2.5
             return 0.84f;
-        case 17: case 162:            // 原木 2
+        case 162:                     // 原木 2
             return 0.69f;
         case 47:                      // 书架 1.5
             return 0.54f;
+        case 24: case 179: case 180:  // 砂岩/红砂岩 0.8
+        case 35:                      // 羊毛 0.8
+            return 0.33f;
+        case 2: case 13: case 60: case 82: case 19:  // 草方块/砂砾/耕地/黏土/海绵 0.6
+            return 0.27f;
+        case 3: case 12: case 79: case 88: case 170: case 236:  // 泥土/沙/冰/灵魂沙/干草块/混凝土粉末 0.5
+            return 0.24f;
         case 155: case 123: case 124:  // 石英块/红石灯 0.8
             return 0.33f;
         default:

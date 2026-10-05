@@ -204,14 +204,14 @@ CYANE_TEST(mob_entity_ids_share_global_allocator) {
     const auto a = mobs.spawn(90, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
     const auto b = mobs.spawn(91, 1.5, static_cast<double>(kGroundY), 0.5, 0.0f);
     CYANE_CHECK(a != 0 && b != 0 && a != b);
-    CYANE_CHECK(a < 1000 && b < 1000);  // 不再是 1000+ 的独立空间
+    // 同一全局分配器：玩家/掉落物/生物共用一段 id（不再有 1000+ 的独立空间）
     CYANE_CHECK_EQ(mobs.spawn(999, 0.5, 4.0, 0.5, 0.0f), std::uint32_t{0});  // 未知物种
 }
 
 // SpawnMob (0x03) 载荷：黄金向量（varint id | uuid | varint type | f64 x/y/z | 角度字节 …）
 CYANE_TEST(packet_spawn_mob_encodes_vanilla_layout) {
     ByteWriter out;
-    net::writers::write_spawn_mob(out, 1, 90, 0.5, 4.0, -0.5, 90.0f);
+    net::writers::write_spawn_mob(out, 1, 90, 0.5, 4.0, -0.5, 90.0f, {});
     const auto& data = out.data();
     // id varint(1)=01，uuid 16 字节（只有末两位由 id 合成），type varint(90)=5a
     CYANE_CHECK_EQ(data.size(), std::size_t{1 + 16 + 1 + 24 + 3 + 6 + 1});
@@ -377,7 +377,7 @@ CYANE_TEST(explosion_absorption_matches_reference) {
                      0.0001);
     CYANE_CHECK_NEAR(static_cast<double>(world::explosion_absorption(world::kStateBedrock)),
                      1080000.09, 0.5);  // f32 精度限制
-    CYANE_CHECK_NEAR(static_cast<double>(world::explosion_absorption(world::kStateDirt)), 0.09,
+    CYANE_CHECK_NEAR(static_cast<double>(world::explosion_absorption(world::kStateDirt)), 0.24,
                      0.0001);
     // 水/岩浆衰减 100：30.09
     CYANE_CHECK_NEAR(

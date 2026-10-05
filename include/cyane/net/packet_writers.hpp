@@ -47,10 +47,13 @@ inline void write_collect_item(ByteWriter& out, std::uint32_t collected, std::ui
 }
 
 // SpawnMob (0x03) / EntityLiving：varint id | uuid(16) | varint type | double x/y/z
-//   | byte yaw/pitch/head | short vx/vy/vz | metadata 终止符 0xFF
+//   | byte yaw/pitch/head | short vx/vy/vz | metadata | 0xFF
 // uuid 由实体 id 合成（本服务端不维护实体 UUID 表，客户端仅用它去重）
+// metadata：出生必须带全客户端会用的字段——客户端只在出生包里注册 watcher 条目，
+// 之后对未注册 index 的增量 EntityMetadata 会被忽略（苦力怕白闪失效的根因）。
+// 格式：index u8 | 序列化器 varint | 值 | …（EntityMetadata 的条目格式）
 inline void write_spawn_mob(ByteWriter& out, std::uint32_t entity_id, std::int32_t type, double x,
-                            double y, double z, float yaw) {
+                            double y, double z, float yaw, std::span<const std::byte> metadata) {
     out.varint(static_cast<std::int32_t>(entity_id));
     std::array<std::uint8_t, 16> uuid{};
     uuid[15] = static_cast<std::uint8_t>(entity_id & 0xFF);
@@ -66,7 +69,8 @@ inline void write_spawn_mob(ByteWriter& out, std::uint32_t entity_id, std::int32
     out.i16(0);
     out.i16(0);
     out.i16(0);
-    out.u8(0xFF);  // 空 metadata
+    out.bytes(ByteSpan{reinterpret_cast<const std::byte*>(metadata.data()), metadata.size()});
+    out.u8(0xFF);
 }
 
 // SpawnObject (0x00)：varint id | uuid(16) | byte type | f64 x/y/z | byte pitch/yaw

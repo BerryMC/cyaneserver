@@ -509,7 +509,7 @@ void Server::tick() {
                 net::writers::write_named_sound(
                     sound, 173 /*entity.creeper.primed*/, proto::sound_category::kBlocks,
                     static_cast<std::int32_t>(ignition.x), static_cast<std::int32_t>(ignition.y),
-                    static_cast<std::int32_t>(ignition.z), 1.0f, 1.0f);
+                    static_cast<std::int32_t>(ignition.z), 1.0f, 0.5f);  // vanilla 音高 0.5
                 hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSoundEffect,
                                      sound.data());
             }

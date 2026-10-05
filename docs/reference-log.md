@@ -247,3 +247,8 @@
   - **目标选择**：`NearestAttackableTarget` 搜索盒 = 包围盒 grow(follow_range, 4.0 竖直, follow_range)；`HurtByTarget` 拉仇恨 300 tick。僵尸 FOLLOW_RANGE 35，其余默认 16。
 - 落地：`world/blocks.hpp::explosion_absorption`、`world/mob_types.hpp`（`stroll_scale`）、`net/mob_manager.{hpp,cpp}`（`fuse_state`/`fuse_ticks` 双字段 + `MobIgnition.fuse_state`、`damage()` 击退参数、近战/逃窜/漫游/射击公式）、`game/server.cpp`（`apply_explosion` 射线追踪+曝光伤害、`fire_arrow` 原版弹道、swell 状态广播）。
 - 测试：`explosion_absorption_matches_reference`、`creeper_fuse_defuses_when_target_flees`（熄灭：state −1 事件 + 引信回 0 + 不爆炸）、`retreat_speed_is_below_sprint`（改断言 0.5 b/t + 100 tick）、`creeper_fuse_then_explodes`（fuse_state==1 判定）。160 测试 × 3 配置（常规/-Werror/ASan+UBSan）全绿。
+- 实机联调补充（真实客户端复测发现的三件事）：
+  - **客户端只在 SpawnMob 出生包里注册 watcher 条目**：出生 metadata 为空（0xFF）时，之后对 index 16 的增量 EntityMetadata 会被整个忽略——苦力怕引信白闪不显示的根因。出生包必须带初始字段（苦力怕：index 16、VarInt 序 1、值 -1）；引信音 `entity.creeper.primed` 音高 0.5（`this.a(ay, 1.0F, 0.5F)`）。
+  - **骷髅主手的弓走 EntityEquipment (0x3F)**：varint id | varint slot 0（主手）| slot；spawn 与补发（send_existing_mobs）都要发，否则客户端看空手。
+  - **弹坑会"卡死"AI 的联动态**：目标搜索盒是 `grow(follow_range, 4.0, follow_range)`（竖直 ±4）——骷髅蛋生成在苦力怕弹坑底（y=1）而玩家在坑口（y≥4）时 dy=7 超出，索敌失败后 ai 回 idle 但 target_player 残留，表现为"完全不正常、不射箭"。vanilla 同样如此，不是公式错误；根因是前一发的弹坑地形。
+- 落地补充：`packet_writers.hpp::write_spawn_mob` 增出生 metadata 参数、`connection_mobs.cpp`（苦力怕出生 metadata + 骷髅弓装备两处）、`server.cpp` primed 音高 0.5。
