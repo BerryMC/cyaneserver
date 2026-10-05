@@ -178,29 +178,84 @@ CYANE_TEST(passive_mob_retreats_when_hurt) {
     const auto pig = mobs.by_id(id);
     CYANE_CHECK(pig.has_value());
     // EntityAIPanic：逃向随机落点（未必沿受击反方向），但必定已出发
-    CYANE_CHECK(pig->ai == net::MobAi::retreat && pig->has_goal);
+    CYANE_CHECK(pig->ai == net::MobAi::retreat);
     const double moved = (pig->pos.x - 0.5) * (pig->pos.x - 0.5) +
                          (pig->pos.z - 0.5) * (pig->pos.z - 0.5);
     CYANE_CHECK(moved > 0.01);
 }
 
-// 崖边守卫：脚下 3 格内无地面的位置不迈步（vanilla 寻路不走上落差 >3 的路径）
-CYANE_TEST(mob_does_not_walk_off_ledge) {
+// 寻路不落崖：vanilla WalkNodeProcessor.getSafePoint 的 maxFallHeight=3 ——
+// 单步落差 >3 不可达，只能绕行；绕不过去时返回最接近目标的局部路径（停在崖边）
+CYANE_TEST(pathfinder_never_steps_off_a_cliff) {
     world::World world;
-    // 在 (5, 0..3) 挖穿到虚空，形成 >3 格落差
+    // (5, 0..3, 0) 挖穿：1 格宽、>3 格深
     for (std::int32_t y = 0; y <= 3; ++y) {
         world.set_block(5, y, 0, world::kStateAir);
+    }
+    const auto path = world::find_path(world, 0.5, 4.0, 0.5, true, 0.9f, 0.9f, 8.5, 4.0, 0.5,
+                                       16.0f);
+    CYANE_CHECK(path.has_value());
+    if (path) {
+        CYANE_CHECK(path->points.size() > 1);
+        for (std::size_t i = 1; i < path->points.size(); ++i) {
+            const auto drop = path->points[i - 1].y - path->points[i].y;
+            CYANE_CHECK(drop <= 3);  // maxFallHeight
+        }
+        for (const auto& node : path->points) {
+            CYANE_CHECK(!(node.x == 5 && node.z == 0 && node.y < 4));  // 不进入深坑
+        }
+    }
+
+    // 深渊宽到绕不过去：只返回走到崖边的局部路径，节点全部留在坑这一侧
+    world::World wide;
+    for (std::int32_t x = 5; x <= 12; ++x) {
+        for (std::int32_t z = -8; z <= 8; ++z) {
+            for (std::int32_t y = 0; y <= 3; ++y) {
+                wide.set_block(x, y, z, world::kStateAir);
+            }
+        }
+    }
+    const auto partial = world::find_path(wide, 0.5, 4.0, 0.5, true, 0.9f, 0.9f, 8.5, 4.0, 0.5,
+                                          16.0f);
+    CYANE_CHECK(partial.has_value());
+    if (partial) {
+        for (const auto& node : partial->points) {
+            CYANE_CHECK(node.x <= 4);
+            CYANE_CHECK(node.y == 4);
+        }
+    }
+}
+
+// 崖边行为：panic 逃窜 + 漫游期间不会掉进 >3 格落差的深渊
+CYANE_TEST(mob_does_not_walk_off_ledge) {
+    world::World world;
+    // x=5..12 整片挖穿到虚空，任何绕行都不可能
+    for (std::int32_t x = 5; x <= 12; ++x) {
+        for (std::int32_t z = -8; z <= 8; ++z) {
+            for (std::int32_t y = 0; y <= 3; ++y) {
+                world.set_block(x, y, z, world::kStateAir);
+            }
+        }
     }
     net::MobManager mobs;
     const auto id = mobs.spawn(90, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
     (void)mobs.damage(id, 1.0f, 0.0, 0.5);  // 触发 panic 逃窜
-    for (int i = 0; i < 100; ++i) {
+    double min_y = static_cast<double>(kGroundY);
+    for (int i = 0; i < 200; ++i) {
         (void)mobs.tick(world, {});
+        const auto pig = mobs.by_id(id);
+        CYANE_CHECK(pig.has_value());
+        if (!pig) {
+            return;
+        }
+        min_y = std::min(min_y, pig->pos.y);
+        CYANE_CHECK(pig->pos.y >= static_cast<double>(kGroundY));  // 始终站在地面上
+        CYANE_CHECK(pig->pos.x < 5.45);  // 身体不会完全越过崖沿（0.45 = 半宽）
     }
     const auto pig = mobs.by_id(id);
-    CYANE_CHECK(pig.has_value());
+    CYANE_CHECK_NEAR(min_y, static_cast<double>(kGroundY), 0.001);
     if (pig) {
-        CYANE_CHECK(pig->pos.x < 4.5);  // 未跨过 x=5 的深坑
+        CYANE_CHECK(pig->pos.x < 5.45);
     }
 }
 

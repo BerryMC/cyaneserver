@@ -6,6 +6,7 @@
 #include <random>
 
 #include "cyane/world/mob_types.hpp"
+#include "cyane/world/pathfinding.hpp"
 
 namespace cyane::net {
 namespace {
@@ -71,22 +72,6 @@ std::mt19937& rng() {
         diff = -30.0f;
     }
     return current + diff;
-}
-
-// WalkNodeProcessor 可走性近似：目标脚下 max_drop 格内必须有地面。
-// 原版寻路不会生成落差 >3 格（会摔伤）的路径，MoveHelper 迈步前也检查
-// PathNodeType.WALKABLE——没有寻路的服务端用"迈步前探地"等价实现。
-[[nodiscard]] bool ground_below(world::World& world, double x, double feet_y, double z,
-                                std::int32_t max_drop) {
-    const auto bx = static_cast<std::int32_t>(std::floor(x));
-    const auto bz = static_cast<std::int32_t>(std::floor(z));
-    const auto by = static_cast<std::int32_t>(std::floor(feet_y));
-    for (std::int32_t d = 1; d <= max_drop; ++d) {
-        if (world::is_solid(world.block_at(bx, by - d, bz))) {
-            return true;
-        }
-    }
-    return false;
 }
 
 [[nodiscard]] std::uint32_t nearest_hostile_target(std::span<const PlayerSnapshot> players,
@@ -172,12 +157,8 @@ MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double
             }
             const auto species = world::mob_type(mob.type);
             if (species && !species->hostile) {
-                // EntityAIPanic：逃向随机落点（findRandomTarget(5,4)），hurtTimestamp 后 100 tick
-                const double angle = rand01() * 2.0 * kPi;
-                const double dist = 3.0 + rand01() * 4.0;
-                mob.goal_x = mob.pos.x + std::cos(angle) * dist;
-                mob.goal_z = mob.pos.z + std::sin(angle) * dist;
-                mob.has_goal = true;
+                // EntityAIPanic：hurtTimestamp 后 100 tick；落点与寻路在下一 tick 的
+                // retreat 分支做（damage 不持 World 引用）
                 mob.ai = MobAi::retreat;
                 mob.state_ticks = 100;
             }
@@ -273,46 +254,137 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             const double accel = aim * aim;
             step_x = dir_x / len * accel;
             step_z = dir_z / len * accel;
-            mob.pos.yaw = yaw_for(dir_x, dir_z);
+        };
+
+        // PathNavigateGround.onUpdateNavigation：pathFollow（节点推进 + 直线捷径 +
+        // 卡住检测）→ 对当前节点 setMoveTo（加速度朝节点中心）
+        const auto follow_path = [&](double speed_scale) {
+            if (!mob.has_path && mob.path.empty()) {
+                return;
+            }
+            const double max_dist = static_cast<double>(species->width) > 0.75
+                                        ? static_cast<double>(species->width) / 2.0
+                                        : 0.75 - static_cast<double>(species->width) / 2.0;
+            const double pathable_y = std::floor(mob.pos.y + 0.5);
+            // pathFollow：先按 Y 层截断可直视的最大下标
+            std::size_t direct_limit = mob.path.size();
+            for (std::size_t j = mob.path_index; j < mob.path.size(); ++j) {
+                if (static_cast<double>(mob.path[j].y) != pathable_y) {
+                    direct_limit = j;
+                    break;
+                }
+            }
+            if (mob.path_index < mob.path.size()) {
+                const auto& current = mob.path[mob.path_index];
+                if (std::abs(mob.pos.x - (static_cast<double>(current.x) + 0.5)) < max_dist &&
+                    std::abs(mob.pos.z - (static_cast<double>(current.z) + 0.5)) < max_dist &&
+                    std::abs(mob.pos.y - static_cast<double>(current.y)) < 1.0) {
+                    ++mob.path_index;
+                }
+            }
+            // 直线捷径：从最远可直视节点倒着找（isDirectPathBetweenPoints）
+            const auto shape = world::mob_shape(species->width, species->height);
+            const world::Path::Vec from{mob.pos.x, pathable_y, mob.pos.z};
+            for (std::size_t j = direct_limit; j > mob.path_index;) {
+                --j;
+                const auto& node = mob.path[j];
+                const double offset =
+                    static_cast<double>(static_cast<std::int32_t>(species->width + 1.0f)) * 0.5;
+                const world::Path::Vec to{static_cast<double>(node.x) + offset,
+                                          static_cast<double>(node.y),
+                                          static_cast<double>(node.z) + offset};
+                if (world::is_direct_path_between_points(world, shape, from, to)) {
+                    if (j > mob.path_index) {
+                        mob.path_index = j;
+                    }
+                    break;
+                }
+            }
+            // checkForStuck：每 100 tick 检查位移 <1.5 → 清路径
+            ++mob.stuck_ticks;
+            if (mob.stuck_ticks >= 100) {
+                const double moved = (mob.pos.x - mob.stuck_x) * (mob.pos.x - mob.stuck_x) +
+                                     (mob.pos.z - mob.stuck_z) * (mob.pos.z - mob.stuck_z);
+                if (moved < 2.25) {
+                    mob.has_path = false;
+                    mob.path.clear();
+                }
+                mob.stuck_ticks = 0;
+                mob.stuck_x = mob.pos.x;
+                mob.stuck_z = mob.pos.z;
+            }
+            if (mob.path_index >= mob.path.size()) {
+                mob.has_path = false;
+                mob.path.clear();
+                return;
+            }
+            const auto& node = mob.path[mob.path_index];
+            // getVectorFromIndex：节点中心偏移 (int)(width+1)*0.5
+            const double offset = static_cast<double>(static_cast<std::int32_t>(species->width + 1.0f)) * 0.5;
+            const double tx = static_cast<double>(node.x) + offset;
+            const double tz = static_cast<double>(node.z) + offset;
+            const double dxn = tx - mob.pos.x;
+            const double dzn = tz - mob.pos.z;
+            if (dxn * dxn + dzn * dzn > 1e-6) {
+                walk(dxn, dzn, speed_scale);
+                mob.pos.yaw = yaw_towards(mob.pos.yaw, dxn, dzn);
+            }
         };
 
         switch (mob.ai) {
             case MobAi::idle:
-                // PathfinderGoalRandomStroll：每 tick 1/120 概率取 10 格内随机落点，
-                // 不锚定生成点（mobs 会自然漂移）
+                // PathfinderGoalRandomStroll：每 tick 1/120 概率经 RandomPositionGenerator
+                // 找 10×7 内随机落点（canEntityStandOnPos 过滤），寻路前往
                 if (rand01() < 1.0 / 120.0) {
-                    const double angle = rand01() * 2.0 * kPi;
-                    const double dist = 3.0 + rand01() * 7.0;
-                    mob.goal_x = mob.pos.x + std::cos(angle) * dist;
-                    mob.goal_z = mob.pos.z + std::sin(angle) * dist;
-                    mob.has_goal = true;
-                    mob.ai = MobAi::wander;
+                    if (const auto goal = world::random_position(
+                            world, mob.pos.x, mob.pos.y, mob.pos.z, 10, 7, 0.0, 0.0)) {
+                        auto path = world::find_path(
+                            world, mob.pos.x, mob.pos.y, mob.pos.z, mob.on_ground,
+                            species->width, species->height,
+                            static_cast<double>(goal->x) + 0.5, static_cast<double>(goal->y),
+                            static_cast<double>(goal->z) + 0.5,
+                            static_cast<float>(species->follow_range));
+                        if (path) {
+                            mob.path = std::move(path->points);
+                            mob.path_index = 0;
+                            mob.has_path = !mob.path.empty();
+                            mob.ai = MobAi::wander;
+                        }
+                    }
                 }
                 break;
-            case MobAi::wander: {
-                const double gx = mob.goal_x - mob.pos.x;
-                const double gz = mob.goal_z - mob.pos.z;
-                if (!mob.has_goal || gx * gx + gz * gz < 1.0) {
-                    mob.has_goal = false;
+            case MobAi::wander:
+                follow_path(static_cast<double>(species->stroll_scale));
+                if (!mob.has_path) {
                     mob.ai = MobAi::idle;
-                    break;
                 }
-                walk(gx, gz, static_cast<double>(species->stroll_scale));
                 break;
-            }
-            case MobAi::retreat: {
-                // EntityAIPanic：逃向随机落点，到位或 100 tick 后结束
-                const double gx = mob.goal_x - mob.pos.x;
-                const double gz = mob.goal_z - mob.pos.z;
-                if (!mob.has_goal || gx * gx + gz * gz < 1.0 || mob.state_ticks <= 0) {
-                    mob.has_goal = false;
+            case MobAi::retreat:
+                // EntityAIPanic：逃向随机落点（寻路）。找不到落点或无路径时原版每 tick
+                // 重新 shouldExecute（findRandomPosition + tryMoveToXYZ），因此这里同样重试，
+                // 直到受击记忆（vengeanceTime = 100 tick）结束
+                if (!mob.has_path && mob.state_ticks > 0) {
+                    if (const auto goal = world::random_position(
+                            world, mob.pos.x, mob.pos.y, mob.pos.z, 5, 4, 0.0, 0.0)) {
+                        auto path = world::find_path(
+                            world, mob.pos.x, mob.pos.y, mob.pos.z, mob.on_ground,
+                            species->width, species->height,
+                            static_cast<double>(goal->x) + 0.5, static_cast<double>(goal->y),
+                            static_cast<double>(goal->z) + 0.5,
+                            static_cast<float>(species->follow_range));
+                        if (path) {
+                            mob.path = std::move(path->points);
+                            mob.path_index = 0;
+                            mob.has_path = !mob.path.empty();
+                        }
+                    }
+                }
+                follow_path(static_cast<double>(species->panic_scale));
+                if (mob.state_ticks <= 0) {
                     mob.ai = MobAi::idle;
                     mob.state_ticks = rand_ticks(20, 100);
-                    break;
                 }
-                walk(gx, gz, static_cast<double>(species->panic_scale));
                 break;
-            }
             case MobAi::chase: {
                 const PlayerSnapshot* target = nullptr;
                 for (const auto& player : players) {
@@ -356,8 +428,25 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     if (next == 1) {
                         // 引信中站定面向目标（swell goal 清空导航）
                         mob.pos.yaw = yaw_towards(mob.pos.yaw, dx, dz);
+                        mob.has_path = false;
+                        mob.path.clear();
                     } else {
-                        walk(dx, dz, 1.0);
+                        // 追向目标：导航到实体（MeleeAttack 节奏重寻路）
+                        if (mob.repath_ticks > 0) {
+                            --mob.repath_ticks;
+                        } else {
+                            mob.repath_ticks = 4 + rand_ticks(0, 7);
+                            auto path = world::find_path(
+                                world, mob.pos.x, mob.pos.y, mob.pos.z, mob.on_ground,
+                                species->width, species->height, target->x, target->y, target->z,
+                                static_cast<float>(species->follow_range));
+                            if (path) {
+                                mob.path = std::move(path->points);
+                                mob.path_index = 0;
+                                mob.has_path = !mob.path.empty();
+                            }
+                        }
+                        follow_path(1.0);
                     }
                     break;
                 }
@@ -374,8 +463,26 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     mob.see_ticks = can_see ? mob.see_ticks + 1 : mob.see_ticks - 1;
                     const bool hold_ground = horizontal_sq <= 15.0 * 15.0 && mob.see_ticks >= 20;
                     if (!hold_ground) {
-                        walk(dx, dz, 1.0);
+                        // BowShoot：超出射程或未确认可见 → 导航接近（每 10 tick 重寻路）
+                        if (mob.repath_ticks > 0) {
+                            --mob.repath_ticks;
+                        } else {
+                            mob.repath_ticks = 10;
+                            auto path = world::find_path(
+                                world, mob.pos.x, mob.pos.y, mob.pos.z, mob.on_ground,
+                                species->width, species->height, target->x, target->y, target->z,
+                                static_cast<float>(species->follow_range));
+                            if (path) {
+                                mob.path = std::move(path->points);
+                                mob.path_index = 0;
+                                mob.has_path = !mob.path.empty();
+                            }
+                        }
+                        follow_path(1.0);
                     } else {
+                        // 停步走位（导航清空）
+                        mob.has_path = false;
+                        mob.path.clear();
                         mob.pos.yaw = yaw_towards(mob.pos.yaw, dx, dz);
                         if (mob.strafe_ticks > 0) {
                             --mob.strafe_ticks;
@@ -439,10 +546,25 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                             static_cast<double>(species->width) +
                                         0.6;
                 if (dist_sq > reach_sq) {
-                    walk(dx, dz, 1.0);
+                    // PathfinderGoalMeleeAttack：4 + rand(7) tick 重寻路
+                    if (mob.repath_ticks > 0) {
+                        --mob.repath_ticks;
+                    } else {
+                        mob.repath_ticks = 4 + rand_ticks(0, 7);
+                        auto path = world::find_path(
+                            world, mob.pos.x, mob.pos.y, mob.pos.z, mob.on_ground,
+                            species->width, species->height, target->x, target->y, target->z,
+                            static_cast<float>(species->follow_range));
+                        if (path) {
+                            mob.path = std::move(path->points);
+                            mob.path_index = 0;
+                            mob.has_path = !mob.path.empty();
+                        }
+                    }
+                    follow_path(1.0);
                 } else {
                     mob.pos.yaw = yaw_towards(mob.pos.yaw, dx, dz);
-                    // 隔墙够不到就不挥拳（本服务端无寻路，用视线门近似原版绕路行为）
+                    // 攻击距离内：视线可见才挥拳（无寻路时可停滞）
                     if (can_see && mob.attack_cooldown <= 0) {
                         mob.attack_cooldown = kAttackIntervalTicks;
                         result.attacks.push_back(MobAttack{mob.entity_id, target->entity_id,
@@ -458,19 +580,6 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         // 落地状态：地面 slipperiness 0.6×0.91 = 0.546，空中 0.91）；撞墙只清被挡轴。
         mob.velocity_x += step_x;
         mob.velocity_z += step_z;
-        // 崖边守卫：本拍落点脚下 3 格内无地面则不移动（vanilla 寻路不走上落差 >3 的
-        // 路径；MoveHelper 迈步前也查 PathNodeType.WALKABLE）。被动放弃落点重选，
-        // 敌对停在崖边（vanilla 会绕路，本服务端无寻路先保证不掉崖）。
-        if (mob.on_ground && (mob.velocity_x != 0.0 || mob.velocity_z != 0.0)) {
-            if (!ground_below(world, mob.pos.x + mob.velocity_x, mob.pos.y, mob.pos.z + mob.velocity_z, 3)) {
-                if (mob.ai == MobAi::wander || mob.ai == MobAi::retreat) {
-                    mob.has_goal = false;
-                    mob.ai = MobAi::idle;
-                }
-                mob.velocity_x = 0.0;
-                mob.velocity_z = 0.0;
-            }
-        }
         mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y + world::kEntityGravity);
         double dx = mob.velocity_x;
         double dy = mob.velocity_y;
@@ -489,12 +598,6 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         const double friction = was_on_ground ? 0.546 : 0.91;
         mob.velocity_x = outcome.blocked_x ? 0.0 : mob.velocity_x * friction;
         mob.velocity_z = outcome.blocked_z ? 0.0 : mob.velocity_z * friction;
-        // 漫游/逃窜撞墙：放弃当前落点（vanilla 会重新选点）
-        if ((outcome.blocked_x || outcome.blocked_z) &&
-            (mob.ai == MobAi::wander || mob.ai == MobAi::retreat)) {
-            mob.has_goal = false;
-            mob.ai = MobAi::idle;
-        }
         if (std::abs(mob.velocity_x) < 0.001) {
             mob.velocity_x = 0.0;
         }
