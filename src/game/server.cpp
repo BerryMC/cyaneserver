@@ -614,7 +614,9 @@ void Server::fire_arrow(const net::MobShot& shot) {
     const double vx = dx / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
     const double vy = aim_y / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
     const double vz = dz / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
-    projectiles_->spawn(shot.mob_id, shot.x, shot.y, shot.z, vx, vy, vz, 2.0f);
+    const double arrow_speed = std::sqrt(vx * vx + vy * vy + vz * vz);
+    const float arrow_damage = static_cast<float>(std::ceil(arrow_speed * 2.0));
+    projectiles_->spawn(shot.mob_id, shot.x, shot.y, shot.z, vx, vy, vz, arrow_damage);
     const auto arrow_id = projectiles_->snapshot().back().entity_id;
     ByteWriter spawn;
     net::writers::write_spawn_object(spawn, arrow_id, kObjectTypeArrow, shot.x, shot.y, shot.z,

@@ -210,8 +210,6 @@ void Connection::send_world_state() {
     // 同步整份背包（windowId=0）：客户端据此渲染物品栏
     send_inventory();
     // 补发世界中已有的掉落物实体
-    send_existing_drops();
-    send_existing_mobs();
 }
 
 void Connection::send_initial_teleport() {

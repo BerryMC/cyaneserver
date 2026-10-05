@@ -60,6 +60,19 @@ std::mt19937& rng() {
     return true;
 }
 
+// EntityLiving.faceEntity(30,30)：转向目标每 tick 不超过 30°
+[[nodiscard]] float yaw_towards(float current, double dir_x, double dir_z) {
+    const float target = yaw_for(dir_x, dir_z);
+    float diff = std::fmod(target - current + 540.0f, 360.0f) - 180.0f;
+    if (diff > 30.0f) {
+        diff = 30.0f;
+    }
+    if (diff < -30.0f) {
+        diff = -30.0f;
+    }
+    return current + diff;
+}
+
 [[nodiscard]] std::uint32_t nearest_hostile_target(std::span<const PlayerSnapshot> players,
                                                    const Mob& mob, double range) {
     std::uint32_t best = 0;
@@ -326,7 +339,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     }
                     if (next == 1) {
                         // 引信中站定面向目标（swell goal 清空导航）
-                        mob.pos.yaw = yaw_for(dx, dz);
+                        mob.pos.yaw = yaw_towards(mob.pos.yaw, dx, dz);
                     } else {
                         walk(dx, dz, 1.0);
                     }
@@ -338,12 +351,16 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     //   seeTime ≥ 20 才停步走位（两轴 ±0.5：远 0.75 射程前进、近 0.25 后退，
                     //   每 20 tick 各 0.3 概率翻转）；射箭本身不设距离门（原版 release 只看可见性）。
                     const double horizontal_sq = dx * dx + dz * dz;
+                    // EntityAIAttackRangedBow：可见性状态翻转时 seeTime 归零
+                    if (can_see != (mob.see_ticks > 0)) {
+                        mob.see_ticks = 0;
+                    }
                     mob.see_ticks = can_see ? mob.see_ticks + 1 : mob.see_ticks - 1;
                     const bool hold_ground = horizontal_sq <= 15.0 * 15.0 && mob.see_ticks >= 20;
                     if (!hold_ground) {
                         walk(dx, dz, 1.0);
                     } else {
-                        mob.pos.yaw = yaw_for(dx, dz);
+                        mob.pos.yaw = yaw_towards(mob.pos.yaw, dx, dz);
                         if (mob.strafe_ticks > 0) {
                             --mob.strafe_ticks;
                         } else {
@@ -408,7 +425,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 if (dist_sq > reach_sq) {
                     walk(dx, dz, 1.0);
                 } else {
-                    mob.pos.yaw = yaw_for(dx, dz);
+                    mob.pos.yaw = yaw_towards(mob.pos.yaw, dx, dz);
                     // 隔墙够不到就不挥拳（本服务端无寻路，用视线门近似原版绕路行为）
                     if (can_see && mob.attack_cooldown <= 0) {
                         mob.attack_cooldown = kAttackIntervalTicks;

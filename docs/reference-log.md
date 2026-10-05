@@ -270,3 +270,5 @@
   - **#6 漫游/恐慌**：`RandomStroll` 每 tick 1/120 概率选 10 格内随机落点（无生成点锚定，走到即止）；`EntityAIPanic` 逃向随机落点（findRandomTarget(5,4) 近似），到位或 100 tick 结束。删除 home 锚定与 kWanderRadius。
   - **#7 护甲减伤**：`ArmorUtil.getDamageAfterAbsorb`（damage×(1 − clamp(armor − damage/(2+tough/4), armor×0.2, 20)/25)）落地于 `apply_damage`，护甲值按槽 5..8 累加（`item::armor_points` 皮革/锁链/铁/钻/金表）——近战/爆炸/箭伤全部生效。
   - #8（行为差异）记录在案未实现：蜘蛛 EntityAILeapAtTarget、僵尸破门/村庄、苦力怕坠落引信加速、生物间 HurtByTarget 反击。
+- 重生实体分身/抽搐/消失根因与修法：respawn 与 join 的 `send_existing_mobs/drops` **全量补发**与 `send_chunk_entities` 的**按块补发**叠加——客户端 `addEntityToWorld` 对已存在 id 是"removeEntity（从 entityList 摘除）+ 重建"，而 WorldClient.removeEntity 不清理 entitySpawnQueue，滞留副本排干时再次 spawn 造成分身/抽搐；区块在其间被卸载则实体永久不可见。修：**实体只随区块发**（进服/重生都不再全量补发，物品栏照发），与 vanilla tracker/cuberite cChunk::AddClient 同构。探针验证两次重生各 11 只、id 唯一。
+- 骷髅继续对齐源码的三处：`seeTime` 在可见性状态翻转时归零（`if (flag != flag1) seeTime = 0`）；面向目标/走位朝向走 `faceEntity(30,30)` 的 30°/tick 限速（近战/苦力怕同）；箭伤改 `ceil(命中速度 × 2.0)`（EntityArrow.onHit，满速 1.6 → 4 点，此前固定 2 偏低）。
