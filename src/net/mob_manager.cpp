@@ -37,6 +37,29 @@ std::mt19937& rng() {
     return static_cast<float>(std::atan2(-dir_x, dir_z) * 180.0 / kPi);
 }
 
+// EntityLivingBase.hasLineOfSight：眼到眼射线被实心方块遮挡即不可见（0.5 步进采样）
+[[nodiscard]] bool line_clear(world::World& world, double x0, double y0, double z0, double x1,
+                              double y1, double z1) {
+    const double dx = x1 - x0;
+    const double dy = y1 - y0;
+    const double dz = z1 - z0;
+    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-6) {
+        return true;
+    }
+    const int steps = std::max(1, static_cast<int>(std::ceil(dist / 0.5)));
+    for (int s = 1; s < steps; ++s) {
+        const double t = static_cast<double>(s) / steps;
+        const auto bx = static_cast<std::int32_t>(std::floor(x0 + dx * t));
+        const auto by = static_cast<std::int32_t>(std::floor(y0 + dy * t));
+        const auto bz = static_cast<std::int32_t>(std::floor(z0 + dz * t));
+        if (world::is_solid(world.block_at(bx, by, bz))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] std::uint32_t nearest_hostile_target(std::span<const PlayerSnapshot> players,
                                                    const Mob& mob, double range) {
     std::uint32_t best = 0;
@@ -63,7 +86,7 @@ void MobManager::spawn_passive(std::size_t count, world::World& world, double ce
                                double center_z) {
     for (std::size_t i = 0; i < count; ++i) {
         const double angle = rand01() * 2.0 * kPi;
-        const double radius = 4.0 + rand01() * (kWanderRadius - 4.0);
+        const double radius = 4.0 + rand01() * 6.0;
         const double x = center_x + std::cos(angle) * radius;
         const double z = center_z + std::sin(angle) * radius;
         const auto ground = world.surface_y(static_cast<std::int32_t>(std::floor(x)),
@@ -83,8 +106,6 @@ std::uint32_t MobManager::spawn(std::int32_t type, double x, double y, double z,
     mob.type = type;
     mob.pos = entity::Position{x, y, z, yaw, 0.0f};
     mob.health = species->health;
-    mob.home_x = x;
-    mob.home_z = z;
     mob.state_ticks = rand_ticks(20, 100);
     std::lock_guard<std::mutex> lock{mutex_};
     mobs_.push_back(std::move(mob));
@@ -122,15 +143,14 @@ MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double
             }
             const auto species = world::mob_type(mob.type);
             if (species && !species->hostile) {
+                // EntityAIPanic：逃向随机落点（findRandomTarget(5,4)），hurtTimestamp 后 100 tick
+                const double angle = rand01() * 2.0 * kPi;
+                const double dist = 3.0 + rand01() * 4.0;
+                mob.goal_x = mob.pos.x + std::cos(angle) * dist;
+                mob.goal_z = mob.pos.z + std::sin(angle) * dist;
+                mob.has_goal = true;
                 mob.ai = MobAi::retreat;
-                mob.state_ticks = 100;  // EntityAIPanic：hurtTimestamp 后 100 tick
-                mob.dir_x = -dx;
-                mob.dir_z = -dz;
-                const double escape = std::sqrt(mob.dir_x * mob.dir_x + mob.dir_z * mob.dir_z);
-                if (escape >= 1e-4) {
-                    mob.dir_x /= escape;
-                    mob.dir_z /= escape;
-                }
+                mob.state_ticks = 100;
             }
             return out;
         }
@@ -177,16 +197,35 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 const auto target =
                     nearest_hostile_target(players, mob, static_cast<double>(species->follow_range));
                 if (target == 0) {
-                    mob.see_ticks = 0;
-                    if (mob.ai == MobAi::chase) {
-                        mob.ai = MobAi::idle;
-                        mob.state_ticks = rand_ticks(20, 60);
+                    // EntityAITarget.unseenMemoryTicks = 60：丢视线后目标保留 60 tick
+                    if (mob.target_player != 0) {
+                        ++mob.unseen_ticks;
+                        if (mob.unseen_ticks > 60) {
+                            mob.target_player = 0;
+                            mob.see_ticks = 0;
+                            if (mob.bow_drawing) {
+                                mob.bow_drawing = false;
+                                mob.draw_ticks = 0;
+                                result.draws.push_back(MobDraw{mob.entity_id, mob.pos.x, mob.pos.y,
+                                                               mob.pos.z, false});
+                            }
+                            mob.ai = MobAi::idle;
+                            mob.state_ticks = rand_ticks(20, 60);
+                        }
                     }
                 } else {
-                    mob.target_player = target;
-                    if (mob.ai != MobAi::chase) {
-                        mob.ai = MobAi::chase;
+                    if (target != mob.target_player) {
+                        mob.see_ticks = 0;
+                        mob.unseen_ticks = 0;
+                        if (mob.bow_drawing) {
+                            mob.bow_drawing = false;
+                            mob.draw_ticks = 0;
+                            result.draws.push_back(MobDraw{mob.entity_id, mob.pos.x, mob.pos.y,
+                                                           mob.pos.z, false});
+                        }
                     }
+                    mob.target_player = target;
+                    mob.ai = MobAi::chase;
                 }
             }
         }
@@ -210,42 +249,41 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
 
         switch (mob.ai) {
             case MobAi::idle:
-                if (mob.state_ticks <= 0) {
-                    if (rand01() < 0.6) {
-                        const double angle = rand01() * 2.0 * kPi;
-                        mob.dir_x = std::cos(angle);
-                        mob.dir_z = std::sin(angle);
-                        mob.ai = MobAi::wander;
-                        mob.state_ticks = rand_ticks(20, 80);
-                    } else {
-                        mob.state_ticks = rand_ticks(20, 100);
-                    }
+                // PathfinderGoalRandomStroll：每 tick 1/120 概率取 10 格内随机落点，
+                // 不锚定生成点（mobs 会自然漂移）
+                if (rand01() < 1.0 / 120.0) {
+                    const double angle = rand01() * 2.0 * kPi;
+                    const double dist = 3.0 + rand01() * 7.0;
+                    mob.goal_x = mob.pos.x + std::cos(angle) * dist;
+                    mob.goal_z = mob.pos.z + std::sin(angle) * dist;
+                    mob.has_goal = true;
+                    mob.ai = MobAi::wander;
                 }
                 break;
             case MobAi::wander: {
-                if (mob.state_ticks <= 0) {
+                const double gx = mob.goal_x - mob.pos.x;
+                const double gz = mob.goal_z - mob.pos.z;
+                if (!mob.has_goal || gx * gx + gz * gz < 1.0) {
+                    mob.has_goal = false;
                     mob.ai = MobAi::idle;
-                    mob.state_ticks = rand_ticks(20, 100);
                     break;
                 }
-                // 远离生成点则折返（避免越走越远）
-                const double dx = mob.pos.x - mob.home_x;
-                const double dz = mob.pos.z - mob.home_z;
-                if (dx * dx + dz * dz > kWanderRadius * kWanderRadius) {
-                    mob.dir_x = -dx;
-                    mob.dir_z = -dz;
-                }
-                walk(mob.dir_x, mob.dir_z, static_cast<double>(species->stroll_scale));
+                walk(gx, gz, static_cast<double>(species->stroll_scale));
                 break;
             }
-            case MobAi::retreat:
-                if (mob.state_ticks <= 0) {
+            case MobAi::retreat: {
+                // EntityAIPanic：逃向随机落点，到位或 100 tick 后结束
+                const double gx = mob.goal_x - mob.pos.x;
+                const double gz = mob.goal_z - mob.pos.z;
+                if (!mob.has_goal || gx * gx + gz * gz < 1.0 || mob.state_ticks <= 0) {
+                    mob.has_goal = false;
                     mob.ai = MobAi::idle;
                     mob.state_ticks = rand_ticks(20, 100);
                     break;
                 }
-                walk(mob.dir_x, mob.dir_z, static_cast<double>(species->panic_scale));
+                walk(gx, gz, static_cast<double>(species->panic_scale));
                 break;
+            }
             case MobAi::chase: {
                 const PlayerSnapshot* target = nullptr;
                 for (const auto& player : players) {
@@ -264,11 +302,14 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 const double dy = target->y - mob.pos.y;
                 const double dz = target->z - mob.pos.z;
                 const double dist_sq = dx * dx + dy * dy + dz * dz;
+                const bool can_see = line_clear(
+                    world, mob.pos.x, mob.pos.y + static_cast<double>(species->height) * 0.85,
+                    mob.pos.z, target->x, target->y + 1.62, target->z);
                 if (species->explodes) {
                     // PathfinderGoalSwell.e() + EntityCreeper.B_()：目标在 7 格内且可见 →
-                    // state=1（引信 +1/tick），目标丢失/超出 → state=-1（引信 -1/tick 回退）；
+                    // state=1（引信 +1/tick），丢失/超 7 格/不可见 → state=-1（引信回退）；
                     // 引信到 30 tick 即引爆（radius 3，无火）。
-                    const std::int32_t next = dist_sq <= 49.0 ? 1 : -1;
+                    const std::int32_t next = dist_sq <= 49.0 && can_see ? 1 : -1;
                     if (next != mob.fuse_state) {
                         mob.fuse_state = next;
                         result.ignitions.push_back(
@@ -287,9 +328,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                         // 引信中站定面向目标（swell goal 清空导航）
                         mob.pos.yaw = yaw_for(dx, dz);
                     } else {
-                        mob.dir_x = dx;
-                        mob.dir_z = dz;
-                        walk(mob.dir_x, mob.dir_z, 1.0);
+                        walk(dx, dz, 1.0);
                     }
                     break;
                 }
@@ -299,12 +338,10 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     //   seeTime ≥ 20 才停步走位（两轴 ±0.5：远 0.75 射程前进、近 0.25 后退，
                     //   每 20 tick 各 0.3 概率翻转）；射箭本身不设距离门（原版 release 只看可见性）。
                     const double horizontal_sq = dx * dx + dz * dz;
-                    ++mob.see_ticks;
+                    mob.see_ticks = can_see ? mob.see_ticks + 1 : mob.see_ticks - 1;
                     const bool hold_ground = horizontal_sq <= 15.0 * 15.0 && mob.see_ticks >= 20;
                     if (!hold_ground) {
-                        mob.dir_x = dx;
-                        mob.dir_z = dz;
-                        walk(mob.dir_x, mob.dir_z, 1.0);
+                        walk(dx, dz, 1.0);
                     } else {
                         mob.pos.yaw = yaw_for(dx, dz);
                         if (mob.strafe_ticks > 0) {
@@ -341,9 +378,16 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                         result.draws.push_back(
                             MobDraw{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z, true});
                     }
+                    if (mob.bow_drawing && !can_see && mob.see_ticks < -60) {
+                        // EntityAIAttackRangedBow：视线丢失 60 tick 以上收弓重瞄
+                        mob.bow_drawing = false;
+                        mob.draw_ticks = 0;
+                        result.draws.push_back(
+                            MobDraw{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z, false});
+                    }
                     if (mob.bow_drawing) {
                         ++mob.draw_ticks;
-                        if (mob.draw_ticks >= 20) {
+                        if (mob.draw_ticks >= 20 && can_see) {
                             mob.bow_drawing = false;
                             mob.attack_cooldown = kShootIntervalTicks;
                             result.draws.push_back(
@@ -362,12 +406,11 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                             static_cast<double>(species->width) +
                                         0.6;
                 if (dist_sq > reach_sq) {
-                    mob.dir_x = dx;
-                    mob.dir_z = dz;
-                    walk(mob.dir_x, mob.dir_z, 1.0);
+                    walk(dx, dz, 1.0);
                 } else {
                     mob.pos.yaw = yaw_for(dx, dz);
-                    if (mob.attack_cooldown <= 0) {
+                    // 隔墙够不到就不挥拳（本服务端无寻路，用视线门近似原版绕路行为）
+                    if (can_see && mob.attack_cooldown <= 0) {
                         mob.attack_cooldown = kAttackIntervalTicks;
                         result.attacks.push_back(MobAttack{mob.entity_id, target->entity_id,
                                                            species->attack_damage, mob.pos.x,
@@ -378,14 +421,15 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             }
         }
 
-        // 物理：vanilla travel 动量模型——AI 加速度叠加后按动量位移，位移后按当前
-        // 落地状态施加摩擦（地面 slipperiness 0.6×0.91 = 0.546，空中 0.91）。
+        // 物理：vanilla travel——moveRelative 加速度 → move → 摩擦（f6 取 move 之前的
+        // 落地状态：地面 slipperiness 0.6×0.91 = 0.546，空中 0.91）；撞墙只清被挡轴。
         mob.velocity_x += step_x;
         mob.velocity_z += step_z;
         mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y + world::kEntityGravity);
         double dx = mob.velocity_x;
         double dy = mob.velocity_y;
         double dz = mob.velocity_z;
+        const bool was_on_ground = mob.on_ground;
         auto box = world::entity_box(mob.pos.x, mob.pos.y, mob.pos.z, species->width, species->height);
         const auto before = mob.pos;
         const auto outcome = world::move_with_collision(world, box, dx, dy, dz, 1.0);
@@ -396,16 +440,14 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         if (outcome.on_ground) {
             mob.velocity_y = 0.0;
         }
-        const bool hit_knock = outcome.blocked_x || outcome.blocked_z;
-        // 位移后摩擦（travel：f6 在 move 之后乘上）；撞墙即止
-        const double friction = outcome.on_ground ? 0.546 : 0.91;
-        mob.velocity_x = hit_knock ? 0.0 : mob.velocity_x * friction;
-        mob.velocity_z = hit_knock ? 0.0 : mob.velocity_z * friction;
-        // 漫游/逃窜撞墙：立即换方向（避免顶墙 grinding 到状态结束）
-        if (hit_knock && (mob.ai == MobAi::wander || mob.ai == MobAi::retreat)) {
-            const double angle = rand01() * 2.0 * kPi;
-            mob.dir_x = std::cos(angle);
-            mob.dir_z = std::sin(angle);
+        const double friction = was_on_ground ? 0.546 : 0.91;
+        mob.velocity_x = outcome.blocked_x ? 0.0 : mob.velocity_x * friction;
+        mob.velocity_z = outcome.blocked_z ? 0.0 : mob.velocity_z * friction;
+        // 漫游/逃窜撞墙：放弃当前落点（vanilla 会重新选点）
+        if ((outcome.blocked_x || outcome.blocked_z) &&
+            (mob.ai == MobAi::wander || mob.ai == MobAi::retreat)) {
+            mob.has_goal = false;
+            mob.ai = MobAi::idle;
         }
         if (std::abs(mob.velocity_x) < 0.001) {
             mob.velocity_x = 0.0;

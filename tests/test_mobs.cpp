@@ -177,7 +177,11 @@ CYANE_TEST(passive_mob_retreats_when_hurt) {
     }
     const auto pig = mobs.by_id(id);
     CYANE_CHECK(pig.has_value());
-    CYANE_CHECK(pig->pos.x < 0.5);  // 朝 -x 逃开
+    // EntityAIPanic：逃向随机落点（未必沿受击反方向），但必定已出发
+    CYANE_CHECK(pig->ai == net::MobAi::retreat && pig->has_goal);
+    const double moved = (pig->pos.x - 0.5) * (pig->pos.x - 0.5) +
+                         (pig->pos.z - 0.5) * (pig->pos.z - 0.5);
+    CYANE_CHECK(moved > 0.01);
 }
 
 // 受伤与死亡：血量递减，归零后从表里移除

@@ -6,6 +6,7 @@
 #include "cyane/core/log.hpp"
 #include "cyane/net/packet_writers.hpp"
 #include "cyane/item/item_traits.hpp"
+#include "cyane/item/item_tools.hpp"
 #include "cyane/world/mob_types.hpp"
 
 namespace cyane::net {
@@ -133,6 +134,12 @@ void Connection::apply_damage(float amount, double from_x, double from_z) {
     if (dead_ || context_.game_mode == proto::game_mode::kCreative) {
         return;  // 创造模式无敌（vanilla 同）
     }
+    // 护甲减伤（ArmorUtil.getDamageAfterAbsorb，槽 5..8 = 头/胸/腿/脚）
+    int armor = 0;
+    for (std::size_t i = 5; i <= 8; ++i) {
+        armor += item::armor_points(inventory_.slot(i).id);
+    }
+    amount = item::damage_after_armor(amount, armor, 0.0f);
     health_ = std::max(0.0f, health_ - amount);
     ByteWriter health;
     health.f32(health_);

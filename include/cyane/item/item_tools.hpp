@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 namespace cyane::item {
@@ -13,6 +14,26 @@ struct ToolInfo {
     ToolKind kind{ToolKind::none};
     ToolTier tier{ToolTier::hand};
 };
+
+// 护甲值（Armor points，1.12.2 各护甲件）
+[[nodiscard]] inline int armor_points(std::int16_t item_id) {
+    switch (item_id) {
+        case 298: return 1; case 299: return 3; case 300: return 2; case 301: return 1;  // 皮革
+        case 302: return 2; case 303: return 5; case 304: return 4; case 305: return 1;  // 锁链
+        case 306: return 2; case 307: return 6; case 308: return 5; case 309: return 2;  // 铁
+        case 310: return 3; case 311: return 8; case 312: return 6; case 313: return 3;  // 钻石
+        case 314: return 2; case 315: return 5; case 316: return 3; case 317: return 1;  // 金
+        default: return 0;
+    }
+}
+
+// ArmorUtil.getDamageAfterAbsorb：damage×(1 − clamp(armor − damage/(2+tough/4), armor×0.2, 20)/25)
+[[nodiscard]] inline float damage_after_armor(float damage, int armor, float toughness) {
+    const float f = 2.0f + toughness / 4.0f;
+    const float capped = std::clamp(static_cast<float>(armor) - damage / f,
+                                    static_cast<float>(armor) * 0.2f, 20.0f);
+    return damage * (1.0f - capped / 25.0f);
+}
 
 [[nodiscard]] inline ToolInfo tool_of(std::int16_t item_id) {
     switch (item_id) {

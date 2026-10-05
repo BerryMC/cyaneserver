@@ -44,10 +44,10 @@ struct Mob {
     MobAi ai{MobAi::idle};
     std::int32_t state_ticks{0};   // 当前状态剩余 tick
     std::int32_t scan_ticks{0};    // 目标扫描节流
-    double dir_x{0.0};
-    double dir_z{0.0};
-    double home_x{0.0};            // 生成点（漫游半径锚点）
-    double home_z{0.0};
+    double goal_x{0.0};            // 漫游/逃窜目标点（RandomStroll/AIPanic 的随机落点）
+    double goal_z{0.0};
+    bool has_goal{false};
+    std::int32_t unseen_ticks{0};  // EntityAITarget.unseenMemoryTicks：丢视线后目标记忆 60 tick
     std::uint32_t target_player{0};  // 敌对目标玩家实体 id（0 = 无）
     std::int32_t attack_cooldown{0};
     std::int32_t fuse_state{-1};   // 苦力怕 swell 状态（datawatcher 索引 12：-1 熄灭 / 1 引信中）
@@ -232,7 +232,6 @@ public:
     }
 
     static constexpr double kWanderSpeedScale = 1.0;  // 漫游用物种速度（倍率在 MobType.stroll_scale）
-    static constexpr double kWanderRadius = 24.0;     // 距生成点最大半径
 
 private:
     [[nodiscard]] bool remove_locked(std::uint32_t id);
