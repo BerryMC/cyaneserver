@@ -50,15 +50,17 @@ struct Mob {
     double home_z{0.0};
     std::uint32_t target_player{0};  // 敌对目标玩家实体 id（0 = 无）
     std::int32_t attack_cooldown{0};
-    std::int32_t fuse_ticks{-1};   // 苦力怕引信（-1 = 未点燃）
+    std::int32_t fuse_state{-1};   // 苦力怕 swell 状态（datawatcher 索引 16：-1 熄灭 / 1 引信中）
+    std::int32_t fuse_ticks{0};    // 苦力怕引信计数（EntityCreeper.fuseTicks，0..30）
 };
 
-// 苦力怕点燃：Server 据此广播引信音效与白闪 metadata
+// 苦力怕 swell 状态变化：Server 据此播引信音效并广播 metadata（-1 熄灭 / 1 引信中）
 struct MobIgnition {
     std::uint32_t mob_id{0};
     double x{0.0};
     double y{0.0};
     double z{0.0};
+    std::int32_t fuse_state{-1};
 };
 
 // 骷髅射出的箭：起点与目标（Server 负责生成投射物实体）
@@ -144,8 +146,10 @@ public:
     // 按类型在指定位置生成一只生物，返回实体 id（未知类型返回 0）
     std::uint32_t spawn(std::int32_t type, double x, double y, double z, float yaw);
 
-    // 造成伤害（含击退方向）：死亡时从表里移除并回报坐标
-    MobHurt damage(std::uint32_t id, float amount, double from_x, double from_z);
+    // 造成伤害（含击退方向）：死亡时从表里移除并回报坐标。
+    // 击退强度：近战 0.4（EntityLiving.a(entity, 0.4F, ...)），爆炸传 impact。
+    MobHurt damage(std::uint32_t id, float amount, double from_x, double from_z,
+                   float knockback = 0.4f);
 
     // 推进 AI 与物理一个 tick
     [[nodiscard]] MobTickResult tick(world::World& world,
@@ -211,9 +215,9 @@ public:
         return mobs_.size();
     }
 
-    static constexpr double kWanderSpeedScale = 1.0;  // 漫游用物种速度
+    static constexpr double kWanderSpeedScale = 1.0;  // 漫游用物种速度（随机漫步倍率在 MobType.stroll_scale）
     static constexpr double kWanderRadius = 24.0;     // 距生成点最大半径
-    static constexpr double kRetreatSpeedScale = 1.1; // 受击逃窜略快于漫游（所有被动种仍低于疾跑 0.28 b/t）
+    static constexpr double kRetreatSpeedScale = 2.0; // PathfinderGoalPanic(this, 2.0)：逃窜 2 倍导航速度
 
 private:
     [[nodiscard]] bool remove_locked(std::uint32_t id);

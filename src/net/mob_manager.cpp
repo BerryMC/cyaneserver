@@ -17,7 +17,7 @@ constexpr std::array<std::int32_t, 4> kPassiveTypes = {90, 91, 92, 93};  // 猪 
 constexpr std::int32_t kHostileScanInterval = 10;  // 目标扫描节流：每 0.5s
 constexpr std::int32_t kAttackIntervalTicks = 20;  // 近战挥击冷却（vanilla 20 tick）
 constexpr std::int32_t kFuseTicks = 30;            // 苦力怕引信（EntityCreeper.maxFuseTicks）
-constexpr std::int32_t kShootIntervalTicks = 40;   // 骷髅射箭间隔（BowShoot 20，保守取 40）
+constexpr std::int32_t kShootIntervalTicks = 40;   // 骷髅射箭间隔（dm(): 非困难难度 b0=40）
 
 std::mt19937& rng() {
     thread_local std::mt19937 engine{std::random_device{}()};
@@ -91,7 +91,8 @@ std::uint32_t MobManager::spawn(std::int32_t type, double x, double y, double z,
     return mobs_.back().entity_id;
 }
 
-MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double from_z) {
+MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double from_z,
+                           float knockback) {
     std::lock_guard<std::mutex> lock{mutex_};
     for (std::size_t i = 0; i < mobs_.size(); ++i) {
         Mob& mob = mobs_[i];
@@ -106,25 +107,30 @@ MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double
         mob.health -= amount;
         if (mob.health > 0.0f) {
             out.health = mob.health;
-            // 击退：沿攻击者→生物方向推开（水平），并给被动生物一个逃窜状态
-            double dx = mob.pos.x - from_x;
-            double dz = mob.pos.z - from_z;
+            // EntityLiving.a(Entity, f, d0, d1)：现有动量减半后反向叠加击退，
+            // 落地时向上踢 0.4（上限 0.4）
+            double dx = from_x - mob.pos.x;
+            double dz = from_z - mob.pos.z;
             const double len = std::sqrt(dx * dx + dz * dz);
-            if (len < 1e-4) {
-                dx = 0.0;
-                dz = 0.0;
-            } else {
-                dx /= len;
-                dz /= len;
+            if (len >= 1e-4) {
+                mob.velocity_x = mob.velocity_x / 2.0 - dx / len * static_cast<double>(knockback);
+                mob.velocity_z = mob.velocity_z / 2.0 - dz / len * static_cast<double>(knockback);
             }
-            mob.velocity_x += dx * 0.4;
-            mob.velocity_z += dz * 0.4;
+            if (mob.on_ground) {
+                mob.velocity_y = mob.velocity_y / 2.0 + static_cast<double>(knockback);
+                mob.velocity_y = std::min(mob.velocity_y, 0.4);
+            }
             const auto species = world::mob_type(mob.type);
             if (species && !species->hostile) {
                 mob.ai = MobAi::retreat;
-                mob.state_ticks = rand_ticks(60, 100);
-                mob.dir_x = dx;
-                mob.dir_z = dz;
+                mob.state_ticks = 100;  // PathfinderGoalPanic：hurtTimestamp 后 100 tick
+                mob.dir_x = -dx;
+                mob.dir_z = -dz;
+                const double escape = std::sqrt(mob.dir_x * mob.dir_x + mob.dir_z * mob.dir_z);
+                if (escape >= 1e-4) {
+                    mob.dir_x /= escape;
+                    mob.dir_z /= escape;
+                }
             }
             return out;
         }
@@ -224,7 +230,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     mob.dir_x = -dx;
                     mob.dir_z = -dz;
                 }
-                walk(mob.dir_x, mob.dir_z, kWanderSpeedScale);
+                walk(mob.dir_x, mob.dir_z, static_cast<double>(species->stroll_scale));
                 break;
             }
             case MobAi::retreat:
@@ -250,30 +256,31 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     break;
                 }
                 const double dx = target->x - mob.pos.x;
+                const double dy = target->y - mob.pos.y;
                 const double dz = target->z - mob.pos.z;
-                const double dist = std::sqrt(dx * dx + dz * dz);
-                // 近战：进入攻击距离后停下挥击（冷却由 Server 侧事件落地）
-                if (mob.fuse_ticks >= 0) {
-                    // 苦力怕引信期：站定不再移动（vanilla 引信期不寻路）
-                    mob.pos.yaw = yaw_for(dx, dz);
-                    --mob.fuse_ticks;
-                    if (mob.fuse_ticks < 0) {
+                const double dist_sq = dx * dx + dy * dy + dz * dz;
+                if (species->explodes) {
+                    // PathfinderGoalSwell.e() + EntityCreeper.B_()：目标在 7 格内且可见 →
+                    // state=1（引信 +1/tick），目标丢失/超出 → state=-1（引信 -1/tick 回退）；
+                    // 引信到 30 tick 即引爆（radius 3，无火）。
+                    const std::int32_t next = dist_sq <= 49.0 ? 1 : -1;
+                    if (next != mob.fuse_state) {
+                        mob.fuse_state = next;
+                        result.ignitions.push_back(
+                            MobIgnition{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z, next});
+                    }
+                    mob.fuse_ticks = std::max(0, mob.fuse_ticks + next);
+                    if (mob.fuse_ticks >= kFuseTicks) {
                         result.explosions.push_back(
                             MobExplosion{mob.pos.x, mob.pos.y, mob.pos.z, 3.0f});
                         MobDeath death{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z};
                         (void)remove_locked(mob.entity_id);
                         result.deaths.push_back(death);
+                        break;
                     }
-                    break;
-                }
-                const bool in_range = dist <= static_cast<double>(species->attack_range);
-                if (species->explodes) {
-                    if (in_range) {
-                        if (mob.fuse_ticks < 0) {
-                            result.ignitions.push_back(
-                                MobIgnition{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z});
-                        }
-                        mob.fuse_ticks = kFuseTicks;
+                    if (next == 1) {
+                        // 引信中站定面向目标（swell goal 清空导航）
+                        mob.pos.yaw = yaw_for(dx, dz);
                     } else {
                         mob.dir_x = dx;
                         mob.dir_z = dz;
@@ -282,24 +289,31 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     break;
                 }
                 if (species->ranged) {
-                    // 骷髅：射程内停下射击（过近则后撤保持距离）
-                    if (dist < 4.0) {
-                        mob.dir_x = -dx;
-                        mob.dir_z = -dz;
+                    // PathfinderGoalBowShoot(skeleton, 1.0, 20, 15)：15 格内停步瞄准射击，
+                    // 超出则接近；射击间隔 40 tick（dm(): 非困难难度 b0=40）
+                    const double horizontal_sq = dx * dx + dz * dz;
+                    if (horizontal_sq > 15.0 * 15.0) {
+                        mob.dir_x = dx;
+                        mob.dir_z = dz;
                         walk(mob.dir_x, mob.dir_z, 1.0);
                     } else {
                         mob.pos.yaw = yaw_for(dx, dz);
                     }
-                    if (in_range && mob.attack_cooldown <= 0) {
+                    if (horizontal_sq <= 15.0 * 15.0 && mob.attack_cooldown <= 0) {
                         mob.attack_cooldown = kShootIntervalTicks;
-                        result.shots.push_back(MobShot{mob.entity_id, target->entity_id, mob.pos.x,
-                                                       mob.pos.y + static_cast<double>(species->height) * 0.85,
-                                                       mob.pos.z,
-                                                       target->x, target->y + 1.0, target->z});
+                        result.shots.push_back(
+                            MobShot{mob.entity_id, target->entity_id, mob.pos.x,
+                                    mob.pos.y + 1.74 /*EntitySkeletonAbstract.getHeadHeight*/,
+                                    mob.pos.z, target->x, target->y + 1.8 / 3.0, target->z});
                     }
                     break;
                 }
-                if (dist > static_cast<double>(species->attack_range)) {
+                // PathfinderGoalMeleeAttack.a()：distSq ≤ (2×width)² + 目标宽度 即可挥击，
+                // 冷却 20 tick
+                const double reach_sq = 4.0 * static_cast<double>(species->width) *
+                                            static_cast<double>(species->width) +
+                                        0.6;
+                if (dist_sq > reach_sq) {
                     mob.dir_x = dx;
                     mob.dir_z = dz;
                     walk(mob.dir_x, mob.dir_z, 1.0);

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -7,6 +8,7 @@
 #include "cyane/net/mob_manager.hpp"
 #include "cyane/net/projectile_manager.hpp"
 #include "cyane/net/packet_writers.hpp"
+#include "cyane/world/blocks.hpp"
 #include "cyane/world/mob_types.hpp"
 #include "cyane/world/physics.hpp"
 #include "cyane/world/world.hpp"
@@ -223,7 +225,7 @@ CYANE_TEST(packet_spawn_mob_encodes_vanilla_layout) {
     CYANE_CHECK_EQ(std::to_integer<int>(data.back()), 0xFF);  // 空 metadata 终止符
 }
 
-// 苦力怕：追近后点燃引信（停住），30 tick 后自爆（explosion + death 事件）
+// 苦力怕：追近后点燃引信（swell state=1，停住），30 tick 后自爆（explosion + death 事件）
 CYANE_TEST(creeper_fuse_then_explodes) {
     world::World world;
     net::MobManager mobs;
@@ -233,7 +235,7 @@ CYANE_TEST(creeper_fuse_then_explodes) {
     for (int i = 0; i < 200 && !fused; ++i) {
         (void)mobs.tick(world, players);
         const auto creeper = mobs.by_id(id);
-        fused = creeper && creeper->fuse_ticks >= 0;
+        fused = creeper && creeper->fuse_state == 1;
     }
     CYANE_CHECK(fused);
     // 引信期间苦力怕不再移动（站定）
@@ -318,7 +320,7 @@ CYANE_TEST(creeper_ignition_event_fires_once) {
     CYANE_CHECK_EQ(ignitions, 1);  // 只在点燃瞬间发一次
 }
 
-// 逃窜速度：受击后 1.3×（低于疾跑，可追上）
+// 逃窜速度：PathfinderGoalPanic(this, 2.0) → 猪 0.25×2 = 0.5 b/t（vanilla 逃窜比疾跑快）
 CYANE_TEST(retreat_speed_is_below_sprint) {
     world::World world;
     net::MobManager mobs;
@@ -326,15 +328,64 @@ CYANE_TEST(retreat_speed_is_below_sprint) {
     (void)mobs.damage(id, 1.0f, 1.5, 0.5);
     const auto pig = mobs.by_id(id);
     CYANE_CHECK(pig.has_value());
-    // 每 tick 位移 = speed × 1.1 = 0.275 b/t（猪）——低于疾跑 0.28 b/t，可追上
+    CYANE_CHECK(pig->ai == net::MobAi::retreat);
+    CYANE_CHECK_EQ(pig->state_ticks, 100);  // hurtTimestamp 后 100 tick
     const double per_tick =
         net::MobManager::kRetreatSpeedScale * static_cast<double>(world::mob_type(90)->speed);
-    CYANE_CHECK(per_tick < 0.28);
-    CYANE_CHECK_NEAR(per_tick, 0.275, 0.001);
+    CYANE_CHECK_NEAR(per_tick, 0.5, 0.001);
 }
 
-// Explosion (0x1C) 黄金向量：位置 f32×3（字段虽是 double 但按 float 写出）+ 半径 +
-// 记录数 + byte×3 记录 + 动量。位置写成 f64 曾让客户端把记录数读成垃圾值 → OOM。
+// 苦力怕引信可熄灭（PathfinderGoalSwell.e()：目标超出 7 格 → state=-1，引信逐 tick 回退）
+CYANE_TEST(creeper_fuse_defuses_when_target_flees) {
+    world::World world;
+    net::MobManager mobs;
+    const auto id = mobs.spawn(50, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    std::vector<net::PlayerSnapshot> players = {player_at(7, 2.0, kGroundY, 0.5)};
+    for (int i = 0; i < 40; ++i) {
+        (void)mobs.tick(world, players);  // 玩家贴脸：引信涨到 30 之前就撤
+        const auto creeper = mobs.by_id(id);
+        if (creeper && creeper->fuse_state == 1 && creeper->fuse_ticks >= 3) {
+            break;
+        }
+    }
+    const auto swelling = mobs.by_id(id);
+    CYANE_CHECK(swelling && swelling->fuse_state == 1 && swelling->fuse_ticks > 0);
+
+    // 玩家跑出 7 格：state 变 -1，引信回退到 0，不爆炸
+    players = {player_at(7, 20.0, kGroundY, 0.5)};
+    bool defuse_event = false;
+    bool exploded = false;
+    for (int i = 0; i < 60; ++i) {
+        const auto result = mobs.tick(world, players);
+        defuse_event = defuse_event ||
+                       std::any_of(result.ignitions.begin(), result.ignitions.end(),
+                                   [](const auto& ign) { return ign.fuse_state < 0; });
+        exploded = exploded || !result.explosions.empty();
+    }
+    CYANE_CHECK(defuse_event);
+    CYANE_CHECK(!exploded);
+    const auto calmed = mobs.by_id(id);
+    CYANE_CHECK(calmed.has_value());
+    CYANE_CHECK_EQ(calmed->fuse_ticks, 0);
+}
+
+// 爆炸抗性衰减表：vanilla Explosion 的 (resistance+0.3)*0.3 合成值（Cuberite 转写）
+CYANE_TEST(explosion_absorption_matches_reference) {
+    CYANE_CHECK_NEAR(static_cast<double>(world::explosion_absorption(world::kStateAir)), 0.09,
+                     0.0001);
+    CYANE_CHECK_NEAR(static_cast<double>(world::explosion_absorption(world::kStateStone)), 1.89,
+                     0.0001);
+    CYANE_CHECK_NEAR(static_cast<double>(world::explosion_absorption(world::kStateBedrock)),
+                     1080000.09, 0.5);  // f32 精度限制
+    CYANE_CHECK_NEAR(static_cast<double>(world::explosion_absorption(world::kStateDirt)), 0.09,
+                     0.0001);
+    // 水/岩浆衰减 100：30.09
+    CYANE_CHECK_NEAR(
+        static_cast<double>(world::explosion_absorption(static_cast<std::uint16_t>(9 << 4))),
+        30.09, 0.0001);
+}
+
+// Explosion (0x1C) 黄金向量：位置 f32×3（字段虽是 double 但按 float 写出）+ 半径 +// 记录数 + byte×3 记录 + 动量。位置写成 f64 曾让客户端把记录数读成垃圾值 → OOM。
 CYANE_TEST(packet_explosion_uses_float_layout) {
     ByteWriter out;
     std::array<std::array<std::int8_t, 3>, 2> records{{{1, 0, -2}, {-1, -1, 0}}};

@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <format>
 #include <iostream>
+#include <random>
 #include <thread>
+#include <unordered_set>
 
 #include "cyane/core/log.hpp"
 #include "cyane/crypto/digest.hpp"
@@ -488,28 +490,31 @@ void Server::tick() {
                 }
             }
         }
-        // 苦力怕点燃：引信音效 + 白闪 metadata（index 16 VarInt=1）
+        // 苦力怕 swell 状态变化：引信中播引信音效 + 白闪 metadata（index 16 VarInt）；
+        // 熄灭只广播 metadata -1（vanilla 引信可回退）
         for (const auto& ignition : mob_events.ignitions) {
-            ByteWriter sound;
-            net::writers::write_named_sound(sound, 173 /*entity.creeper.primed*/,
-                                            proto::sound_category::kBlocks,
-                                            static_cast<std::int32_t>(ignition.x),
-                                            static_cast<std::int32_t>(ignition.y),
-                                            static_cast<std::int32_t>(ignition.z), 1.0f, 1.0f);
             ByteWriter meta;
             meta.varint(static_cast<std::int32_t>(ignition.mob_id));
             meta.u8(16);   // EntityCreeper 状态字段
-            meta.varint(1);  // VarInt（serializer 序 1）；1 = 引信中（客户端播白闪动画）
-            meta.varint(1);
+            meta.varint(1);  // VarInt（serializer 序 1）
+            meta.varint(static_cast<std::int32_t>(ignition.fuse_state));  // 1 引信中 / -1 熄灭
             meta.u8(0xFF);
             const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(ignition.x),
                                                            static_cast<std::int32_t>(ignition.z));
-            if (cpos) {
+            if (!cpos) {
+                continue;
+            }
+            if (ignition.fuse_state > 0) {
+                ByteWriter sound;
+                net::writers::write_named_sound(
+                    sound, 173 /*entity.creeper.primed*/, proto::sound_category::kBlocks,
+                    static_cast<std::int32_t>(ignition.x), static_cast<std::int32_t>(ignition.y),
+                    static_cast<std::int32_t>(ignition.z), 1.0f, 1.0f);
                 hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSoundEffect,
                                      sound.data());
-                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityMetadata,
-                                     meta.data());
             }
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityMetadata,
+                                 meta.data());
         }
         // 骷髅射箭
         for (const auto& shot : mob_events.shots) {
@@ -569,19 +574,33 @@ void Server::spawn_drop_world(double x, double y, double z, item::ItemStack stac
     hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityMetadata, meta.data());
 }
 
+namespace {
+std::mt19937& explosion_rng() {
+    static thread_local std::mt19937 engine{std::random_device{}()};
+    return engine;
+}
+}  // namespace
+
 void Server::fire_arrow(const net::MobShot& shot) {
+    // EntitySkeletonAbstract.a(EntityLiving, float)：
+    //   d1 = 目标 y + length/3 - 箭 y；d3 = 水平距离；
+    //   arrow.shoot(dx, d1 + d3*0.2, dz, 1.6, 14 - difficulty*4)
+    // EntityArrow.shoot：方向归一化 × 1.6，再叠加各轴 nextGaussian*0.0075*inaccuracy
     const double dx = shot.tx - shot.x;
     const double dy = shot.ty - shot.y;
     const double dz = shot.tz - shot.z;
     const double horizontal = std::sqrt(dx * dx + dz * dz);
-    constexpr double kArrowSpeed = 1.6;  // vanilla shoot() 初速 1.6
-    const double vx = dx / horizontal * kArrowSpeed;
-    const double vz = dz / horizontal * kArrowSpeed;
-    // 每格距离补偿 0.05 抬升（重力 -0.05/tick² 的经验近似，命中精度足够）
-    const double vy = dy / horizontal * kArrowSpeed + horizontal * 0.05;
+    const double aim_y = dy + horizontal * 0.2;
+    const double len = std::sqrt(dx * dx + aim_y * aim_y + dz * dz);
+    constexpr double kArrowSpeed = 1.6;
+    static thread_local std::normal_distribution<double> gauss(0.0, 1.0);
+    constexpr double kInaccuracy = 6.0;  // 14 - 难度(普通=2)*4
+    const double scatter = 0.0075 * kInaccuracy;
+    const double vx = dx / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
+    const double vy = aim_y / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
+    const double vz = dz / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
     projectiles_->spawn(shot.mob_id, shot.x, shot.y, shot.z, vx, vy, vz, 2.0f);
     const auto arrow_id = projectiles_->snapshot().back().entity_id;
-
     ByteWriter spawn;
     net::writers::write_spawn_object(spawn, arrow_id, kObjectTypeArrow, shot.x, shot.y, shot.z,
                                      static_cast<float>(std::atan2(-vx, vz) * 180.0 / 3.14159265358979),
@@ -604,56 +623,82 @@ void Server::fire_arrow(const net::MobShot& shot) {
 
 void Server::apply_explosion(double x, double y, double z, float power) {
     const double power_d = static_cast<double>(power);
+    const double blast_radius = power_d * 2.0;  // vanilla f3 = size * 2
     const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
+    static thread_local std::mt19937 rng{std::random_device{}()};
 
-    // 破坏方块：以 (x,y,z) 为中心的球（半径 power），基岩/空气跳过，30% 掉落。
-    // 同时收集受影响方块相对爆心的 byte 偏移——1.12.2 的 Explosion 包记录就是它们，
-    // 客户端据此播放爆炸粒子动画。
+    // 破坏方块：vanilla Explosion.a() 的射线追踪（同 Cuberite Explodinator::DamageBlocks）。
+    // 16³ 立方体表面 1352 条射线，强度 = power*(0.7+rand*0.6)，步长 0.3，
+    // 每步衰减 (抗性+0.3)*0.3（blocks.hpp::explosion_absorption），强度耗尽即停。
+    // 同时收集被毁方块相对爆心的 byte 偏移——1.12.2 的 Explosion 包记录就是它们。
     std::vector<std::array<std::int8_t, 3>> records;
-    if (world_ != nullptr) {
-        static thread_local std::mt19937 rng{std::random_device{}()};
+    if (world_ != nullptr && power >= 0.1f) {
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
         std::uniform_int_distribution<int> drop_chance(1, 100);
-        const auto x0 = static_cast<std::int32_t>(std::floor(x - power_d));
-        const auto x1 = static_cast<std::int32_t>(std::floor(x + power_d));
-        const auto y0 = std::max(0, static_cast<std::int32_t>(std::floor(y - power_d)));
-        const auto y1 = std::min(255, static_cast<std::int32_t>(std::floor(y + power_d)));
-        const auto z0 = static_cast<std::int32_t>(std::floor(z - power_d));
-        const auto z1 = static_cast<std::int32_t>(std::floor(z + power_d));
-        for (auto by = y0; by <= y1; ++by) {
-            for (auto bz = z0; bz <= z1; ++bz) {
-                for (auto bx = x0; bx <= x1; ++bx) {
-                    const double dx = bx + 0.5 - x;
-                    const double dy = by + 0.5 - y;
-                    const double dz = bz + 0.5 - z;
-                    if (dx * dx + dy * dy + dz * dz > power_d * power_d) {
+        std::unordered_set<std::int64_t> destroyed;
+        for (int k = 0; k < 16; ++k) {
+            for (int i = 0; i < 16; ++i) {
+                for (int j = 0; j < 16; ++j) {
+                    if (k != 0 && k != 15 && i != 0 && i != 15 && j != 0 && j != 15) {
                         continue;
                     }
-                    const auto state = world_->block_at(bx, by, bz);
-                    if (state == world::kStateAir || world::block_id(state) == 7) {
-                        continue;  // 空气 / 基岩
-                    }
-                    world_->set_block(bx, by, bz, world::kStateAir);
-                    if (drop_chance(rng) <= 30) {
-                        for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
-                            const auto cpos2 = world::ChunkPos::from_world(bx, bz);
-                            spawn_drop_world(bx + 0.5, by + 0.25, bz + 0.5,
-                                             item::ItemStack{drop.item_id, drop.count, drop.damage},
-                                             cpos2 ? cpos2->x : 0, cpos2 ? cpos2->z : 0);
+                    double d0 = k / 15.0 * 2.0 - 1.0;
+                    double d1 = i / 15.0 * 2.0 - 1.0;
+                    double d2 = j / 15.0 * 2.0 - 1.0;
+                    const double norm = std::sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+                    d0 /= norm;
+                    d1 /= norm;
+                    d2 /= norm;
+                    float intensity = power * (0.7f + unit(rng) * 0.6f);
+                    double cx = x;
+                    double cy = y;
+                    double cz = z;
+                    while (intensity > 0.0f) {
+                        const auto bx = static_cast<std::int32_t>(std::floor(cx));
+                        const auto by = static_cast<std::int32_t>(std::floor(cy));
+                        const auto bz = static_cast<std::int32_t>(std::floor(cz));
+                        const auto state = world_->block_at(bx, by, bz);
+                        if (state != world::kStateAir) {
+                            intensity -= (world::explosion_absorption(state) + 0.3f) * 0.3f;
+                            if (intensity > 0.0f && by >= 0 && by < 256) {
+                                destroyed.insert(world::pack_block_pos(bx, by, bz));
+                            }
                         }
+                        intensity -= 0.22500001f;
+                        cx += d0 * 0.3;
+                        cy += d1 * 0.3;
+                        cz += d2 * 0.3;
                     }
-                    ByteWriter change;
-                    change.position(bx, by, bz);
-                    change.varint(0);
-                    const auto cpos = world::ChunkPos::from_world(bx, bz);
-                    if (cpos) {
-                        hub_->broadcast_near(cpos->x, cpos->z, radius, 0,
-                                             proto::play_cb::kBlockChange, change.data());
-                    }
-                    records.push_back({static_cast<std::int8_t>(bx - static_cast<std::int32_t>(std::floor(x))),
-                                       static_cast<std::int8_t>(by - static_cast<std::int32_t>(std::floor(y))),
-                                       static_cast<std::int8_t>(bz - static_cast<std::int32_t>(std::floor(z)))});
                 }
             }
+        }
+        // 掉落率 = 1/power（Explosion.a(boolean) 的 yield）
+        for (const auto key : destroyed) {
+            const auto pos = world::unpack_block_pos(key);
+            const auto state = world_->block_at(pos.x, pos.y, pos.z);
+            if (state == world::kStateAir) {
+                continue;
+            }
+            world_->set_block(pos.x, pos.y, pos.z, world::kStateAir);
+            if (drop_chance(rng) <= static_cast<int>(100.0f / power)) {
+                for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
+                    const auto cpos2 = world::ChunkPos::from_world(pos.x, pos.z);
+                    spawn_drop_world(pos.x + 0.5, pos.y + 0.25, pos.z + 0.5,
+                                     item::ItemStack{drop.item_id, drop.count, drop.damage},
+                                     cpos2 ? cpos2->x : 0, cpos2 ? cpos2->z : 0);
+                }
+            }
+            ByteWriter change;
+            change.position(pos.x, pos.y, pos.z);
+            change.varint(0);
+            const auto cpos = world::ChunkPos::from_world(pos.x, pos.z);
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kBlockChange,
+                                     change.data());
+            }
+            records.push_back({static_cast<std::int8_t>(pos.x - static_cast<std::int32_t>(std::floor(x))),
+                               static_cast<std::int8_t>(pos.y - static_cast<std::int32_t>(std::floor(y))),
+                               static_cast<std::int8_t>(pos.z - static_cast<std::int32_t>(std::floor(z)))});
         }
     }
 
@@ -665,7 +710,7 @@ void Server::apply_explosion(double x, double y, double z, float power) {
     net::writers::write_named_sound(sound, 231 /*entity.generic.explode*/,
                                     proto::sound_category::kBlocks, static_cast<std::int32_t>(x),
                                     static_cast<std::int32_t>(y), static_cast<std::int32_t>(z),
-                                    1.0f, 1.0f);
+                                    4.0f, 0.7f);  // vanilla：volume 4.0，pitch (1±0.2)*0.7
     ByteWriter explosion;
     net::writers::write_explosion(explosion, x, y, z, power, records);
 
@@ -678,32 +723,72 @@ void Server::apply_explosion(double x, double y, double z, float power) {
                              explosion.data());
     }
 
-    // 范围伤害：玩家按距离衰减（≤2×power 格内，峰值 power×7），走 hub 邮箱（含击退）
-    for (const auto& player : hub_->others(net::kNoExclude)) {
-        const double dx = player.x - x;
-        const double dy = (player.y + 0.9) - y;
-        const double dz = player.z - z;
-        const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (dist > power_d * 2.0) {
-            continue;
+    // 实体伤害：impact = (1 - dist/(power*2)) * 曝光率（包围盒采样点对爆心的无遮挡比例），
+    // damage = (impact² + impact)/2 * 7 * power*2 + 1（Explosion.a()）；击退 = 方向 × impact。
+    auto blocked = [&](double ex, double ey, double ez, double w, double h) {
+        unsigned unobstructed = 0;
+        unsigned total = 0;
+        for (double px = ex - w / 2; px < ex + w / 2; px += 0.5) {
+            for (double py = ey; py < ey + h; py += 0.5) {
+                for (double pz = ez - w / 2; pz < ez + w / 2; pz += 0.5) {
+                    const double dx = px - x;
+                    const double dy = py - y;
+                    const double dz = pz - z;
+                    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const int steps = std::max(1, static_cast<int>(std::ceil(dist / 0.5)));
+                    bool clear = true;
+                    for (int s = 1; s < steps && clear; ++s) {
+                        const double t = static_cast<double>(s) / steps;
+                        const auto sx = static_cast<std::int32_t>(std::floor(x + dx * t));
+                        const auto sy = static_cast<std::int32_t>(std::floor(y + dy * t));
+                        const auto sz = static_cast<std::int32_t>(std::floor(z + dz * t));
+                        clear = world_->block_at(sx, sy, sz) == world::kStateAir;
+                    }
+                    if (clear) {
+                        ++unobstructed;
+                    }
+                    ++total;
+                }
+            }
         }
-        const float damage = static_cast<float>((1.0 - dist / (power_d * 2.0)) * power_d * 7.0);
-        if (damage > 0.5f) {
-            hub_->send_damage(player.entity_id, damage, x, z);
+        return total == 0 ? 0.0f : static_cast<float>(unobstructed) / static_cast<float>(total);
+    };
+    if (world_ != nullptr) {
+        for (const auto& player : hub_->others(net::kNoExclude)) {
+            const double dist = std::sqrt((player.x - x) * (player.x - x) + (player.y - y) * (player.y - y) + (player.z - z) * (player.z - z));
+            if (dist > blast_radius) {
+                continue;
+            }
+            const float impact = static_cast<float>(1.0 - dist / blast_radius) *
+                                 blocked(player.x, player.y, player.z, 0.6, 1.8);
+            if (impact <= 0.0f) {
+                continue;
+            }
+            const double impact_d = static_cast<double>(impact);
+            const double dmg = std::floor((impact_d * impact_d + impact_d) / 2.0 * 7.0 *
+                                          blast_radius + 1.0);
+            hub_->send_damage(player.entity_id, static_cast<float>(dmg), x, z);
         }
-    }
-    // 范围伤害：生物
-    for (const auto& mob : mobs_->snapshot()) {
-        const double dx = mob.pos.x - x;
-        const double dy = (mob.pos.y + 0.9) - y;
-        const double dz = mob.pos.z - z;
-        const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (dist > power_d * 2.0) {
-            continue;
-        }
-        const float damage = static_cast<float>((1.0 - dist / (power_d * 2.0)) * power_d * 7.0);
-        if (damage > 0.5f) {
-            mobs_->damage(mob.entity_id, damage, x, z);
+        for (const auto& mob : mobs_->snapshot()) {
+            const double dist = std::sqrt((mob.pos.x - x) * (mob.pos.x - x) + (mob.pos.y - y) * (mob.pos.y - y) + (mob.pos.z - z) * (mob.pos.z - z));
+            if (dist > blast_radius) {
+                continue;
+            }
+            const auto species = world::mob_type(mob.type);
+            if (!species) {
+                continue;
+            }
+            const float impact = static_cast<float>(1.0 - dist / blast_radius) *
+                                 blocked(mob.pos.x, mob.pos.y, mob.pos.z,
+                                         static_cast<double>(species->width),
+                                         static_cast<double>(species->height));
+            if (impact <= 0.0f) {
+                continue;
+            }
+            const double impact_d = static_cast<double>(impact);
+            const double dmg = std::floor((impact_d * impact_d + impact_d) / 2.0 * 7.0 *
+                                          blast_radius + 1.0);
+            mobs_->damage(mob.entity_id, static_cast<float>(dmg), x, z, impact);
         }
     }
 }

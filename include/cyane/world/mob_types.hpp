@@ -32,6 +32,7 @@ struct MobType {
     float height{1.8f};
     float health{20.0f};
     float speed{0.25f};  // 格/tick
+    float stroll_scale{1.0f};  // RandomStroll 速度倍率（各 Entity*.r() 的构造参数）
     float attack_damage{2.0f};
     float follow_range{16.0f};  // 目标选择距离（GenericAttributes.FOLLOW_RANGE 默认 16）
     float attack_range{1.2f};   // 进入攻击/开火的距离（骷髅为射程，苦力怕为引信触发距离）
@@ -48,6 +49,7 @@ struct MobType {
         case 50:  // 苦力怕
             return MobType{.type = 50, .name = "creeper", .nbt_id = "minecraft:creeper",
                            .width = 0.6f, .height = 1.7f, .health = 20.0f, .speed = 0.25f,
+                           .stroll_scale = 0.8f,
                            .attack_range = 3.0f, .hostile = true, .explodes = true, .hurt_sound = 172,
                            .death_sound = 171,
                            .drops = {{{289, 0, 0, 2}, {}, {}, {}}}};
@@ -61,6 +63,7 @@ struct MobType {
         case 52:  // 蜘蛛
             return MobType{.type = 52, .name = "spider", .nbt_id = "minecraft:spider",
                            .width = 1.4f, .height = 0.9f, .health = 16.0f, .speed = 0.3f,
+                           .stroll_scale = 0.8f,
                            .attack_damage = 2.0f, .attack_range = 1.2f, .hostile = true, .hurt_sound = 431,
                            .death_sound = 430,
                            .drops = {{{287, 0, 0, 2}, {375, 0, 0, 1, 33}, {}, {}}}};

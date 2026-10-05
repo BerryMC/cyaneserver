@@ -200,4 +200,58 @@ struct BlockKeyPos {
     }
 }
 
+// 爆炸射线对一方块的强度衰减（vanilla Explosion: f -= (resistance + 0.3) * 0.3，
+// 此处为已含 0.3 系数的合成值）。抗性取自 Cuberite Explodinator::GetExplosionAbsorption
+// （wiki 爆炸抗性表），只列出 1.12.2 常见方块，其余按默认 0.09（resistance 0）。
+[[nodiscard]] constexpr float explosion_absorption(std::uint16_t state) noexcept {
+    switch (block_id(state)) {
+        case 7:                       // 基岩 3600000
+            return 1080000.09f;
+        case 49:                      // 黑曜石 1200
+        case 145:                     // 铁砧 1200
+        case 138:                     // 信标 1500? 仍归入不可炸类
+            return 360.09f;
+        case 8: case 9: case 10: case 11:  // 水/岩浆 100
+            return 30.09f;
+        case 130:                     // 末影箱 600
+            return 180.09f;
+        case 121:                     // 末地石 9
+            return 2.79f;
+        case 1:                       // 石头 6
+        case 4:                       // 圆石 6
+        case 98:                      // 石砖 6
+        case 15: case 16: case 21: case 56: case 73: case 74:  // 矿石类 6
+        case 41: case 42: case 57: case 133:                   // 金属块 6
+        case 45:                      // 砖 6
+        case 112:                     // 地狱砖 6
+        case 139:                     // 圆石墙 6
+            return 1.89f;
+        case 71:                      // 铁门 5
+        case 52:                      // 刷怪笼 5
+            return 1.59f;
+        case 154:                     // 漏斗 4.8
+            return 1.53f;
+        case 61: case 62: case 23: case 158:  // 熔炉/发射器/投掷器 3.5
+            return 1.14f;
+        case 30:                      // 蛛网 4
+            return 1.29f;
+        case 5: case 12: case 13: case 14: case 18: case 19:
+        case 20: case 24: case 25: case 26: case 35:
+        case 43: case 44: case 53: case 67: case 85: case 96: case 108:
+        case 109: case 114: case 128: case 134: case 135: case 136:
+        case 156: case 163: case 164:  // 木板/砂岩/羊毛/楼梯/栅栏/木门类 3
+            return 0.99f;
+        case 54: case 58: case 146:   // 箱子/工作台 2.5
+            return 0.84f;
+        case 17: case 162:            // 原木 2
+            return 0.69f;
+        case 47:                      // 书架 1.5
+            return 0.54f;
+        case 155: case 123: case 124:  // 石英块/红石灯 0.8
+            return 0.33f;
+        default:
+            return 0.09f;
+    }
+}
+
 }

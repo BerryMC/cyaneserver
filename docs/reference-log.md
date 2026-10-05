@@ -230,3 +230,20 @@
 - 落地：`world/mob_types.hpp`（物种表 + nbt↔type + 刷怪蛋映射）、`world/physics.hpp`（AABB 逐轴推进 + 上台阶 + 落地贴合；`blocks.hpp::is_solid` 非固体排除表）、`net/mob_manager.{hpp,cpp}`（血量/物理/AI 状态机 + 事件化 `tick(World, players)`；实体 id 统一走全局分配器，废除 1000+ 独立空间）、`net/packet_writers.hpp::write_spawn_mob`、连接侧刷怪蛋（点方块/对空两条路径）、`anvil.cpp` 改物种表（修"未知物种静默存成猪"）、`StoredMob`/`MobState` 增 `Health` 往返。
 - 测试：`tests/test_mobs.cpp`（物种表/刷怪蛋/碰撞表/落地/撞墙与上台阶/追击攻击/逃窜/受伤死亡/实体 id 同源/SpawnMob 黄金向量）。
 - 战斗闭环补充（提交 2/3）：玩家攻击走 UseEntity type=1（挥臂 Animation 0x06 + item::attack_damage 表）；生物→玩家伤害经 hub 邮箱新 damage 通道（扣血 + UpdateHealth + EntityStatus(2) + EntityVelocity 击退 + `entity.player.hurt` 367），创造模式免疫；苦力怕引信 30 tick（期间不寻路）→ 爆炸：`entity.generic.explode` 231 + Explosion(0x1C, record=0) + 半径 3 球内方块破坏（30% 掉落）+ 距离衰减伤害（≤2×power，峰值 power×7/格）；骷髅 15 格射程内每 40 tick 射箭，箭 = SpawnObject(60, data=射手id) + 初速 1.6 + 每格 0.05 抬升弹道补偿 + 每 tick 重力 -0.05，命中方块/玩家/生物即销毁（骷髅箭不可拾取，vanilla 同）。
+
+### R-023 — 生物 AI/爆炸公式按原版反编译逐条转写（修正 R-022 的自造公式）
+
+- 来源：`spigot-1.12.2` 反编译 `Explosion`/`EntityCreeper`/`PathfinderGoalSwell`/`PathfinderGoalMeleeAttack`/`PathfinderGoalBowShoot`/`EntitySkeletonAbstract`/`PathfinderGoalPanic`/`PathfinderGoalRandomStroll`/`PathfinderGoalNearestAttackableTarget`/`PathfinderGoalHurtByTarget`/`EntityLiving`（击退 `a(Entity,float,double,double)`）/`EntityZombie`/`EntitySpider`；Cuberite `src/Physics/Explodinator.cpp`（vanilla Explosion 的 C++ 转写，含爆炸抗性表与曝光采样）。
+- 结论（1.12.2，逐条对齐后落地）：
+  - **爆炸方块破坏是射线追踪，不是球形判据**：16³ 立方体表面 1352 条射线，强度 `power*(0.7+rand*0.6)`，步长 0.3，每遇非空气方块衰减 `(抗性+0.3)*0.3`，每步再衰减 0.225；被毁方块的掉落率 = `1/power`（yield）。抗性表取 Cuberite `GetExplosionAbsorption`（wiki 抗性 ×0.3 系数合成值），落地为 `blocks.hpp::explosion_absorption`（基岩 1080000.09、黑曜石/铁砧 360.09、水/岩浆 30.09、石头类 1.89、木制品 0.99、默认 0.09）。此前"半径=power 的球 + 30% 掉落"作废。
+  - **爆炸实体伤害含"曝光率"**：`impact = (1 - dist/(power*2)) * 曝光率`，曝光率 = 包围盒按 0.5 采样后对爆心视线无遮挡的比例；`伤害 = floor((impact²+impact)/2 * 7 * power*2 + 1)`；击退 = 归一方向 × impact 直接加到速度。此前"线性衰减 power*7"作废。
+  - **爆炸音效**：volume 4.0、pitch `(1+(r-r)*0.2)*0.7`（此前 1.0/1.0）。
+  - **苦力怕引信可熄灭**（**修正 R-022 的"跑开不取消"结论，那条是错的**）：`PathfinderGoalSwell.e()` 每 tick 设状态——目标存在且 distSq≤49 且可见 → 1，否则 −1；`EntityCreeper.B_()` 里 `fuseTicks += 状态`（可负向回退，clamp ≥0），引信到 30 引爆（radius 3、无火、mobGriefing 门控）。metadata 16 = 状态（−1/1），状态翻转时都要广播（熄灭不发声音）。点燃音在"状态>0 且 fuse==0"的时刻播。
+  - **近战触发距离**：`PathfinderGoalMeleeAttack.a()`——distSq（3D，到脚底）≤ `(2×width)² + 目标宽度`，冷却 20 tick。此前固定 1.2 格作废。
+  - **击退**：`EntityLiving.a(Entity, 0.4F, d0, d1)`——现有水平动量减半后按 方向×0.4 反向叠加，落地时竖直动量减半 +0.4（上限 0.4）；d0/d1 = 攻击者−受击者。此前"直接 += 0.4"作废。爆炸对生物用同一通道，强度传 impact。
+  - **逃窜**：`PathfinderGoalPanic(this, 2.0)`——2 倍导航速度（猪 0.25→0.5 b/t，比疾跑快，vanilla 就是这样），受击后 100 tick。此前 1.1×/60–100 tick 作废。
+  - **漫游**：`RandomStroll` 倍率按物种：苦力怕 0.8、蜘蛛 0.8（`r()` 构造参数），僵尸/骷髅 1.0 → `MobType.stroll_scale`。
+  - **骷髅射箭**：`PathfinderGoalBowShoot(this, 1.0, 20, 15.0F)`，但 `dm()` 在非困难难度把射击间隔改成 **40 tick**；射程 15（超出则接近，不再后退）。瞄准公式 `EntitySkeletonAbstract.a()`：箭起点 = 骷髅位 + 头高 1.74，`d3` = 水平距离，方向 = `(dx, (目标y+length/3−箭y) + d3*0.2, dz)` 归一化 × 1.6，再各轴叠加 `nextGaussian*0.0075*(14−难度*4)`（普通 = 6）。此前"每格 0.05 抬升补偿"作废。
+  - **目标选择**：`NearestAttackableTarget` 搜索盒 = 包围盒 grow(follow_range, 4.0 竖直, follow_range)；`HurtByTarget` 拉仇恨 300 tick。僵尸 FOLLOW_RANGE 35，其余默认 16。
+- 落地：`world/blocks.hpp::explosion_absorption`、`world/mob_types.hpp`（`stroll_scale`）、`net/mob_manager.{hpp,cpp}`（`fuse_state`/`fuse_ticks` 双字段 + `MobIgnition.fuse_state`、`damage()` 击退参数、近战/逃窜/漫游/射击公式）、`game/server.cpp`（`apply_explosion` 射线追踪+曝光伤害、`fire_arrow` 原版弹道、swell 状态广播）。
+- 测试：`explosion_absorption_matches_reference`、`creeper_fuse_defuses_when_target_flees`（熄灭：state −1 事件 + 引信回 0 + 不爆炸）、`retreat_speed_is_below_sprint`（改断言 0.5 b/t + 100 tick）、`creeper_fuse_then_explodes`（fuse_state==1 判定）。160 测试 × 3 配置（常规/-Werror/ASan+UBSan）全绿。
