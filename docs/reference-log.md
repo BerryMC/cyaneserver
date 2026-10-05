@@ -272,3 +272,4 @@
   - #8（行为差异）记录在案未实现：蜘蛛 EntityAILeapAtTarget、僵尸破门/村庄、苦力怕坠落引信加速、生物间 HurtByTarget 反击。
 - 重生实体分身/抽搐/消失根因与修法：respawn 与 join 的 `send_existing_mobs/drops` **全量补发**与 `send_chunk_entities` 的**按块补发**叠加——客户端 `addEntityToWorld` 对已存在 id 是"removeEntity（从 entityList 摘除）+ 重建"，而 WorldClient.removeEntity 不清理 entitySpawnQueue，滞留副本排干时再次 spawn 造成分身/抽搐；区块在其间被卸载则实体永久不可见。修：**实体只随区块发**（进服/重生都不再全量补发，物品栏照发），与 vanilla tracker/cuberite cChunk::AddClient 同构。探针验证两次重生各 11 只、id 唯一。
 - 骷髅继续对齐源码的三处：`seeTime` 在可见性状态翻转时归零（`if (flag != flag1) seeTime = 0`）；面向目标/走位朝向走 `faceEntity(30,30)` 的 30°/tick 限速（近战/苦力怕同）；箭伤改 `ceil(命中速度 × 2.0)`（EntityArrow.onHit，满速 1.6 → 4 点，此前固定 2 偏低）。
+- **生物不掉崖（用户指出的原版行为）**：vanilla 由寻路保证——`PathFinder`/`WalkNodeProcessor` 只扩展脚下有地面的可走节点，落差 >3 格（会摔伤）的路径不生成；`EntityMoveHelper` STRAFE 分支迈步前也有 `PathNodeType != WALKABLE` 检查。本服务端无寻路，以"崖边守卫"等价实现：每 tick 动量更新后、位移前，检查**本拍实际落点**（pos+velocity，不能用加速度——动量终端速度约为加速度 2 倍，检查点会冲过头）脚下 3 格内是否有地面，没有则取消本拍位移；漫游/恐慌放弃当前落点重新待机，敌对停在崖边（原版会绕路，待有寻路后替换）。

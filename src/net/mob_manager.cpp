@@ -73,6 +73,22 @@ std::mt19937& rng() {
     return current + diff;
 }
 
+// WalkNodeProcessor 可走性近似：目标脚下 max_drop 格内必须有地面。
+// 原版寻路不会生成落差 >3 格（会摔伤）的路径，MoveHelper 迈步前也检查
+// PathNodeType.WALKABLE——没有寻路的服务端用"迈步前探地"等价实现。
+[[nodiscard]] bool ground_below(world::World& world, double x, double feet_y, double z,
+                                std::int32_t max_drop) {
+    const auto bx = static_cast<std::int32_t>(std::floor(x));
+    const auto bz = static_cast<std::int32_t>(std::floor(z));
+    const auto by = static_cast<std::int32_t>(std::floor(feet_y));
+    for (std::int32_t d = 1; d <= max_drop; ++d) {
+        if (world::is_solid(world.block_at(bx, by - d, bz))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] std::uint32_t nearest_hostile_target(std::span<const PlayerSnapshot> players,
                                                    const Mob& mob, double range) {
     std::uint32_t best = 0;
@@ -442,6 +458,19 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         // 落地状态：地面 slipperiness 0.6×0.91 = 0.546，空中 0.91）；撞墙只清被挡轴。
         mob.velocity_x += step_x;
         mob.velocity_z += step_z;
+        // 崖边守卫：本拍落点脚下 3 格内无地面则不移动（vanilla 寻路不走上落差 >3 的
+        // 路径；MoveHelper 迈步前也查 PathNodeType.WALKABLE）。被动放弃落点重选，
+        // 敌对停在崖边（vanilla 会绕路，本服务端无寻路先保证不掉崖）。
+        if (mob.on_ground && (mob.velocity_x != 0.0 || mob.velocity_z != 0.0)) {
+            if (!ground_below(world, mob.pos.x + mob.velocity_x, mob.pos.y, mob.pos.z + mob.velocity_z, 3)) {
+                if (mob.ai == MobAi::wander || mob.ai == MobAi::retreat) {
+                    mob.has_goal = false;
+                    mob.ai = MobAi::idle;
+                }
+                mob.velocity_x = 0.0;
+                mob.velocity_z = 0.0;
+            }
+        }
         mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y + world::kEntityGravity);
         double dx = mob.velocity_x;
         double dy = mob.velocity_y;

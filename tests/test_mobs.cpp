@@ -184,6 +184,26 @@ CYANE_TEST(passive_mob_retreats_when_hurt) {
     CYANE_CHECK(moved > 0.01);
 }
 
+// 崖边守卫：脚下 3 格内无地面的位置不迈步（vanilla 寻路不走上落差 >3 的路径）
+CYANE_TEST(mob_does_not_walk_off_ledge) {
+    world::World world;
+    // 在 (5, 0..3) 挖穿到虚空，形成 >3 格落差
+    for (std::int32_t y = 0; y <= 3; ++y) {
+        world.set_block(5, y, 0, world::kStateAir);
+    }
+    net::MobManager mobs;
+    const auto id = mobs.spawn(90, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    (void)mobs.damage(id, 1.0f, 0.0, 0.5);  // 触发 panic 逃窜
+    for (int i = 0; i < 100; ++i) {
+        (void)mobs.tick(world, {});
+    }
+    const auto pig = mobs.by_id(id);
+    CYANE_CHECK(pig.has_value());
+    if (pig) {
+        CYANE_CHECK(pig->pos.x < 4.5);  // 未跨过 x=5 的深坑
+    }
+}
+
 // 受伤与死亡：血量递减，归零后从表里移除
 CYANE_TEST(mob_damage_and_death) {
     world::World world;
