@@ -521,7 +521,7 @@ void Server::tick() {
             ByteWriter meta;
             meta.varint(static_cast<std::int32_t>(draw.mob_id));
             meta.u8(12);
-            meta.varint(7);
+            meta.varint(6);  // Forge DataSerializers：BOOLEAN=6（原版 7=ROTATIONS 会把包读穿）
             meta.u8(draw.drawing ? 1 : 0);
             meta.u8(0xFF);
             const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(draw.x),

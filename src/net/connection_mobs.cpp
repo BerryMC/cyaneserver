@@ -22,7 +22,7 @@ void encode_spawn_mob(ByteWriter& out, const Mob& mob) {
         meta.varint(-1);
     } else if (mob.type == 51) {
         meta.u8(12);
-        meta.varint(7);  // DataSerializers.BOOLEAN
+        meta.varint(6);  // DataSerializers.BOOLEAN（Forge 注册序：BYTE,VARINT,FLOAT,STRING,TEXT,ITEM_STACK,BOOLEAN）
         meta.u8(0);
     }
     writers::write_spawn_mob(out, mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z,
