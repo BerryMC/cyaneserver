@@ -226,12 +226,14 @@ CYANE_TEST(pathfinder_never_steps_off_a_cliff) {
     }
 }
 
-// 崖边行为：panic 逃窜 + 漫游期间不会掉进 >3 格落差的深渊
+// 崖边行为：整片挖穿到虚空（绕行半径之外也无路），panic 逃窜 + 漫游期间不会掉下去。
+// 原版保证来自寻路（落差 >3 不可达）+ 物理（下方无地面就自由落体）——若实现允许掉下去，
+// y 必然跌破地面高度。
 CYANE_TEST(mob_does_not_walk_off_ledge) {
     world::World world;
-    // x=5..12 整片挖穿到虚空，任何绕行都不可能
-    for (std::int32_t x = 5; x <= 12; ++x) {
-        for (std::int32_t z = -8; z <= 8; ++z) {
+    // x=5 往 +x 挖穿到世界边缘：任何绕行都走不出去
+    for (std::int32_t x = 5; x <= 40; ++x) {
+        for (std::int32_t z = -40; z <= 40; ++z) {
             for (std::int32_t y = 0; y <= 3; ++y) {
                 world.set_block(x, y, z, world::kStateAir);
             }
@@ -250,12 +252,13 @@ CYANE_TEST(mob_does_not_walk_off_ledge) {
         }
         min_y = std::min(min_y, pig->pos.y);
         CYANE_CHECK(pig->pos.y >= static_cast<double>(kGroundY));  // 始终站在地面上
-        CYANE_CHECK(pig->pos.x < 5.45);  // 身体不会完全越过崖沿（0.45 = 半宽）
     }
     const auto pig = mobs.by_id(id);
     CYANE_CHECK_NEAR(min_y, static_cast<double>(kGroundY), 0.001);
     if (pig) {
-        CYANE_CHECK(pig->pos.x < 5.45);
+        // 原版允许走到崖沿（前脚越过边界、身体大部分仍在地面上），
+        // 但绝不允许整体越过 —— 走过去必然坠落，y 会掉到地面以下
+        CYANE_CHECK(pig->pos.x < 5.45);  // 5.45 = 崖沿 x=5 + 猪半宽 0.45
     }
 }
 

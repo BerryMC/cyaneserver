@@ -338,11 +338,13 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 if (rand01() < 1.0 / 120.0) {
                     if (const auto goal = world::random_position(
                             world, mob.pos.x, mob.pos.y, mob.pos.z, 10, 7, 0.0, 0.0)) {
+                        // tryMoveToXYZ → getPathToPos：落点先归一到能站的方块
+                        const auto spot = world::path_target_block(world, goal->x, goal->y, goal->z);
                         auto path = world::find_path(
                             world, mob.pos.x, mob.pos.y, mob.pos.z, mob.on_ground,
                             species->width, species->height,
-                            static_cast<double>(goal->x) + 0.5, static_cast<double>(goal->y),
-                            static_cast<double>(goal->z) + 0.5,
+                            static_cast<double>(spot.x) + 0.5, static_cast<double>(spot.y) + 0.5,
+                            static_cast<double>(spot.z) + 0.5,
                             static_cast<float>(species->follow_range));
                         if (path) {
                             mob.path = std::move(path->points);
@@ -366,11 +368,12 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 if (!mob.has_path && mob.state_ticks > 0) {
                     if (const auto goal = world::random_position(
                             world, mob.pos.x, mob.pos.y, mob.pos.z, 5, 4, 0.0, 0.0)) {
+                        const auto spot = world::path_target_block(world, goal->x, goal->y, goal->z);
                         auto path = world::find_path(
                             world, mob.pos.x, mob.pos.y, mob.pos.z, mob.on_ground,
                             species->width, species->height,
-                            static_cast<double>(goal->x) + 0.5, static_cast<double>(goal->y),
-                            static_cast<double>(goal->z) + 0.5,
+                            static_cast<double>(spot.x) + 0.5, static_cast<double>(spot.y) + 0.5,
+                            static_cast<double>(spot.z) + 0.5,
                             static_cast<float>(species->follow_range));
                         if (path) {
                             mob.path = std::move(path->points);

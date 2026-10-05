@@ -823,6 +823,35 @@ private:
     return processor.is_direct_path_between_points(from, to);
 }
 
+// ---- PathNavigateGround.getPathToPos：随机落点先归一到能站的方块 ----
+// 原版 RandomStroll/Panic 用 tryMoveToXYZ → getPathToPos：目标是空气就下探到地面再取其上，
+// 目标是固体就上探到第一个非固体方块；这一步决定了"落到山体里"的候选点实际走到表面。
+[[nodiscard]] inline Path::Node path_target_block(World& world, std::int32_t x, std::int32_t y,
+                                                  std::int32_t z) {
+    constexpr std::int32_t kHeight = 256;  // World.getHeight()
+    if (block_id(world.block_at(x, y, z)) == 0) {
+        auto below = y - 1;
+        while (below > 0 && block_id(world.block_at(x, below, z)) == 0) {
+            --below;
+        }
+        if (below > 0) {
+            return Path::Node{x, below + 1, z};
+        }
+        while (below < kHeight && block_id(world.block_at(x, below, z)) == 0) {
+            ++below;
+        }
+        y = below;
+    }
+    if (!is_solid(world.block_at(x, y, z))) {
+        return Path::Node{x, y, z};
+    }
+    auto above = y + 1;
+    while (above < kHeight && is_solid(world.block_at(x, above, z))) {
+        ++above;
+    }
+    return Path::Node{x, above, z};
+}
+
 // ---- RandomPositionGenerator.generateRandomPos（无 home 分支；land=true 跳过水面调整） ----
 [[nodiscard]] inline std::optional<Path::Node> random_position(World& world, double px, double py,
                                                                double pz, std::int32_t xz,
