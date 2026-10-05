@@ -289,54 +289,63 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     break;
                 }
                 if (species->ranged) {
-                    // PathfinderGoalBowShoot(skeleton, 1.0, 20, 15)：15 格内停步瞄准射击，
-                    // 超出则接近；射击间隔 40 tick（dm(): 非困难难度 b0=40）。
-                    // 瞄准期侧移走位（每 20 tick 0.3 概率翻转）并在释放前 20 tick 举弓。
+                    // EntityAIAttackRangedBow(skeleton, 1.0, 20, 15)：
+                    //   蓄力 20 tick 才放箭（首箭也是），释放后 attackTime = 40；
+                    //   seeTime ≥ 20 才停步走位（两轴 ±0.5：远 0.75 射程前进、近 0.25 后退，
+                    //   每 20 tick 各 0.3 概率翻转）；射箭本身不设距离门（原版 release 只看可见性）。
                     const double horizontal_sq = dx * dx + dz * dz;
-                    if (horizontal_sq > 15.0 * 15.0) {
-                        if (mob.bow_drawing) {
-                            mob.bow_drawing = false;
-                            result.draws.push_back(
-                                MobDraw{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z, false});
-                        }
+                    ++mob.see_ticks;
+                    const bool hold_ground = horizontal_sq <= 15.0 * 15.0 && mob.see_ticks >= 20;
+                    if (!hold_ground) {
                         mob.dir_x = dx;
                         mob.dir_z = dz;
                         walk(mob.dir_x, mob.dir_z, 1.0);
-                        break;
-                    }
-                    mob.pos.yaw = yaw_for(dx, dz);
-                    if (mob.strafe_ticks > 0) {
-                        --mob.strafe_ticks;
                     } else {
-                        if (rand01() < 0.3) {
-                            mob.strafe_dir = static_cast<std::int8_t>(-mob.strafe_dir);
+                        mob.pos.yaw = yaw_for(dx, dz);
+                        if (mob.strafe_ticks > 0) {
+                            --mob.strafe_ticks;
+                        } else {
+                            if (rand01() < 0.3) {
+                                mob.strafe_fwd = static_cast<std::int8_t>(-mob.strafe_fwd);
+                            }
+                            if (rand01() < 0.3) {
+                                mob.strafe_side = static_cast<std::int8_t>(-mob.strafe_side);
+                            }
+                            mob.strafe_ticks = 20;
                         }
-                        if (mob.strafe_dir == 0) {
-                            mob.strafe_dir = rand01() < 0.5 ? -1 : 1;
+                        if (horizontal_sq > (15.0 * 0.75) * (15.0 * 0.75)) {
+                            mob.strafe_fwd = 1;
+                        } else if (horizontal_sq < (15.0 * 0.25) * (15.0 * 0.25)) {
+                            mob.strafe_fwd = -1;
                         }
-                        mob.strafe_ticks = 20;
+                        const double flat = std::sqrt(dx * dx + dz * dz);
+                        if (flat >= 1e-6) {
+                            const double scale =
+                                static_cast<double>(species->speed) * 0.5;
+                            step_x = (dx / flat * static_cast<double>(mob.strafe_fwd) -
+                                      dz / flat * static_cast<double>(mob.strafe_side)) * scale;
+                            step_z = (dz / flat * static_cast<double>(mob.strafe_fwd) +
+                                      dx / flat * static_cast<double>(mob.strafe_side)) * scale;
+                        }
                     }
-                    const double flat = std::sqrt(dx * dx + dz * dz);
-                    if (flat >= 1e-6 && mob.strafe_dir != 0) {
-                        step_x = -dz / flat * static_cast<double>(species->speed) * 0.5 *
-                                 static_cast<double>(mob.strafe_dir);
-                        step_z = dx / flat * static_cast<double>(species->speed) * 0.5 *
-                                 static_cast<double>(mob.strafe_dir);
-                    }
-                    if (mob.attack_cooldown <= 20 && !mob.bow_drawing) {
+                    if (!mob.bow_drawing && mob.attack_cooldown <= 0) {
                         mob.bow_drawing = true;
+                        mob.draw_ticks = 0;
                         result.draws.push_back(
                             MobDraw{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z, true});
                     }
-                    if (mob.attack_cooldown <= 0) {
-                        mob.attack_cooldown = kShootIntervalTicks;
-                        mob.bow_drawing = false;
-                        result.draws.push_back(
-                            MobDraw{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z, false});
-                        result.shots.push_back(
-                            MobShot{mob.entity_id, target->entity_id, mob.pos.x,
-                                    mob.pos.y + 1.74 /*EntitySkeletonAbstract.getHeadHeight*/,
-                                    mob.pos.z, target->x, target->y + 1.8 / 3.0, target->z});
+                    if (mob.bow_drawing) {
+                        ++mob.draw_ticks;
+                        if (mob.draw_ticks >= 20) {
+                            mob.bow_drawing = false;
+                            mob.attack_cooldown = kShootIntervalTicks;
+                            result.draws.push_back(
+                                MobDraw{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z, false});
+                            result.shots.push_back(
+                                MobShot{mob.entity_id, target->entity_id, mob.pos.x,
+                                        mob.pos.y + 1.74 /*EntitySkeletonAbstract.getHeadHeight*/,
+                                        mob.pos.z, target->x, target->y + 1.8 / 3.0, target->z});
+                        }
                     }
                     break;
                 }

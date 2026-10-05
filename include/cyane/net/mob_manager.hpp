@@ -53,8 +53,11 @@ struct Mob {
     std::int32_t fuse_state{-1};   // 苦力怕 swell 状态（datawatcher 索引 12：-1 熄灭 / 1 引信中）
     std::int32_t fuse_ticks{0};    // 苦力怕引信计数（EntityCreeper.fuseTicks，0..30）
     bool bow_drawing{false};       // 骷髅举弓（SWINGING_ARMS，索引 12 Boolean）
-    std::int8_t strafe_dir{0};     // 骷髅走位方向（0 未开始，±1 侧移方向）
-    std::int32_t strafe_ticks{0};  // 走位翻转计时（BowShoot 每 20 tick 0.3 概率翻转）
+    std::int32_t draw_ticks{0};    // 举弓时长（EntityAIAttackRangedBow：蓄力 20 tick 才放箭）
+    std::int32_t see_ticks{0};     // 目标持续可见时长（seeTime ≥ 20 才停下走位）
+    std::int8_t strafe_fwd{1};     // 走位前后轴（远处前进 / 贴脸后退）
+    std::int8_t strafe_side{1};    // 走位左右轴
+    std::int32_t strafe_ticks{0};  // 走位翻转计时（每 20 tick 各 0.3 概率翻转）
 };
 
 // 苦力怕 swell 状态变化：Server 据此播引信音效并广播 metadata（-1 熄灭 / 1 引信中）
