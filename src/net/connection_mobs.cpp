@@ -10,14 +10,20 @@
 namespace cyane::net {
 namespace {
 
-// 出生 metadata：苦力怕带 swell 状态字段（index 16，VarInt 序 1，-1=空闲）。
-// 客户端只在出生包注册 watcher 条目，缺了它后续白闪增量都会被忽略。
+// 出生 metadata：客户端只在出生包注册 watcher 条目，后续对未注册 index 的增量会被忽略。
+// 索引按 DataWatcher defineId 的父类链计数分配（Forge 反混淆源码核实）：
+// Entity 0-5 + EntityLivingBase 6-10 + EntityLiving(AI_FLAGS) 11 → 各物种自己的字段从 12 起。
+//   苦力怕 STATE = 12（VARINT 序 1，-1 空闲/1 引信中）；骷髅 SWINGING_ARMS = 12（BOOLEAN 序 7）。
 void encode_spawn_mob(ByteWriter& out, const Mob& mob) {
     ByteWriter meta;
     if (mob.type == 50) {
-        meta.u8(16);
+        meta.u8(12);
         meta.varint(1);
-        meta.varint(-1);  // DataWatcherRegistry.b（VarInt），-1 = 空闲
+        meta.varint(-1);
+    } else if (mob.type == 51) {
+        meta.u8(12);
+        meta.varint(7);  // DataSerializers.BOOLEAN
+        meta.u8(0);
     }
     writers::write_spawn_mob(out, mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z,
                              mob.pos.yaw, meta.data());

@@ -495,7 +495,7 @@ void Server::tick() {
         for (const auto& ignition : mob_events.ignitions) {
             ByteWriter meta;
             meta.varint(static_cast<std::int32_t>(ignition.mob_id));
-            meta.u8(16);   // EntityCreeper 状态字段
+            meta.u8(12);   // EntityCreeper.STATE（defineId 父类链计数：12）
             meta.varint(1);  // VarInt（serializer 序 1）
             meta.varint(static_cast<std::int32_t>(ignition.fuse_state));  // 1 引信中 / -1 熄灭
             meta.u8(0xFF);
@@ -515,6 +515,21 @@ void Server::tick() {
             }
             hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityMetadata,
                                  meta.data());
+        }
+        // 骷髅举弓/收弓：SWINGING_ARMS（索引 12，Boolean 序 7）
+        for (const auto& draw : mob_events.draws) {
+            ByteWriter meta;
+            meta.varint(static_cast<std::int32_t>(draw.mob_id));
+            meta.u8(12);
+            meta.varint(7);
+            meta.u8(draw.drawing ? 1 : 0);
+            meta.u8(0xFF);
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(draw.x),
+                                                           static_cast<std::int32_t>(draw.z));
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityMetadata,
+                                     meta.data());
+            }
         }
         // 骷髅射箭
         for (const auto& shot : mob_events.shots) {

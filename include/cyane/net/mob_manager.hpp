@@ -50,8 +50,11 @@ struct Mob {
     double home_z{0.0};
     std::uint32_t target_player{0};  // 敌对目标玩家实体 id（0 = 无）
     std::int32_t attack_cooldown{0};
-    std::int32_t fuse_state{-1};   // 苦力怕 swell 状态（datawatcher 索引 16：-1 熄灭 / 1 引信中）
+    std::int32_t fuse_state{-1};   // 苦力怕 swell 状态（datawatcher 索引 12：-1 熄灭 / 1 引信中）
     std::int32_t fuse_ticks{0};    // 苦力怕引信计数（EntityCreeper.fuseTicks，0..30）
+    bool bow_drawing{false};       // 骷髅举弓（SWINGING_ARMS，索引 12 Boolean）
+    std::int8_t strafe_dir{0};     // 骷髅走位方向（0 未开始，±1 侧移方向）
+    std::int32_t strafe_ticks{0};  // 走位翻转计时（BowShoot 每 20 tick 0.3 概率翻转）
 };
 
 // 苦力怕 swell 状态变化：Server 据此播引信音效并广播 metadata（-1 熄灭 / 1 引信中）
@@ -73,6 +76,15 @@ struct MobShot {
     double tx{0.0};
     double ty{0.0};
     double tz{0.0};
+};
+
+// 骷髅举弓/收弓：Server 据此广播 SWINGING_ARMS metadata（客户端据此播放蓄力动画）
+struct MobDraw {
+    std::uint32_t mob_id{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    bool drawing{false};
 };
 
 struct MobExplosion {
@@ -125,6 +137,7 @@ struct MobTickResult {
     std::vector<MobShot> shots;        // 骷髅射箭
     std::vector<MobExplosion> explosions;  // 苦力怕引爆（自爆即死亡）
     std::vector<MobIgnition> ignitions;    // 苦力怕点燃（引信开始）
+    std::vector<MobDraw> draws;            // 骷髅举弓/收弓
 };
 
 // 受伤结果：是否命中、是否致死、剩余血量

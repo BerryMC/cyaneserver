@@ -252,3 +252,8 @@
   - **骷髅主手的弓走 EntityEquipment (0x3F)**：varint id | varint slot 0（主手）| slot；spawn 与补发（send_existing_mobs）都要发，否则客户端看空手。
   - **弹坑会"卡死"AI 的联动态**：目标搜索盒是 `grow(follow_range, 4.0, follow_range)`（竖直 ±4）——骷髅蛋生成在苦力怕弹坑底（y=1）而玩家在坑口（y≥4）时 dy=7 超出，索敌失败后 ai 回 idle 但 target_player 残留，表现为"完全不正常、不射箭"。vanilla 同样如此，不是公式错误；根因是前一发的弹坑地形。
 - 落地补充：`packet_writers.hpp::write_spawn_mob` 增出生 metadata 参数、`connection_mobs.cpp`（苦力怕出生 metadata + 骷髅弓装备两处）、`server.cpp` primed 音高 0.5。
+- 真实客户端联调修正（Forge 1.12.2 反混淆源码 ~/code/ForgeDevEnv-master 核实）：
+  - **metadata 索引必须按 defineId 的父类链计数推**：`DataWatcher.a(Class, Serializer)` 把索引分配为该类及其所有父类已定义 id 的累计数——Entity 6 个(0-5) + EntityLivingBase 5 个(6-10，HAND_STATES/POTION/HIDE_PARTICLES/ARROW_COUNT/HEALTH) + EntityLiving AI_FLAGS(11)，故 **EntityCreeper.STATE = 12**（此前 R-022 写的 16 是错的，客户端据此忽略白闪）、**AbstractSkeleton.SWINGING_ARMS = 12**（Boolean 序 7，举弓蓄力动画）、EntityItem.ITEM = 6（与实测一致）。苦力怕 POWERED=13、IGNITED=14。
+  - **客户端 Respawn 包（同维度也）执行 `world.removeAllEntities()` 并重建全新背包**（`Minecraft.setDimensionAndSpawnPlayer`）——重生后服务端必须重发：物品栏 WindowItems + 玩家（register_in_hub 已含 spawn_existing_players）+ 掉落物 send_existing_drops + 生物 send_existing_mobs（含骷髅弓装备）。此前"不补发实体"的注释是错的，正是"重生后物品/掉落物在客户端不可见但服务端存在"的根因。
+  - **骷髅瞄准行为**：BowShoot 瞄准期侧移走位（每 20 tick 0.3 概率翻转方向、0.5 倍速侧移）+ 释放前 20 tick 举弓（SWINGING_ARMS 置位）；箭本身按 SpawnObject 速度由客户端模拟飞行（velocity = short/8000，data≠0 才读）。
+- 落地补充：`mob_manager`（bow_drawing/strafe 字段 + MobDraw 事件）、`server.cpp`（draws → 索引 12 Boolean metadata；ignition 索引 16→12）、`connection_mobs.cpp`（出生 metadata index 12）、`connection_combat.cpp::respawn_player`（重发物品栏/掉落物/生物）。

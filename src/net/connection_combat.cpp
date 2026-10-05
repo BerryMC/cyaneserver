@@ -262,6 +262,13 @@ void Connection::respawn_player() {
     register_in_hub();
     broadcast_spawn();
 
+    // 客户端 NetHandlerPlayClient.handleRespawn → setDimensionAndSpawnPlayer 里
+    // world.removeAllEntities() 且重建全新背包：同维度重生也会清空实体与物品栏，
+    // 必须按 JoinGame 序重发（物品栏 + 玩家已在 register_in_hub 补发 + 掉落物 + 生物）。
+    send_inventory();
+    send_existing_drops();
+    send_existing_mobs();
+
     ++teleport_id_;
     cyane::ByteWriter tp;
     tp.f64(player_pos_.x);
