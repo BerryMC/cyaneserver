@@ -351,8 +351,8 @@ CYANE_TEST(creeper_fuse_defuses_when_target_flees) {
     const auto swelling = mobs.by_id(id);
     CYANE_CHECK(swelling && swelling->fuse_state == 1 && swelling->fuse_ticks > 0);
 
-    // 玩家跑出 7 格：state 变 -1，引信回退到 0，不爆炸
-    players = {player_at(7, 20.0, kGroundY, 0.5)};
+    // 玩家跑出 7 格（40 格外，引信期苦力怕追不上）：state 变 -1，引信回退到 0，不爆炸
+    players = {player_at(7, 40.0, kGroundY, 0.5)};
     bool defuse_event = false;
     bool exploded = false;
     for (int i = 0; i < 60; ++i) {

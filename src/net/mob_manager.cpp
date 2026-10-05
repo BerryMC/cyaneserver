@@ -177,6 +177,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 const auto target =
                     nearest_hostile_target(players, mob, static_cast<double>(species->follow_range));
                 if (target == 0) {
+                    mob.see_ticks = 0;
                     if (mob.ai == MobAi::chase) {
                         mob.ai = MobAi::idle;
                         mob.state_ticks = rand_ticks(20, 60);
@@ -192,14 +193,18 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
 
         double step_x = 0.0;
         double step_z = 0.0;
+        // EntityLiving.setAIMoveSpeed(speed) 同时设 landMovementFactor（travel 的摩擦参数）
+        // 与 moveForward（输入）→ moveRelative 加速度 = aim×aim；地面摩擦 0.546 下
+        // 终速 = aim²/(1-0.546) ≈ 2.2×aim²（骷髅 0.138 格/t，玩家疾跑 0.28 可甩开）
         const auto walk = [&](double dir_x, double dir_z, double speed_scale) {
             const double len = std::sqrt(dir_x * dir_x + dir_z * dir_z);
             if (len < 1e-6) {
                 return;
             }
-            const double speed = static_cast<double>(species->speed) * speed_scale;
-            step_x = dir_x / len * speed;
-            step_z = dir_z / len * speed;
+            const double aim = static_cast<double>(species->speed) * speed_scale;
+            const double accel = aim * aim;
+            step_x = dir_x / len * accel;
+            step_z = dir_z / len * accel;
             mob.pos.yaw = yaw_for(dir_x, dir_z);
         };
 
@@ -320,8 +325,10 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                         }
                         const double flat = std::sqrt(dx * dx + dz * dz);
                         if (flat >= 1e-6) {
+                            // EntityMoveHelper STRAFE：aim = 0.5(倍率)×属性，输入各 0.5
+                            // → 每轴加速度 = 0.25×属性（终速每轴 ≈ 0.138 格/t）
                             const double scale =
-                                static_cast<double>(species->speed) * 0.5;
+                                static_cast<double>(species->speed) * 0.25;
                             step_x = (dx / flat * static_cast<double>(mob.strafe_fwd) -
                                       dz / flat * static_cast<double>(mob.strafe_side)) * scale;
                             step_z = (dz / flat * static_cast<double>(mob.strafe_fwd) +
@@ -371,11 +378,15 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             }
         }
 
-        // 物理：重力 + 击退动量 + AI 位移，逐轴推进
+        // 物理：vanilla travel 动量模型——先摩擦（用上一 tick 落地状态）再加 AI 加速度，
+        // 按 new 动量位移。稳态位移 = 加速度/(1-摩擦)。
+        const double friction = mob.on_ground ? 0.546 : 0.91;
+        mob.velocity_x = mob.velocity_x * friction + step_x;
+        mob.velocity_z = mob.velocity_z * friction + step_z;
         mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y + world::kEntityGravity);
-        double dx = step_x + mob.velocity_x;
+        double dx = mob.velocity_x;
         double dy = mob.velocity_y;
-        double dz = step_z + mob.velocity_z;
+        double dz = mob.velocity_z;
         auto box = world::entity_box(mob.pos.x, mob.pos.y, mob.pos.z, species->width, species->height);
         const auto before = mob.pos;
         const auto outcome = world::move_with_collision(world, box, dx, dy, dz, 1.0);
@@ -387,9 +398,9 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             mob.velocity_y = 0.0;
         }
         const bool hit_knock = outcome.blocked_x || outcome.blocked_z;
-        // 击退动量衰减；撞墙即止
-        mob.velocity_x = hit_knock ? 0.0 : mob.velocity_x * 0.6;
-        mob.velocity_z = hit_knock ? 0.0 : mob.velocity_z * 0.6;
+        // 撞墙即止（摩擦已在步首应用）
+        mob.velocity_x = hit_knock ? 0.0 : mob.velocity_x;
+        mob.velocity_z = hit_knock ? 0.0 : mob.velocity_z;
         // 漫游/逃窜撞墙：立即换方向（避免顶墙 grinding 到状态结束）
         if (hit_knock && (mob.ai == MobAi::wander || mob.ai == MobAi::retreat)) {
             const double angle = rand01() * 2.0 * kPi;
