@@ -5,6 +5,7 @@
 #include <cmath>
 #include <random>
 
+#include "cyane/item/item_tools.hpp"
 #include "cyane/world/mob_types.hpp"
 #include "cyane/world/pathfinding.hpp"
 
@@ -126,6 +127,24 @@ std::uint32_t MobManager::spawn(std::int32_t type, double x, double y, double z,
     return mobs_.back().entity_id;
 }
 
+// EntityLivingBase.knockBack(0.4)：现有水平动量减半后反向叠加；落地时竖直动量
+// 减半 +0.4（上限 0.4）。方向 = 攻击者 − 自己，距离过近（<1e-4）时随机抖动定向。
+void apply_knockback(Mob& mob, double from_x, double from_z, float knockback) {
+    double dx = from_x - mob.pos.x;
+    double dz = from_z - mob.pos.z;
+    while (dx * dx + dz * dz < 1.0e-4) {
+        dx = (rand01() - rand01()) * 0.01;
+        dz = (rand01() - rand01()) * 0.01;
+    }
+    const double len = std::sqrt(dx * dx + dz * dz);
+    mob.velocity_x = mob.velocity_x / 2.0 - dx / len * static_cast<double>(knockback);
+    mob.velocity_z = mob.velocity_z / 2.0 - dz / len * static_cast<double>(knockback);
+    if (mob.on_ground) {
+        mob.velocity_y = mob.velocity_y / 2.0 + static_cast<double>(knockback);
+        mob.velocity_y = std::min(mob.velocity_y, 0.4);
+    }
+}
+
 MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double from_z,
                            float knockback) {
     std::lock_guard<std::mutex> lock{mutex_};
@@ -139,25 +158,47 @@ MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double
         out.x = mob.pos.x;
         out.y = mob.pos.y;
         out.z = mob.pos.z;
+        // attackEntityFrom 的无敌窗分支：hurtResistantTime > 10 时仅更高伤害可破防
+        // 且只结算差值；否则全额结算并重置窗口（maxHurtResistantTime = 20）
+        if (mob.hurt_resistant_ticks > 10) {
+            if (amount <= mob.last_damage) {
+                return MobHurt{};  // 吸收：无音效无伤害（vanilla return false）
+            }
+            const float net = amount - mob.last_damage;
+            mob.last_damage = amount;
+            const auto species2 = world::mob_type(mob.type);
+            const float armored = species2
+                ? item::damage_after_armor(net, species2->armor_points, 0.0f)
+                : net;
+            mob.health -= armored;
+            if (mob.health <= 0.0f) {
+                out.died = true;
+                out.health = 0.0f;
+                mob.death_timer = 20;
+                return out;
+            }
+            out.health = mob.health;
+            // 破防伤害也走击退（vanilla damageEntity 路径同样触发 knockBack）
+            apply_knockback(mob, from_x, from_z, knockback);
+            const auto species = world::mob_type(mob.type);
+            if (species && !species->hostile) {
+                mob.ai = MobAi::retreat;
+                mob.state_ticks = 100;
+            }
+            return out;
+        }
+        mob.last_damage = amount;
+        mob.hurt_resistant_ticks = 20;
+        {
+            const auto species2 = world::mob_type(mob.type);
+            amount = species2
+                ? item::damage_after_armor(amount, species2->armor_points, 0.0f)
+                : amount;
+        }
         mob.health -= amount;
         if (mob.health > 0.0f) {
             out.health = mob.health;
-            // EntityLivingBase.attackEntityFrom：方向 = 攻击者 − 自己，
-            // 距离过近（<1e-4）时随机抖动定向；knockBack(0.4)：现有水平动量减半后
-            // 反向叠加，落地时竖直动量减半 +0.4（上限 0.4）
-            double dx = from_x - mob.pos.x;
-            double dz = from_z - mob.pos.z;
-            while (dx * dx + dz * dz < 1.0e-4) {
-                dx = (rand01() - rand01()) * 0.01;
-                dz = (rand01() - rand01()) * 0.01;
-            }
-            const double len = std::sqrt(dx * dx + dz * dz);
-            mob.velocity_x = mob.velocity_x / 2.0 - dx / len * static_cast<double>(knockback);
-            mob.velocity_z = mob.velocity_z / 2.0 - dz / len * static_cast<double>(knockback);
-            if (mob.on_ground) {
-                mob.velocity_y = mob.velocity_y / 2.0 + static_cast<double>(knockback);
-                mob.velocity_y = std::min(mob.velocity_y, 0.4);
-            }
+            apply_knockback(mob, from_x, from_z, knockback);
             const auto species = world::mob_type(mob.type);
             if (species && !species->hostile) {
                 // EntityAIPanic：hurtTimestamp 后 100 tick；落点与寻路在下一 tick 的
@@ -197,6 +238,13 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         if (!species) {
             continue;
         }
+        // 液体检测（travel 的 water/lava 分支开关；判脚下格）
+        const auto feet_block_id = world::block_id(world.block_at(
+            static_cast<std::int32_t>(std::floor(mob.pos.x)),
+            static_cast<std::int32_t>(std::floor(mob.pos.y)),
+            static_cast<std::int32_t>(std::floor(mob.pos.z))));
+        const bool in_water = feet_block_id == 8 || feet_block_id == 9;
+        const bool in_lava = feet_block_id == 10 || feet_block_id == 11;
 
         // ---- 死亡倒计时（onDeath → deathTime 20 tick → setDead） ----
         if (mob.death_timer >= 0) {
@@ -226,7 +274,9 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         }
 
         // ---- 落差伤害（fall(distance)：ceil(落差-3)，落地瞬间结算） ----
-        if (mob.was_on_ground_last_tick && !mob.on_ground) {
+        if (in_water || in_lava) {
+            mob.fall_start_y = mob.pos.y;  // vanilla：进液体清 fallDistance
+        } else if (mob.was_on_ground_last_tick && !mob.on_ground) {
             mob.fall_start_y = mob.pos.y;  // 刚离地
         } else if (!mob.was_on_ground_last_tick && mob.on_ground) {
             const double fall = mob.fall_start_y - mob.pos.y;
@@ -332,6 +382,9 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         if (mob.attack_cooldown > 0) {
             --mob.attack_cooldown;
         }
+        if (mob.hurt_resistant_ticks > 0) {
+            --mob.hurt_resistant_ticks;
+        }
 
         // 敌对：周期性重选目标（打不到就放弃）；被动：受击才逃窜
         if (species->hostile) {
@@ -384,13 +437,15 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         //   moveRelative 加速度 = moveForward × f8 → 空中 AI 控制力几乎为零（骷髅 0.005），
         //   被击飞的生物只沿击退动量飞行，落地后才恢复走位
         const bool was_on_ground = mob.on_ground;
+        const bool ground_accel = was_on_ground && !in_water && !in_lava;
         const double friction =
-            was_on_ground ? world::block_slipperiness(world.block_at(
-                                static_cast<std::int32_t>(std::floor(mob.pos.x)),
-                                static_cast<std::int32_t>(std::floor(mob.pos.y)) - 1,
-                                static_cast<std::int32_t>(std::floor(mob.pos.z)))) *
-                                0.91
-                          : 0.91;
+            was_on_ground && !in_water && !in_lava
+                ? world::block_slipperiness(world.block_at(
+                      static_cast<std::int32_t>(std::floor(mob.pos.x)),
+                      static_cast<std::int32_t>(std::floor(mob.pos.y)) - 1,
+                      static_cast<std::int32_t>(std::floor(mob.pos.z)))) *
+                      0.91
+                : 0.91;
         const double ground_accel_factor = 0.16277136 / (friction * friction * friction);
         const auto walk = [&](double dir_x, double dir_z, double speed_scale) {
             const double len = std::sqrt(dir_x * dir_x + dir_z * dir_z);
@@ -398,7 +453,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 return;
             }
             const double aim = static_cast<double>(species->speed) * speed_scale;
-            const double f8 = was_on_ground ? aim * ground_accel_factor : 0.02;
+            const double f8 = ground_accel ? aim * ground_accel_factor : 0.02;
             const double accel = aim * f8;  // moveRelative：input(moveForward) × f8
             step_x = dir_x / len * accel;
             step_z = dir_z / len * accel;
@@ -697,11 +752,11 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                             // 空中加速度 = moveForward × jumpMovementFactor（0.02）
                             if (probe_type != world::PathNodeType::walkable) {
                                 const double rad = static_cast<double>(mob.pos.yaw) * kPi / 180.0;
-                                const double f8 = was_on_ground ? attr * ground_accel_factor : 0.02;
+                                const double f8 = ground_accel ? attr * ground_accel_factor : 0.02;
                                 step_x = -std::sin(rad) * f8;
                                 step_z = std::cos(rad) * f8;
                             } else {
-                                const double f8 = was_on_ground ? aim * ground_accel_factor : 0.02;
+                                const double f8 = ground_accel ? aim * ground_accel_factor : 0.02;
                                 const double scale = 0.5 * f8;
                                 step_x = (dx / flat * fwd - dz / flat * side) * scale;
                                 step_z = (dz / flat * fwd + dx / flat * side) * scale;
@@ -772,11 +827,16 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             }
         }
 
-        // 物理：vanilla travel——moveRelative 加速度 → move → 摩擦（f6 取 move 之前的
-        // 落地状态：地面 slipperiness 0.6×0.91 = 0.546，空中 0.91）；撞墙只清被挡轴。
+        // 物理：vanilla travel——moveRelative 加速度 → move → 摩擦；撞墙只清被挡轴。
+        // 水分支（travel water）：加速度摩擦 0.02 → move → 三轴 ×0.8 阻尼 → −0.02 下沉
+        // → 碰壁上浮 0.3；岩浆同构但阻尼 0.5。液体中不套用地面/空气摩擦与 −0.08 重力。
         mob.velocity_x += step_x;
         mob.velocity_z += step_z;
-        mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y + world::kEntityGravity);
+        if (in_water || in_lava) {
+            mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y);
+        } else {
+            mob.velocity_y = std::max(world::kEntityTerminalY, mob.velocity_y + world::kEntityGravity);
+        }
         double dx = mob.velocity_x;
         double dy = mob.velocity_y;
         double dz = mob.velocity_z;
@@ -787,11 +847,22 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         mob.pos.y = box.min_y;
         mob.pos.z = (box.min_z + box.max_z) * 0.5;
         mob.on_ground = outcome.on_ground;
-        if (outcome.on_ground) {
-            mob.velocity_y = 0.0;
+        if (in_water || in_lava) {
+            const double damping = in_water ? 0.800000011920929 : 0.5;
+            mob.velocity_x = outcome.blocked_x ? 0.0 : mob.velocity_x * damping;
+            mob.velocity_z = outcome.blocked_z ? 0.0 : mob.velocity_z * damping;
+            mob.velocity_y *= damping;
+            mob.velocity_y -= 0.02;
+            if ((outcome.blocked_x || outcome.blocked_z) && mob.velocity_y < 0.3) {
+                mob.velocity_y = 0.3;  // 碰壁上浮（vanilla isOffsetPositionInLiquid 检查的简化）
+            }
+        } else {
+            if (outcome.on_ground) {
+                mob.velocity_y = 0.0;
+            }
+            mob.velocity_x = outcome.blocked_x ? 0.0 : mob.velocity_x * friction;
+            mob.velocity_z = outcome.blocked_z ? 0.0 : mob.velocity_z * friction;
         }
-        mob.velocity_x = outcome.blocked_x ? 0.0 : mob.velocity_x * friction;
-        mob.velocity_z = outcome.blocked_z ? 0.0 : mob.velocity_z * friction;
         if (std::abs(mob.velocity_x) < 0.001) {
             mob.velocity_x = 0.0;
         }

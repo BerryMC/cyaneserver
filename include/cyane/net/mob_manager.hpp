@@ -72,6 +72,9 @@ struct Mob {
     bool was_on_ground_last_tick{false};
     // 生物消失计时器（despawn）
     std::int32_t idle_ticks{0};
+    // 无敌窗（hurtResistantTime=max 20，>10 时仅更高伤害可破防，只结算差值）
+    std::int32_t hurt_resistant_ticks{0};
+    float last_damage{0.0f};
 };
 
 // 苦力怕 swell 状态变化：Server 据此播引信音效并广播 metadata（-1 熄灭 / 1 引信中）

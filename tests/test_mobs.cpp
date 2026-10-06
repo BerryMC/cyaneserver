@@ -433,6 +433,65 @@ CYANE_TEST(airborne_mob_loses_ai_control) {
     CYANE_CHECK(drift < 0.05);  // 仍在空中：几乎不朝目标移动
 }
 
+// 护甲值：僵尸 ARMOR=2（initAttributes），伤害经 getDamageAfterAbsorb 衰减
+CYANE_TEST(zombie_armor_reduces_damage) {
+    world::World world;
+    net::MobManager mobs;
+    const auto id = mobs.spawn(54, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    std::vector<net::PlayerSnapshot> settle;
+    (void)mobs.tick(world, settle);
+    // armor 2：damage×(1 - clamp(2 - d/2, 0.4, 20)/25)，d=4 → clamp(0,0.4,20)=0.4 → 3.936
+    const auto hurt = mobs.damage(id, 4.0f, 1.5, 0.5);
+    CYANE_CHECK(hurt.found && !hurt.died);
+    CYANE_CHECK_NEAR(hurt.health, 20.0f - 3.936f, 0.01);
+}
+
+// 无敌窗（hurtResistantTime=20）：>10 tick 时更低/等额伤害被吸收，更高伤害只结算差值
+CYANE_TEST(hurt_resistance_window_absorbs_rapid_hits) {
+    world::World world;
+    net::MobManager mobs;
+    const auto id = mobs.spawn(90, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    std::vector<net::PlayerSnapshot> settle;
+    (void)mobs.tick(world, settle);
+    const auto first = mobs.damage(id, 5.0f, 1.5, 0.5);
+    CYANE_CHECK(first.found && !first.died);
+    // 立即第二刀 3 < 5：吸收（vanilla return false）
+    const auto absorbed = mobs.damage(id, 3.0f, 1.5, 0.5);
+    CYANE_CHECK(!absorbed.found);
+    // 更高的刀只结算差值：破防 net = 8 - 5 = 3 → 5 - 3 = 2
+    const auto stronger = mobs.damage(id, 8.0f, 1.5, 0.5);
+    CYANE_CHECK(stronger.found);
+    CYANE_CHECK_NEAR(stronger.health, 2.0f, 0.001);
+    // 过窗（11 tick）后全额结算
+    for (int i = 0; i < 11; ++i) {
+        (void)mobs.tick(world, settle);
+    }
+    const auto later = mobs.damage(id, 1.0f, 1.5, 0.5);
+    CYANE_CHECK(later.found);
+    CYANE_CHECK_NEAR(later.health, 1.0f, 0.001);
+}
+
+// travel 水分支：水中无重力积累，缓沉（终速 ≈ 0.02/(1-0.8) = 0.1），AI 控制力 0.02
+CYANE_TEST(mob_in_water_sinks_slowly) {
+    world::World world;
+    world.set_block(0, 3, 0, static_cast<std::uint16_t>(9 << 4));  // 水
+    net::MobManager mobs;
+    const auto id = mobs.spawn(90, 0.5, 4.0, 0.5, 0.0f);  // 悬在水面上方
+    double max_sink = 0.0;
+    for (int i = 0; i < 40; ++i) {
+        (void)mobs.tick(world, {});
+        const auto pig = mobs.by_id(id);
+        CYANE_CHECK(pig.has_value());
+        if (!pig) {
+            return;
+        }
+        const double v = -pig->velocity_y;
+        max_sink = std::max(max_sink, v);
+        CYANE_CHECK(v < 0.2);  // 旧实现（-0.08 重力+0.91 摩擦）会加速到 0.8+
+    }
+    CYANE_CHECK(max_sink > 0.05);  // 确实在下沉
+}
+
 // 受伤与死亡：血量递减；死亡进 20 tick 倒地动画期，动画结束才真正移除
 CYANE_TEST(mob_damage_and_death) {
     world::World world;

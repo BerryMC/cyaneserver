@@ -35,6 +35,7 @@ struct MobType {
     float stroll_scale{1.0f};  // RandomStroll 速度倍率（各 Entity*.r() 的构造参数）
     float panic_scale{1.25f};  // EntityAIPanic 倍率（猪/羊 1.25、牛 2.0、鸡 1.4）
     float attack_damage{2.0f};
+    int armor_points{0};  // GenericAttributes.ARMOR（仅僵尸 initAttributes 设 2.0）
     float follow_range{16.0f};  // 目标选择距离（GenericAttributes.FOLLOW_RANGE 默认 16）
     float attack_range{1.2f};   // 进入攻击/开火的距离（骷髅为射程，苦力怕为引信触发距离）
     bool hostile{false};
@@ -80,7 +81,8 @@ struct MobType {
         case 54:  // 僵尸
             return MobType{.type = 54, .name = "zombie", .nbt_id = "minecraft:zombie",
                            .width = 0.6f, .height = 1.95f, .health = 20.0f, .speed = 0.23f,
-                           .attack_damage = 3.0f, .follow_range = 35.0f, .attack_range = 1.2f,
+                           .attack_damage = 3.0f, .armor_points = 2,
+                           .follow_range = 35.0f, .attack_range = 1.2f,
                            .hostile = true, .burns_in_daylight = true,
                            .ambient_sound = 480, .hurt_sound = 485,
                            .death_sound = 484,
