@@ -380,6 +380,59 @@ CYANE_TEST(drop_item_burns_in_lava) {
     CYANE_CHECK_EQ(drops.snapshot().size(), std::size_t{0});
 }
 
+// 击退（knockBack 0.4）：水平动量减半后反向叠加，落地时竖直踢 0.4
+CYANE_TEST(knockback_pushes_mob_away_and_up) {
+    world::World world;
+    net::MobManager mobs;
+    const auto id = mobs.spawn(90, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    std::vector<net::PlayerSnapshot> settle;
+    (void)mobs.tick(world, settle);  // 先落地一拍（onGround 由物理 tick 判定）
+    const auto hurt = mobs.damage(id, 1.0f, 5.0, 0.5);  // 攻击者在 +x
+    CYANE_CHECK(hurt.found);
+    const auto pig = mobs.by_id(id);
+    CYANE_CHECK(pig.has_value());
+    if (pig) {
+        CYANE_CHECK(pig->velocity_x < -0.2);                        // 被推离攻击者
+        CYANE_CHECK_NEAR(pig->velocity_y, 0.4, 0.001);              // 落地竖直踢
+    }
+    std::vector<net::PlayerSnapshot> no_players;
+    (void)mobs.tick(world, no_players);
+    const auto after = mobs.by_id(id);
+    CYANE_CHECK(after.has_value());
+    if (after) {
+        CYANE_CHECK(after->pos.x < 0.5);  // 本拍实际向 -x 位移
+    }
+}
+
+// travel 空中分流：离地的生物 AI 控制力几乎为零（jumpMovementFactor 0.02），
+// 被击飞期间不会继续走位路线，只沿击退动量飞行
+CYANE_TEST(airborne_mob_loses_ai_control) {
+    world::World world;
+    net::MobManager mobs;
+    const auto id = mobs.spawn(54, 0.5, 8.0, 0.5, 0.0f);  // 僵尸悬空
+    std::vector<net::PlayerSnapshot> players;
+    players.push_back(player_at(1, 0.5, 4.0, 10.0));  // 远处目标 → 追击
+    (void)mobs.tick(world, players);
+    const auto mob = mobs.by_id(id);
+    CYANE_CHECK(mob.has_value());
+    if (mob) {
+        CYANE_CHECK(!mob->on_ground);
+        // 空中加速度 = aim × 0.02 ≈ 0.0046（地面是 aim² ≈ 0.053，旧实现照搬地面值）
+        CYANE_CHECK(std::abs(mob->velocity_x) < 0.02);
+        CYANE_CHECK(std::abs(mob->velocity_z) < 0.02);
+    }
+    double drift = 0.0;
+    for (int i = 0; i < 5; ++i) {
+        (void)mobs.tick(world, players);
+        const auto m = mobs.by_id(id);
+        if (!m) {
+            return;
+        }
+        drift = std::max(drift, std::abs(m->pos.z - 0.5));
+    }
+    CYANE_CHECK(drift < 0.05);  // 仍在空中：几乎不朝目标移动
+}
+
 // 受伤与死亡：血量递减，归零后从表里移除
 CYANE_TEST(mob_damage_and_death) {
     world::World world;

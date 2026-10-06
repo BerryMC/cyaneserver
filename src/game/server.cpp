@@ -547,10 +547,11 @@ void Server::tick() {
     if (projectiles_ != nullptr && world_ != nullptr && hub_ != nullptr && mobs_ != nullptr) {
         const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
         for (const auto& hit : projectiles_->tick(*world_, *hub_, *mobs_)) {
+            // 击退方向用射手位置（vanilla getTrueSource），而非箭的命中点
             if (hit.hit_player) {
-                hub_->send_damage(hit.target_player, hit.damage, hit.x, hit.z);
+                hub_->send_damage(hit.target_player, hit.damage, hit.source_x, hit.source_z);
             } else if (hit.hit_mob) {
-                mobs_->damage(hit.target_mob, hit.damage, hit.x, hit.z);
+                mobs_->damage(hit.target_mob, hit.damage, hit.source_x, hit.source_z);
             }
             ByteWriter destroy;
             const std::uint32_t ids[] = {hit.arrow_id};

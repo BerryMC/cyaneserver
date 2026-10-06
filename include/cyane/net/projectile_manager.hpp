@@ -42,6 +42,8 @@ struct ArrowHit {
     double y{0.0};
     double z{0.0};
     float damage{0.0f};
+    double source_x{0.0};  // 击退方向基准 = 射手（DamageSource.getTrueSource）
+    double source_z{0.0};
 };
 
 class ProjectileManager {

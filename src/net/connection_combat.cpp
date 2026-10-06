@@ -158,19 +158,24 @@ void Connection::apply_damage(float amount, double from_x, double from_z) {
                                static_cast<std::int32_t>(player_pos_.y),
                                static_cast<std::int32_t>(player_pos_.z), 1.0f, 1.0f);
     send_packet(proto::play_cb::kSoundEffect, sound.data());
-    // 击退：沿攻击者→玩家方向（水平）+ 向上分量
+    // EntityLivingBase.attackEntityFrom → knockBack(0.4)：服务端玩家的 motion 恒 0
+    // （减半为恒等），水平 = 离攻击者方向 × 0.4；onGround 才有竖直踢（motionY/2 + 0.4，
+    // 上限 0.4）；方向过近时随机抖动定向。合成后的速度经 SPacketEntityVelocity 下发。
     double dx = player_pos_.x - from_x;
     double dz = player_pos_.z - from_z;
-    const double len = std::sqrt(dx * dx + dz * dz);
-    if (len > 1e-4) {
-        dx = dx / len * 0.4;
-        dz = dz / len * 0.4;
-    } else {
-        dx = 0.0;
-        dz = 0.0;
+    static thread_local std::mt19937 kb_engine{std::random_device{}()};
+    while (dx * dx + dz * dz < 1.0e-4) {
+        dx = (std::uniform_real_distribution<double>(0.0, 1.0)(kb_engine) -
+              std::uniform_real_distribution<double>(0.0, 1.0)(kb_engine)) * 0.01;
+        dz = (std::uniform_real_distribution<double>(0.0, 1.0)(kb_engine) -
+              std::uniform_real_distribution<double>(0.0, 1.0)(kb_engine)) * 0.01;
     }
+    const double len = std::sqrt(dx * dx + dz * dz);
+    const double velocity_x = dx / len * 0.4;
+    const double velocity_z = dz / len * 0.4;
+    const double velocity_y = player_on_ground_ ? 0.4 : 0.0;
     ByteWriter velocity;
-    writers::write_entity_velocity(velocity, player_id_, dx, 0.36, dz);
+    writers::write_entity_velocity(velocity, player_id_, velocity_x, velocity_y, velocity_z);
     send_packet(proto::play_cb::kEntityVelocity, velocity.data());
     if (health_ <= 0.0f) {
         kill_player();

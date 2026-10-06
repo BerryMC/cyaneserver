@@ -339,6 +339,7 @@ private:
     std::shared_ptr<PlayerHub::Entry> hub_entry_;
     Uuid uuid_;
     entity::Position player_pos_{};
+    bool player_on_ground_{true};  // 移动包尾部的 onGround（击退竖直门控用）
 
     std::unique_ptr<crypto::StreamCipher> decrypt_cipher_;
     std::unique_ptr<crypto::StreamCipher> encrypt_cipher_;

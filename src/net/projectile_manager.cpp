@@ -82,9 +82,26 @@ std::vector<ArrowHit> ProjectileManager::tick(world::World& world, const PlayerH
             static_cast<float>(std::sqrt(seg_x * seg_x + seg_y * seg_y + seg_z * seg_z));
         if (found) {
             const float damage = std::ceil(speed * arrow.damage);
+            // 击退方向基准 = 射手位置（attackEntityFrom 的 getTrueSource）
+            double source_x = arrow.x;
+            double source_z = arrow.z;
+            for (const auto& player : players) {
+                if (player.entity_id == arrow.owner_id) {
+                    source_x = player.x;
+                    source_z = player.z;
+                    break;
+                }
+            }
+            for (const auto& mob : mobs_snapshot) {
+                if (mob.entity_id == arrow.owner_id) {
+                    source_x = mob.pos.x;
+                    source_z = mob.pos.z;
+                    break;
+                }
+            }
             hits.push_back(ArrowHit{arrow.entity_id, player_hit, target, !player_hit, target,
                                     fx + (end_x - fx) * best_t, fy + (end_y - fy) * best_t,
-                                    fz + (end_z - fz) * best_t, damage});
+                                    fz + (end_z - fz) * best_t, damage, source_x, source_z});
             arrows_[i] = arrows_.back();
             arrows_.pop_back();
             continue;

@@ -338,3 +338,17 @@
   - **持久化**：物品实体 NBT 增 `Age`/`PickupDelay`（Short，与原版字段同名同语义），跨重启继续计时；Motion 仍不持久化（落地快，误差一拍）。
 - 已知保留的近似：物品在水中的流推（handleMaterialAcceleration 的水流方向）未做——物品会沉底（vanilla 水中主要表现也是下沉+减速）；箭矢命中方块仍销毁（vanilla 会插在地上 1200 tick，待做拾取状态机时一并处理）；mob→玩家推挤未做（见上）。
 - 测试：`skeleton_strafe_does_not_walk_off_ledge`、`drop_item_falls_and_lands`、`drop_item_despawns_after_6000_ticks`、`drop_items_merge_into_bigger_stack`（继承 max 延迟——vanilla 先递减后合并，所以是 19 不是 20）、`drop_pickup_gated_by_delay_and_overlap`、`drop_item_burns_in_lava`；168 测试 × 常规/-Werror/ASan+UBSan 全绿，ASan 服务端实跑 520 tick 无报错。
+
+### R-026 — 击退按原版重写（travel 空中分流 + 近距抖动 + 射手方向 + 玩家侧同构）
+
+- 背景：用户反馈"击退诡异，且生物被击飞时继续沿走位路线移动"。
+- 来源（Forge 反混淆 1.12.2 逐行核对）：`EntityLivingBase.attackEntityFrom`（击退触发段）、`knockBack`、`travel`（地面分支 f6/f7/f8）、`EntityLivingBase.jumpMovementFactor`。
+- 核对结论：
+  - **"击飞时继续走位"的根因是 travel 的地面/空中加速度分流没抄**：`f8 = onGround ? getAIMoveSpeed()×f7 : jumpMovementFactor(0.02)`，其中 `f7 = 0.16277136/f6³`、`f6 = onGround ? 脚下方块 slipperiness×0.91 : 0.91`。moveRelative 加速度 = moveForward × f8 —— 空中 AI 控制力 = aim×0.02（骷髅 0.005，几乎为零），被击飞的生物只沿击退动量飞行，落地后才恢复走位。此前把地面加速度（aim²）不分状态照加，空中照样转向。走位（MoveHelper STRAFE）与被挡 override 同步接入分流：空中每轴 = ±0.5×0.02 / 1.0×0.02。
+  - **1.12.2 的 hurtTime 不冻结 AI**（只驱动红闪动画）——原版 mob 被击中后 AI 照常运行，"停走"的感觉完全来自上面的空中分流。
+  - **knockBack 公式**（ damage 路径传 strength=0.4）：水平动量减半后 `-= 方向×0.4`；`if (onGround)` 竖直动量减半 +0.4（上限 0.4）——我们的实现本就一致。
+  - **方向过近时的抖动**：`dx²+dz² < 1e-4` 时用 `(rand−rand)×0.01` 循环抖动定向（此前我们是直接跳过击退——贴脸打击没有击退，vanilla 会随机方向踢开）。
+  - **箭矢击退方向 = 射手位置**（`entity1 = source.getTrueSource()`），不是箭的命中点。ArrowHit 增 source_x/z，server 结算改用射手坐标。
+  - **玩家侧同构**：服务端 EntityPlayerMP 的 motion 恒 0（不从客户端同步），knockBack 的"减半"为恒等 → 收到的击退速度 = 离攻击者方向×0.4；竖直踢有 `onGround` 门控（从移动包尾部的 onGround bool 跟踪，`player_on_ground_`），合成后的速度经 SPacketEntityVelocity 下发——此前 Y 固定 0.36 且无门控、无抖动，全部作废。
+- 落地：`src/net/mob_manager.cpp`（tick 的 f6/f7/f8 分流 + 摩擦改 `block_slipperiness×0.91`（冰面生效）+ damage 抖动）、`src/net/connection_combat.cpp`（apply_damage 公式 + `player_on_ground_`）、`src/net/connection_play.cpp`（解析移动包 onGround）、`projectile_manager`（ArrowHit 射手坐标）、`server.cpp`（箭伤击退用射手方向）。
+- 测试：`knockback_pushes_mob_away_and_up`（方向/竖直踢/实际位移）、`airborne_mob_loses_ai_control`（悬空追击 6 tick 漂移 <0.05，旧实现下会跑出 0.25+）；170 测试 × 常规/-Werror/ASan+UBSan 全绿，ASan 服务端实跑无报错。

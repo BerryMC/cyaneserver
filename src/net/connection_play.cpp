@@ -132,6 +132,10 @@ bool Connection::handle_play_position(std::int32_t packet_id, ByteSpan payload) 
         pos.yaw = *yaw;
         pos.pitch = *pitch;
     }
+    // 四种移动包（Flying/Position/PositionLook/Look）尾部都带 onGround bool
+    if (reader.remaining() >= 1) {
+        player_on_ground_ = reader.u8() != 0;
+    }
     player_pos_ = pos;
     if (context_.player_manager != nullptr) {
         context_.player_manager->update_position(player_id_, pos);

@@ -142,15 +142,18 @@ MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double
         mob.health -= amount;
         if (mob.health > 0.0f) {
             out.health = mob.health;
-            // EntityLiving.a(Entity, f, d0, d1)：现有动量减半后反向叠加击退，
-            // 落地时向上踢 0.4（上限 0.4）
+            // EntityLivingBase.attackEntityFrom：方向 = 攻击者 − 自己，
+            // 距离过近（<1e-4）时随机抖动定向；knockBack(0.4)：现有水平动量减半后
+            // 反向叠加，落地时竖直动量减半 +0.4（上限 0.4）
             double dx = from_x - mob.pos.x;
             double dz = from_z - mob.pos.z;
-            const double len = std::sqrt(dx * dx + dz * dz);
-            if (len >= 1e-4) {
-                mob.velocity_x = mob.velocity_x / 2.0 - dx / len * static_cast<double>(knockback);
-                mob.velocity_z = mob.velocity_z / 2.0 - dz / len * static_cast<double>(knockback);
+            while (dx * dx + dz * dz < 1.0e-4) {
+                dx = (rand01() - rand01()) * 0.01;
+                dz = (rand01() - rand01()) * 0.01;
             }
+            const double len = std::sqrt(dx * dx + dz * dz);
+            mob.velocity_x = mob.velocity_x / 2.0 - dx / len * static_cast<double>(knockback);
+            mob.velocity_z = mob.velocity_z / 2.0 - dz / len * static_cast<double>(knockback);
             if (mob.on_ground) {
                 mob.velocity_y = mob.velocity_y / 2.0 + static_cast<double>(knockback);
                 mob.velocity_y = std::min(mob.velocity_y, 0.4);
@@ -242,16 +245,29 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
 
         double step_x = 0.0;
         double step_z = 0.0;
-        // EntityLiving.setAIMoveSpeed(speed) 同时设 landMovementFactor（travel 的摩擦参数）
-        // 与 moveForward（输入）→ moveRelative 加速度 = aim×aim；地面摩擦 0.546 下
-        // 终速 = aim²/(1-0.546) ≈ 2.2×aim²（骷髅 0.138 格/t，玩家疾跑 0.28 可甩开）
+        // EntityLivingBase.travel 的地面/空中分流（击退时"不再走位"的机制所在）：
+        //   f6 摩擦 = onGround ? 脚下方块 slipperiness×0.91 : 0.91（用 move 前的落地状态）
+        //   f7 = 0.16277136/f6³（地面 ≈1.0）
+        //   f8 = onGround ? getAIMoveSpeed()×f7 : jumpMovementFactor(0.02)
+        //   moveRelative 加速度 = moveForward × f8 → 空中 AI 控制力几乎为零（骷髅 0.005），
+        //   被击飞的生物只沿击退动量飞行，落地后才恢复走位
+        const bool was_on_ground = mob.on_ground;
+        const double friction =
+            was_on_ground ? world::block_slipperiness(world.block_at(
+                                static_cast<std::int32_t>(std::floor(mob.pos.x)),
+                                static_cast<std::int32_t>(std::floor(mob.pos.y)) - 1,
+                                static_cast<std::int32_t>(std::floor(mob.pos.z)))) *
+                                0.91
+                          : 0.91;
+        const double ground_accel_factor = 0.16277136 / (friction * friction * friction);
         const auto walk = [&](double dir_x, double dir_z, double speed_scale) {
             const double len = std::sqrt(dir_x * dir_x + dir_z * dir_z);
             if (len < 1e-6) {
                 return;
             }
             const double aim = static_cast<double>(species->speed) * speed_scale;
-            const double accel = aim * aim;
+            const double f8 = was_on_ground ? aim * ground_accel_factor : 0.02;
+            const double accel = aim * f8;  // moveRelative：input(moveForward) × f8
             step_x = dir_x / len * accel;
             step_z = dir_z / len * accel;
         };
@@ -509,7 +525,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                             // speed=0.25×属性；moveForward/moveStrafing 输入各 ±0.5 →
                             // 每轴加速度 = 0.5 × 0.25×属性 = 0.125×属性（终速每轴 ≈ 0.069 格/t）
                             const double attr = static_cast<double>(species->speed);
-                            const double aim = 0.25 * attr;
+                            const double aim = 0.25 * attr;  // landMovementFactor
                             const double fwd = static_cast<double>(mob.strafe_fwd);
                             const double side = static_cast<double>(mob.strafe_side);
                             // 迈步探查：按朝向旋转后的位移方向（f7/f8）落在的格子
@@ -523,12 +539,15 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                 world, static_cast<std::int32_t>(std::floor(mob.pos.x + probe_x)),
                                 static_cast<std::int32_t>(std::floor(mob.pos.y)),
                                 static_cast<std::int32_t>(std::floor(mob.pos.z + probe_z)));
+                            // 空中加速度 = moveForward × jumpMovementFactor（0.02）
                             if (probe_type != world::PathNodeType::walkable) {
                                 const double rad = static_cast<double>(mob.pos.yaw) * kPi / 180.0;
-                                step_x = -std::sin(rad) * attr;
-                                step_z = std::cos(rad) * attr;
+                                const double f8 = was_on_ground ? attr * ground_accel_factor : 0.02;
+                                step_x = -std::sin(rad) * f8;
+                                step_z = std::cos(rad) * f8;
                             } else {
-                                const double scale = 0.5 * aim;
+                                const double f8 = was_on_ground ? aim * ground_accel_factor : 0.02;
+                                const double scale = 0.5 * f8;
                                 step_x = (dx / flat * fwd - dz / flat * side) * scale;
                                 step_z = (dz / flat * fwd + dx / flat * side) * scale;
                             }
@@ -606,7 +625,6 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         double dx = mob.velocity_x;
         double dy = mob.velocity_y;
         double dz = mob.velocity_z;
-        const bool was_on_ground = mob.on_ground;
         auto box = world::entity_box(mob.pos.x, mob.pos.y, mob.pos.z, species->width, species->height);
         const auto before = mob.pos;
         const auto outcome = world::move_with_collision(world, box, dx, dy, dz, 1.0);
@@ -617,7 +635,6 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         if (outcome.on_ground) {
             mob.velocity_y = 0.0;
         }
-        const double friction = was_on_ground ? 0.546 : 0.91;
         mob.velocity_x = outcome.blocked_x ? 0.0 : mob.velocity_x * friction;
         mob.velocity_z = outcome.blocked_z ? 0.0 : mob.velocity_z * friction;
         if (std::abs(mob.velocity_x) < 0.001) {
