@@ -111,6 +111,15 @@ struct BlockFaceDelta {
     return support.dx == dx && support.dy == dy && support.dz == dz;
 }
 
+// EntityItem 摩擦用：方块滑腻度（vanilla Block.slipperiness；地面摩擦 = 此值 × 0.98）
+[[nodiscard]] constexpr double block_slipperiness(std::uint16_t state) noexcept {
+    switch (block_id(state)) {
+        case 79: case 174: case 212: return 0.98;  // 冰 / 浮冰 / 霜冰
+        case 165: return 0.8;                      // 粘液块
+        default: return 0.6;
+    }
+}
+
 // 实体碰撞用：该方块是否阻挡移动。默认固体，逐项排除无碰撞盒的方块
 // （气体/液体/花草/线缆/轨道/火把/压力板/按钮拉杆/告示牌/作物/传送门/地毯等）。
 [[nodiscard]] constexpr bool is_solid(std::uint16_t state) noexcept {

@@ -30,7 +30,8 @@ struct Arrow {
     std::int32_t ttl{100};  // 5 秒自毁上限
 };
 
-// 箭的命中结果：Server 据此结算伤害并广播销毁
+// 箭的命中结果：Server 据此结算伤害并广播销毁。
+// damage = ceil(命中时刻速度 × damage 系数)（EntityArrow.onHit，原版在命中时按当前速度算）
 struct ArrowHit {
     std::uint32_t arrow_id{0};
     bool hit_player{false};      // 命中玩家（target_player 有效）
@@ -40,6 +41,7 @@ struct ArrowHit {
     double x{0.0};
     double y{0.0};
     double z{0.0};
+    float damage{0.0f};
 };
 
 class ProjectileManager {
@@ -49,7 +51,10 @@ public:
                double vz, float damage);
 
     // 推进所有箭一个 tick：返回命中事件（命中后箭即移除）。
-    // 实体命中检测需要玩家快照与生物表，故带上 World/Hub/MobManager。
+    // EntityArrow.onUpdate 逐行转写：先整段线段做方块射线（rayTraceBlocks），
+    // 再对截断后的线段做实体 AABB 拦截（findEntityOnPath：实体盒 grow 0.3、六面拦截、
+    // 取最近者，主人 5 tick 内免疫），命中即结算；未命中才 pos += motion → ×0.99 阻力 →
+    // motionY −= 0.05 重力。
     [[nodiscard]] std::vector<ArrowHit> tick(world::World& world, const PlayerHub& hub,
                                              MobManager& mobs);
 
@@ -63,9 +68,6 @@ public:
         std::lock_guard<std::mutex> lock{mutex_};
         return arrows_.size();
     }
-
-    static constexpr double kGravity = -0.05;  // vanilla EntityArrow 无阻力重力
-    static constexpr double kHitRadiusSq = 0.8 * 0.8;  // 玩家身体命中半径
 
 private:
     mutable std::mutex mutex_;

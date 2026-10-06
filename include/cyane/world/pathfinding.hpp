@@ -110,6 +110,79 @@ inline constexpr std::size_t kPathNodeTypeCount = 17;
     return id == 27 || id == 28 || id == 66 || id == 157;
 }
 
+// WalkNodeProcessor.getPathNodeTypeRaw：按方块状态分类（纯函数，供无缓存探测复用）
+[[nodiscard]] inline PathNodeType raw_node_type_of(std::uint16_t state) noexcept {
+    const auto id = block_id(state);
+    const auto meta = state_meta(state);
+    switch (id) {
+        case 0:
+            return PathNodeType::open;
+        case 96: case 167: case 111:  // 活板门 / 睡莲
+            return PathNodeType::trapdoor;
+        case 51:
+            return PathNodeType::damage_fire;
+        case 81:
+            return PathNodeType::damage_cactus;
+        case 64: case 193: case 194: case 195: case 196: case 197:
+            return (meta & 0x4) != 0 ? PathNodeType::door_open : PathNodeType::door_wood_closed;
+        case 71:
+            return (meta & 0x4) != 0 ? PathNodeType::door_open : PathNodeType::door_iron_closed;
+        case 27: case 28: case 66: case 157:
+            return PathNodeType::rail;
+        case 8: case 9:
+            return PathNodeType::water;
+        case 10: case 11:
+            return PathNodeType::lava;
+        case 85: case 113: case 139:  // 栅栏 / 地狱砖栅栏 / 圆石墙
+            return PathNodeType::fence;
+        case 107:  // 栅栏门：开启可过
+            return (meta & 0x4) != 0 ? PathNodeType::open : PathNodeType::fence;
+        case 188: case 189: case 190: case 191: case 192:  // 木栅栏
+            return PathNodeType::fence;
+        default:
+            return is_solid(state) ? PathNodeType::blocked : PathNodeType::open;
+    }
+}
+
+// WalkNodeProcessor.getPathNodeType(IBlockAccess, x, y, z)：单格 + 支撑判定 + 邻接危险。
+// EntityMoveHelper STRAFE 的迈步探查就是用它（无缓存；每生物每 tick 至多 1 次）。
+[[nodiscard]] inline PathNodeType path_node_type_single(World& world, std::int32_t x,
+                                                       std::int32_t y, std::int32_t z) {
+    auto type = raw_node_type_of(world.block_at(x, y, z));
+    if (type == PathNodeType::open && y >= 1) {
+        const auto below = raw_node_type_of(world.block_at(x, y - 1, z));
+        type = (below != PathNodeType::walkable && below != PathNodeType::open &&
+                below != PathNodeType::water && below != PathNodeType::lava)
+                   ? PathNodeType::walkable
+                   : PathNodeType::open;
+        if (below == PathNodeType::damage_fire) {
+            type = PathNodeType::damage_fire;
+        } else if (below == PathNodeType::damage_cactus) {
+            type = PathNodeType::damage_cactus;
+        } else if (below == PathNodeType::damage_other) {
+            type = PathNodeType::damage_other;
+        }
+    }
+    if (type == PathNodeType::walkable) {
+        for (std::int32_t dx = -1; dx <= 1; ++dx) {
+            for (std::int32_t dz = -1; dz <= 1; ++dz) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                const auto neighbor = raw_node_type_of(world.block_at(x + dx, y, z + dz));
+                if (neighbor == PathNodeType::damage_cactus) {
+                    type = PathNodeType::danger_cactus;
+                } else if (neighbor == PathNodeType::damage_fire) {
+                    type = PathNodeType::danger_fire;
+                } else if (neighbor == PathNodeType::damage_other) {
+                    type = PathNodeType::danger_other;
+                }
+            }
+        }
+    }
+    return type;
+}
+
 // ---- PathPoint ----
 struct PathPoint {
     std::int32_t x{0};
@@ -526,51 +599,7 @@ private:
         if (const auto it = raw_cache_.find(key); it != raw_cache_.end()) {
             return it->second;
         }
-        const auto state = blocks_.at(x, y, z);
-        const auto id = block_id(state);
-        const auto meta = state_meta(state);
-        PathNodeType type;
-        switch (id) {
-            case 0:
-                type = PathNodeType::open;
-                break;
-            case 96: case 167: case 111:  // 活板门 / 睡莲
-                type = PathNodeType::trapdoor;
-                break;
-            case 51:
-                type = PathNodeType::damage_fire;
-                break;
-            case 81:
-                type = PathNodeType::damage_cactus;
-                break;
-            case 64: case 193: case 194: case 195: case 196: case 197:
-                type = (meta & 0x4) != 0 ? PathNodeType::door_open : PathNodeType::door_wood_closed;
-                break;
-            case 71:
-                type = (meta & 0x4) != 0 ? PathNodeType::door_open : PathNodeType::door_iron_closed;
-                break;
-            case 27: case 28: case 66: case 157:
-                type = PathNodeType::rail;
-                break;
-            case 8: case 9:
-                type = PathNodeType::water;
-                break;
-            case 10: case 11:
-                type = PathNodeType::lava;
-                break;
-            case 85: case 113: case 139:  // 栅栏 / 地狱砖栅栏 / 圆石墙
-                type = PathNodeType::fence;
-                break;
-            case 107:  // 栅栏门：开启可过
-                type = (meta & 0x4) != 0 ? PathNodeType::open : PathNodeType::fence;
-                break;
-            case 188: case 189: case 190: case 191: case 192:  // 木栅栏
-                type = PathNodeType::fence;
-                break;
-            default:
-                type = is_solid(state) ? PathNodeType::blocked : PathNodeType::open;
-                break;
-        }
+        const auto type = raw_node_type_of(blocks_.at(x, y, z));
         raw_cache_.emplace(key, type);
         return type;
     }

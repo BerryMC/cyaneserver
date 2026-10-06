@@ -315,3 +315,26 @@
     一个区块——项目里 `ChunkPos::from_world` 的注释早已记过这一条）。用
     "快照 vs block_at 全量比对"的探针（窗口内 0 mismatch）验证。
 - 已知保留的近似：AI 视线（`can_see`）仍是自写的体素射线（vanilla 为 `Entity.canEntityBeSeen` 的 rayTrace + EntityAITarget 检查）；`PathNavigateGround.getPathToEntityLiving` 的 `.up()` 搜索盒与 `ChunkCache` 只是性能边界，语义一致故未复刻；蜘蛛（宽 1.4）的跳越格子规则按 `width >= 1.0` 分支保留，与源码同。
+
+### R-025 — 骷髅走位崖边保护、实体碰撞箱（箭矢 AABB + 实体推挤）、掉落物按原版重写
+
+- 来源（Forge 反混淆 1.12.2 逐行核对）：`entity/ai/EntityMoveHelper`、`entity/projectile/EntityArrow`、`util/math/AxisAlignedBB`（calculateIntercept/collideWithXPlane）、`entity/Entity`（applyEntityCollision）、`entity/EntityLivingBase`（collideWithNearbyEntities）、`entity/item/EntityItem`、`entity/player/EntityPlayer`（dropItem/onLivingUpdate 拾取扫描）、`entity/Entity`（entityDropItem）、`block/Block`（spawnAsEntity）。
+- **骷髅走位（EntityMoveHelper STRAFE）两处偏差修正**：
+  1. **走位加速度此前是原版 2 倍**：`strafe()` 的输入是 ±0.5（不是 1.0），moveRelative 的归一夹底（f<1 → f=1）不分母缩小 → 每轴加速度 = 0.5 × (0.25×属性) = **0.125×属性**。此前按 0.25×属性 算（R-023 的注释把 aim 值当成了加速度），这正是"走位像迈克尔·杰克逊"的残余根因。
+  2. **漏抄了崖边探查**：STRAFE 分支把按朝向旋转后的位移方向（f7/f8，量级 ≈0.03 格）加到坐标上取整，`nodeprocessor.getPathNodeType(world, floor(x+f7), floor(y), floor(z+f8)) != WALKABLE` 时改为 **moveForward=1.0、moveStrafing=0、landMovementFactor=属性**（沿朝向全速前进）——这就是原版骷髅近身后退走位不会倒退下悬崖的机制（后退方向探到 OPEN 即改朝玩家前进）。被挡后的前进加速度 = 1.0 × 属性 = 属性（moveForward 与 landMovementFactor 的乘积链，见 R-023 travel 推导）。探查用的是**单格** getPathNodeType（3 参重载），落地为 `path_node_type_single`（无缓存，每生物每 tick ≤1 次；raw 开关抽成纯函数 `raw_node_type_of` 供两处复用）。
+- **箭矢命中改实体碰撞箱**（此前是"点到玩家/生物中心 0.8/半径球"近似）：
+  - `EntityArrow.findEntityOnPath`：候选实体盒 **grow(0.3)** 后对**整段运动线段**做 `AxisAlignedBB.calculateIntercept`（六面拦截：`Vec3d.intersectXPlane` 的平行判据 = 分量平方 < 1.0000000116860974e-7，t∈[0,1]，取离起点最近）；**主人在空气中 5 tick 内免疫**（`ticksInAir >= 5` 才考虑 shootingEntity）。
+  - 方块先行：`rayTraceBlocks` 截断线段（我们落地为 Amanatides & Woo 体素步进 `block_ray_hit`），实体命中在截断后的线段上找，命中点必然近于方块命中 → 实体优先。
+  - **伤害在命中时按当时速度算**：`ceil(|motion| × damage 系数)`，系数 2.0（EntityArrow 构造默认）；此前在发射时按初速 1.6 固定，且 server 结算处写死 2.0f——两者都作废。
+  - 物理 tick 顺序照抄：命中检查 → pos += motion → 阻力（空气 0.99/水 0.6）→ motionY −= 0.05。原版整段线段检测天然防穿隧，删除了此前的子步进。
+- **实体推挤**（新增）：`EntityLivingBase.collideWithNearbyEntities` 对包围盒相交的每个实体调 `Entity.applyEntityCollision`——d0/d1 = 对方−自己，**按 absMax(|dx|,|dz|) 归一**（vanilla 对最大分量开方，不是欧氏！），强度 0.05×min(1/√max, 1)，双方各反向叠加到速度；每个实体各自跑一遍 → 每对每 tick 双倍强度（照抄）。mob↔mob 生效；mob→玩家暂不做（玩家位置客户端权威，服务端无从叠加动量，强行发 EntityVelocity 会清掉玩家本地速度）。
+- **掉落物按原版重写**（此前是静态点 + 1.5 格半径 + 500ms 延迟拾取，无物理无合并无消失）：
+  - **物理**（EntityItem.onUpdate 顺序）：pickupDelay 递减 → 重力 **0.04**（生物是 0.08）→ move 碰撞（0.25 盒、无台阶）→ 方块跨越或每 25 tick：岩浆面弹起（motionY=0.2 + 随机横速 + `entity.generic.burn` 音 233）+ **相邻合并** → 摩擦（地面 slipperiness×0.98，空气 0.98；ice 0.98/packed ice 0.98/slime 0.8 落地 `block_slipperiness`）→ motionY×0.98 → 落地 motionY×−0.5 → age++ → 火焰伤害（盒内火方块 → 1/tick）+ 岩浆伤害（4/tick，`setOnFireFromLava`，health 5 → 2 tick 烧毁）→ age ≥ **6000 消失**。
+  - **合并**（searchForOtherItemsNearby → combineItems）：扫描盒 grow(0.5, 0, 0.5)（严格 < 0.75/0.25），同 id 同 damage、合计 ≤ 64，**大者吸收小者**，吸收方继承 max(pickupDelay)/min(age)，被吸收方销毁。
+  - **拾取**（EntityPlayer.onLivingUpdate 扫描盒 = 玩家盒 **grow(1.0, 0.5, 1.0)** → onCollideWithPlayer）：物品盒（0.25）相交且 pickupDelay ≤ 0 才可拾；**部分拾取不再回吐新掉落物**——剩余堆叠写回实体并重发 metadata（vanilla 只在拾空时发 CollectItem；此前"放不下就在脚下重新掉"是自创行为）。
+  - **出生参数按来源区分**（全部 vanilla）：方块破坏/爆炸 = `Block.spawnAsEntity`——方块内随机点（0.25+rand×0.5 每轴）、零初速、延迟 10；生物战利品 = `entityDropItem(stack, 0)`——生物脚底、零速、延迟 10；玩家 Q/关窗遗留/死亡 = `dropItem(dropAround=true)`——出生 (posX, posY−0.3+eyeHeight, posZ)、随机环绕初速（rand×0.5 + y 0.2）、延迟 **40**。
+  - **Q 丢弃补实现**：ClickWindow **mode 4**（ClickType.THROW，slot=-1 丢游标、button 0/1 = 1 个/全组）+ mode 0 点窗口外丢整个游标堆——此前 mode 4 直接忽略（按 Q 无反应）、窗口外点击静默清空（物品凭空消失）。
+  - **网络**：SpawnObject 的速度字段真正携带初速（short = v×8000）；位置同步按 vanilla tracker 语义——每 20 tick 校正一次（EntityTeleport），漂移 >4 格立即传送；客户端本地模拟物理，两次校正间平滑。
+  - **持久化**：物品实体 NBT 增 `Age`/`PickupDelay`（Short，与原版字段同名同语义），跨重启继续计时；Motion 仍不持久化（落地快，误差一拍）。
+- 已知保留的近似：物品在水中的流推（handleMaterialAcceleration 的水流方向）未做——物品会沉底（vanilla 水中主要表现也是下沉+减速）；箭矢命中方块仍销毁（vanilla 会插在地上 1200 tick，待做拾取状态机时一并处理）；mob→玩家推挤未做（见上）。
+- 测试：`skeleton_strafe_does_not_walk_off_ledge`、`drop_item_falls_and_lands`、`drop_item_despawns_after_6000_ticks`、`drop_items_merge_into_bigger_stack`（继承 max 延迟——vanilla 先递减后合并，所以是 19 不是 20）、`drop_pickup_gated_by_delay_and_overlap`、`drop_item_burns_in_lava`；168 测试 × 常规/-Werror/ASan+UBSan 全绿，ASan 服务端实跑 520 tick 无报错。

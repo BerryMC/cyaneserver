@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "cyane/net/item_drop.hpp"
 #include "cyane/net/mob_manager.hpp"
 #include "cyane/net/projectile_manager.hpp"
 #include "cyane/net/packet_writers.hpp"
@@ -260,6 +261,123 @@ CYANE_TEST(mob_does_not_walk_off_ledge) {
         // 但绝不允许整体越过 —— 走过去必然坠落，y 会掉到地面以下
         CYANE_CHECK(pig->pos.x < 5.45);  // 5.45 = 崖沿 x=5 + 猪半宽 0.45
     }
+}
+
+// 骷髅走位崖边保护（EntityMoveHelper STRAFE 迈步探查）：
+// 近身后退走位朝向深渊时，vanilla 改为沿朝向（朝玩家）前进，不会走下悬崖
+CYANE_TEST(skeleton_strafe_does_not_walk_off_ledge) {
+    world::World world;
+    // 玩家在 +x 侧（3 格内触发后退走位），-x 侧整片挖空
+    for (std::int32_t x = -40; x <= -1; ++x) {
+        for (std::int32_t z = -40; z <= 40; ++z) {
+            for (std::int32_t y = 0; y <= 3; ++y) {
+                world.set_block(x, y, z, world::kStateAir);
+            }
+        }
+    }
+    net::MobManager mobs;
+    const auto id = mobs.spawn(51, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    std::vector<net::PlayerSnapshot> players;
+    players.push_back(player_at(1, 3.5, static_cast<double>(kGroundY), 0.5));
+    for (int i = 0; i < 200; ++i) {
+        (void)mobs.tick(world, players);
+        const auto sk = mobs.by_id(id);
+        CYANE_CHECK(sk.has_value());
+        if (!sk) {
+            return;
+        }
+        CYANE_CHECK(sk->pos.y >= static_cast<double>(kGroundY));  // 从不坠落
+    }
+}
+
+// EntityItem 物理：重力 0.04 + 碰撞，落到地面并停住（vanilla tick 顺序）
+CYANE_TEST(drop_item_falls_and_lands) {
+    world::World world;
+    net::ItemDropManager drops;
+    const auto id = drops.spawn(0.5, 8.0, 0.5, item::ItemStack{4, 1, 0}, 0.0, 0.0, 0.0, 10);
+    CYANE_CHECK(id != 0);
+    for (int i = 0; i < 120; ++i) {
+        (void)drops.tick(world);
+    }
+    const auto all = drops.snapshot();
+    CYANE_CHECK_EQ(all.size(), std::size_t{1});
+    if (!all.empty()) {
+        CYANE_CHECK_NEAR(all[0].y, 4.0, 0.01);   // 地面（baseline 草方块顶 = y4）
+        CYANE_CHECK(all[0].on_ground);
+        CYANE_CHECK_NEAR(all[0].velocity_y, 0.0, 1e-6);
+    }
+}
+
+// EntityItem 寿命：age 达 6000 消失（vanilla 5 分钟）；restore 带入的 age 继续累计
+CYANE_TEST(drop_item_despawns_after_6000_ticks) {
+    world::World world;
+    net::ItemDropManager drops;
+    drops.restore(std::vector<net::DroppedItemState>{
+        net::DroppedItemState{0.5, 4.0, 0.5, item::ItemStack{4, 1, 0}, 5999, 0}});
+    const auto events = drops.tick(world);
+    CYANE_CHECK_EQ(events.destroyed.size(), std::size_t{1});
+    CYANE_CHECK_EQ(drops.snapshot().size(), std::size_t{0});
+}
+
+// EntityItem 合并：相邻同类堆叠，大者吸收小者，继承 max(delay)/min(age)
+CYANE_TEST(drop_items_merge_into_bigger_stack) {
+    world::World world;
+    net::ItemDropManager drops;
+    drops.spawn(0.5, 4.0, 0.5, item::ItemStack{4, 3, 0}, 0.0, 0.0, 0.0, 0);
+    drops.spawn(0.8, 4.0, 0.5, item::ItemStack{4, 5, 0}, 0.0, 0.0, 0.0, 20);
+    // age % 25 == 0 才触发合并扫描：直接 tick 两下（第 1 tick age=0 触发）
+    const auto events = drops.tick(world);
+    CYANE_CHECK_EQ(events.merged.size(), std::size_t{1});
+    if (!events.merged.empty()) {
+        CYANE_CHECK_EQ(events.merged[0].stack.count, std::uint8_t{8});
+        CYANE_CHECK_EQ(static_cast<std::uint32_t>(events.merged[0].stack.id), std::uint32_t{4});
+    }
+    const auto all = drops.snapshot();
+    CYANE_CHECK_EQ(all.size(), std::size_t{1});
+    if (!all.empty()) {
+        CYANE_CHECK_EQ(all[0].stack.count, std::uint8_t{8});
+        CYANE_CHECK_EQ(all[0].pickup_delay, 19);  // 继承较大延迟（vanilla 先递减后合并）
+    }
+    CYANE_CHECK_EQ(events.destroyed.size(), std::size_t{0});  // 合并销毁走 merged 事件
+}
+
+// 拾取门控：pickupDelay 未到不进扫描盒；到点后盒相交才拾取（vanilla onCollideWithPlayer）
+CYANE_TEST(drop_pickup_gated_by_delay_and_overlap) {
+    world::World world;
+    net::ItemDropManager drops;
+    drops.spawn(0.5, 4.0, 0.5, item::ItemStack{4, 1, 0}, 0.0, 0.0, 0.0, 10);
+    const world::Aabb scan{-1.0, 3.0, -1.0, 2.0, 6.0, 2.0};
+    CYANE_CHECK_EQ(drops.collect_overlapping(1, scan).size(), std::size_t{0});  // 延迟未到
+    for (int i = 0; i < 10; ++i) {
+        (void)drops.tick(world);
+    }
+    const auto picked = drops.collect_overlapping(1, scan);
+    CYANE_CHECK_EQ(picked.size(), std::size_t{1});
+    if (!picked.empty()) {
+        CYANE_CHECK_EQ(picked[0].stack.count, std::uint8_t{1});
+    }
+    // 远处扫描盒拾不到
+    const world::Aabb far{50.0, 3.0, 50.0, 52.0, 6.0, 52.0};
+    CYANE_CHECK_EQ(drops.collect_overlapping(1, far).size(), std::size_t{0});
+}
+
+// 岩浆烧毁：health 5，岩浆 4 伤害/tick（setOnFireFromLava），两 tick 内消失并报燃烧音
+CYANE_TEST(drop_item_burns_in_lava) {
+    world::World world;
+    world.set_block(0, 4, 0, static_cast<std::uint16_t>(10 << 4));  // 岩浆
+    net::ItemDropManager drops;
+    drops.spawn(0.5, 4.1, 0.5, item::ItemStack{264, 1, 0}, 0.0, 0.0, 0.0, 0);
+    bool burned = false;
+    for (int i = 0; i < 10 && !burned; ++i) {
+        const auto events = drops.tick(world);
+        for (const auto& gone : events.destroyed) {
+            if (gone.burn_sound) {
+                burned = true;
+            }
+        }
+    }
+    CYANE_CHECK(burned);
+    CYANE_CHECK_EQ(drops.snapshot().size(), std::size_t{0});
 }
 
 // 受伤与死亡：血量递减，归零后从表里移除

@@ -430,6 +430,9 @@ void Server::tick() {
             }
         }
     }
+    if (item_drops_ != nullptr && world_ != nullptr) {
+        apply_item_tick(item_drops_->tick(*world_));
+    }
     if (mobs_ != nullptr) {
         const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
         // 目标选择用玩家快照（本 tick 取一次，避免每个生物各扫一遍）
@@ -545,9 +548,9 @@ void Server::tick() {
         const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
         for (const auto& hit : projectiles_->tick(*world_, *hub_, *mobs_)) {
             if (hit.hit_player) {
-                hub_->send_damage(hit.target_player, 2.0f, hit.x, hit.z);
+                hub_->send_damage(hit.target_player, hit.damage, hit.x, hit.z);
             } else if (hit.hit_mob) {
-                mobs_->damage(hit.target_mob, 2.0f, hit.x, hit.z);
+                mobs_->damage(hit.target_mob, hit.damage, hit.x, hit.z);
             }
             ByteWriter destroy;
             const std::uint32_t ids[] = {hit.arrow_id};
@@ -562,12 +565,87 @@ void Server::tick() {
     }
 }
 
+void Server::apply_item_tick(const net::ItemTickResult& events) {
+    const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
+    const auto chunk_of = [](double x, double z) {
+        return world::ChunkPos::from_world(static_cast<std::int32_t>(x),
+                                           static_cast<std::int32_t>(z));
+    };
+    // 消失（5 分钟寿命 / 烧毁）：DestroyEntities；岩浆烧毁附燃烧音
+    for (const auto& gone : events.destroyed) {
+        ByteWriter destroy;
+        const std::uint32_t ids[] = {gone.entity_id};
+        net::writers::write_destroy_entities(destroy, ids);
+        const auto cpos = chunk_of(gone.x, gone.z);
+        if (cpos) {
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kDestroyEntities,
+                                 destroy.data());
+        }
+        if (gone.burn_sound) {
+            ByteWriter sound;
+            net::writers::write_named_sound(sound, 233 /*entity.generic.burn*/,
+                                            proto::sound_category::kBlocks,
+                                            static_cast<std::int32_t>(gone.x),
+                                            static_cast<std::int32_t>(gone.y),
+                                            static_cast<std::int32_t>(gone.z), 0.4f, 1.0f);
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSoundEffect,
+                                     sound.data());
+            }
+        }
+    }
+    // 位置同步：vanilla tracker 每 20 tick 一次校正（EntityTeleport，客户端本地模拟物理）
+    for (const auto& move : events.moved) {
+        ByteWriter tp;
+        net::writers::write_entity_teleport(tp, move.entity_id, move.x, move.y, move.z, 0.0f, 0.0f,
+                                            true);
+        const auto cpos = chunk_of(move.x, move.z);
+        if (cpos) {
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
+                                 tp.data());
+        }
+    }
+    // 合并：吸收方销毁 + 存活方重发堆叠 metadata（index 6, Slot）
+    for (const auto& merged : events.merged) {
+        ByteWriter destroy;
+        const std::uint32_t ids[] = {merged.victim_id};
+        net::writers::write_destroy_entities(destroy, ids);
+        ByteWriter meta;
+        meta.varint(static_cast<std::int32_t>(merged.survivor_id));
+        meta.u8(6);
+        meta.varint(5);
+        item::write_slot(meta, merged.stack);
+        meta.u8(0xFF);
+        const auto cpos = chunk_of(merged.x, merged.z);
+        if (cpos) {
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kDestroyEntities,
+                                 destroy.data());
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityMetadata,
+                                 meta.data());
+        }
+    }
+    // 岩浆浮起的燃烧音（实体未销毁，仅音效）
+    for (const auto& sound_at : events.burn_sounds) {
+        ByteWriter sound;
+        net::writers::write_named_sound(sound, 233 /*entity.generic.burn*/,
+                                        proto::sound_category::kBlocks,
+                                        static_cast<std::int32_t>(sound_at.x),
+                                        static_cast<std::int32_t>(sound_at.y),
+                                        static_cast<std::int32_t>(sound_at.z), 0.4f, 1.0f);
+        const auto cpos = chunk_of(sound_at.x, sound_at.z);
+        if (cpos) {
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSoundEffect,
+                                 sound.data());
+        }
+    }
+}
+
 void Server::spawn_drop_world(double x, double y, double z, item::ItemStack stack, std::int32_t bx,
                               std::int32_t bz) {
     if (item_drops_ == nullptr || stack.empty()) {
         return;
     }
-    const auto eid = item_drops_->spawn(x, y, z, stack, now_ms());
+    const auto eid = item_drops_->spawn(x, y, z, stack, 0.0, 0.0, 0.0, 10);
     if (eid == 0) {
         return;
     }
@@ -614,9 +692,8 @@ void Server::fire_arrow(const net::MobShot& shot) {
     const double vx = dx / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
     const double vy = aim_y / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
     const double vz = dz / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
-    const double arrow_speed = std::sqrt(vx * vx + vy * vy + vz * vz);
-    const float arrow_damage = static_cast<float>(std::ceil(arrow_speed * 2.0));
-    projectiles_->spawn(shot.mob_id, shot.x, shot.y, shot.z, vx, vy, vz, arrow_damage);
+    // damage 系数 2.0（EntityArrow 默认）：实际伤害在命中时按当时速度计算
+    projectiles_->spawn(shot.mob_id, shot.x, shot.y, shot.z, vx, vy, vz, 2.0f);
     const auto arrow_id = projectiles_->snapshot().back().entity_id;
     ByteWriter spawn;
     net::writers::write_spawn_object(spawn, arrow_id, kObjectTypeArrow, shot.x, shot.y, shot.z,
@@ -700,7 +777,8 @@ void Server::apply_explosion(double x, double y, double z, float power) {
             if (drop_chance(rng) <= static_cast<int>(100.0f / power)) {
                 for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
                     const auto cpos2 = world::ChunkPos::from_world(pos.x, pos.z);
-                    spawn_drop_world(pos.x + 0.5, pos.y + 0.25, pos.z + 0.5,
+                    const auto [sx, sy, sz] = net::in_block_spawn_pos(pos.x, pos.y, pos.z);
+                    spawn_drop_world(sx, sy, sz,
                                      item::ItemStack{drop.item_id, drop.count, drop.damage},
                                      cpos2 ? cpos2->x : 0, cpos2 ? cpos2->z : 0);
                 }

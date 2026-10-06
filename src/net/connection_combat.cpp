@@ -103,7 +103,7 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
                 if (count == 0) {
                     continue;
                 }
-                spawn_dropped_item_at(static_cast<double>(hurt.x), hurt.y + 0.3,
+                spawn_dropped_item_at(static_cast<double>(hurt.x), hurt.y,
                                       static_cast<double>(hurt.z),
                                       item::ItemStack{drop.item_id, static_cast<std::uint8_t>(count),
                                                       drop.damage});
@@ -194,7 +194,9 @@ void Connection::broadcast_entity_packet(ByteSpan packet, std::int32_t x, std::i
 void Connection::spawn_dropped_item_at(double x, double y, double z, item::ItemStack stack) {
     const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(x),
                                                    static_cast<std::int32_t>(z));
-    drop_stack(x, y, z, std::move(stack), cpos ? cpos->x : 0, cpos ? cpos->z : 0);
+    const auto [vx, vy, vz] = net::throw_velocity();
+    drop_stack(x, y - 0.3 + 1.62, z, std::move(stack), cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx,
+               vy, vz, 40);
 }
 
 void Connection::kill_player() {

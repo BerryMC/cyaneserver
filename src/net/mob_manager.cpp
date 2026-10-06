@@ -505,14 +505,33 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                         }
                         const double flat = std::sqrt(dx * dx + dz * dz);
                         if (flat >= 1e-6) {
-                            // EntityMoveHelper STRAFE：aim = 0.5(倍率)×属性，输入各 0.5
-                            // → 每轴加速度 = 0.25×属性（终速每轴 ≈ 0.138 格/t）
-                            const double scale =
-                                static_cast<double>(species->speed) * 0.25;
-                            step_x = (dx / flat * static_cast<double>(mob.strafe_fwd) -
-                                      dz / flat * static_cast<double>(mob.strafe_side)) * scale;
-                            step_z = (dz / flat * static_cast<double>(mob.strafe_fwd) +
-                                      dx / flat * static_cast<double>(mob.strafe_side)) * scale;
+                            // EntityMoveHelper.onUpdateMoveHelper STRAFE 分支（逐行转写）：
+                            // speed=0.25×属性；moveForward/moveStrafing 输入各 ±0.5 →
+                            // 每轴加速度 = 0.5 × 0.25×属性 = 0.125×属性（终速每轴 ≈ 0.069 格/t）
+                            const double attr = static_cast<double>(species->speed);
+                            const double aim = 0.25 * attr;
+                            const double fwd = static_cast<double>(mob.strafe_fwd);
+                            const double side = static_cast<double>(mob.strafe_side);
+                            // 迈步探查：按朝向旋转后的位移方向（f7/f8）落在的格子
+                            // 必须是 WALKABLE，否则改为沿朝向全速前进（moveForward=1.0、
+                            // landMovementFactor=属性）——vanilla 的走位崖边保护
+                            const double probe_x =
+                                (dx / flat * fwd - dz / flat * side) * 0.5 * aim;
+                            const double probe_z =
+                                (dz / flat * fwd + dx / flat * side) * 0.5 * aim;
+                            const auto probe_type = world::path_node_type_single(
+                                world, static_cast<std::int32_t>(std::floor(mob.pos.x + probe_x)),
+                                static_cast<std::int32_t>(std::floor(mob.pos.y)),
+                                static_cast<std::int32_t>(std::floor(mob.pos.z + probe_z)));
+                            if (probe_type != world::PathNodeType::walkable) {
+                                const double rad = static_cast<double>(mob.pos.yaw) * kPi / 180.0;
+                                step_x = -std::sin(rad) * attr;
+                                step_z = std::cos(rad) * attr;
+                            } else {
+                                const double scale = 0.5 * aim;
+                                step_x = (dx / flat * fwd - dz / flat * side) * scale;
+                                step_z = (dz / flat * fwd + dx / flat * side) * scale;
+                            }
                         }
                     }
                     if (!mob.bow_drawing && mob.attack_cooldown <= 0) {
@@ -614,6 +633,53 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         if (moved_sq > 1e-8) {
             result.moved.push_back(MobMove{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z,
                                            mob.pos.yaw});
+        }
+    }
+
+    // EntityLivingBase.collideWithNearbyEntities → Entity.applyEntityCollision：
+    // 包围盒相交即互推。d0/d1 = 对方−自己，按 absMax 归一（vanilla 对 max 分量开方），
+    // 强度 0.05×(1/d2 ≤1)，双方各反向叠加——vanilla 里每个实体各自跑一遍，
+    // 故这里全对全双循环（等效双倍强度）。
+    for (std::size_t i = 0; i < mobs_.size(); ++i) {
+        Mob& self = mobs_[i];
+        const auto self_species = world::mob_type(self.type);
+        if (!self_species) {
+            continue;
+        }
+        const auto self_box = world::entity_box(self.pos.x, self.pos.y, self.pos.z,
+                                                self_species->width, self_species->height);
+        for (std::size_t j = 0; j < mobs_.size(); ++j) {
+            if (j == i) {
+                continue;
+            }
+            Mob& other = mobs_[j];
+            const auto other_species = world::mob_type(other.type);
+            if (!other_species) {
+                continue;
+            }
+            const auto other_box = world::entity_box(other.pos.x, other.pos.y, other.pos.z,
+                                                     other_species->width, other_species->height);
+            if (self_box.max_x <= other_box.min_x || self_box.min_x >= other_box.max_x ||
+                self_box.max_y <= other_box.min_y || self_box.min_y >= other_box.max_y ||
+                self_box.max_z <= other_box.min_z || self_box.min_z >= other_box.max_z) {
+                continue;
+            }
+            double d0 = other.pos.x - self.pos.x;
+            double d1 = other.pos.z - self.pos.z;
+            double d2 = std::max(std::abs(d0), std::abs(d1));
+            if (d2 < 0.009999999776482582) {
+                continue;
+            }
+            d2 = std::sqrt(d2);
+            d0 /= d2;
+            d1 /= d2;
+            double d3 = std::min(1.0 / d2, 1.0);
+            d0 *= d3 * 0.05000000074505806;
+            d1 *= d3 * 0.05000000074505806;
+            self.velocity_x -= d0;
+            self.velocity_z -= d1;
+            other.velocity_x += d0;
+            other.velocity_z += d1;
         }
     }
     return result;

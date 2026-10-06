@@ -245,7 +245,7 @@ CYANE_TEST(persistence_world_round_trip) {
     }());
     net::ItemDropManager source_drops;
     net::MobManager source_mobs;
-    source_drops.spawn(1.5, 5.5, 1.5, item::ItemStack{kApple, 7, 0}, 0);
+    source_drops.spawn(1.5, 5.5, 1.5, item::ItemStack{kApple, 7, 0}, 0.0, 0.0, 0.0, 10);
     // 发射器（9 格）+ 漏斗（5 格）+ 一只羊
     source_world.set_block(3, 4, 3, world::kStateDispenser);
     const std::int64_t dispenser_key = world::pack_block_pos(3, 4, 3);

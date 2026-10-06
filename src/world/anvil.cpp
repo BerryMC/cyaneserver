@@ -112,7 +112,9 @@ Value item_entity(const StoredEntity& entity) {
                                                        nbt::make_f64(0.0),
                                                        nbt::make_f64(0.0)}));
     compound_set(fields, "Health", nbt::make_f32(5.0F));
-    compound_set(fields, "Age", nbt::make_i16(0));
+    compound_set(fields, "Age", nbt::make_i16(static_cast<std::int16_t>(entity.age)));
+    compound_set(fields, "PickupDelay",
+                 nbt::make_i16(static_cast<std::int16_t>(entity.pickup_delay)));
     compound_set(fields, "Item", nbt::make_compound(std::move(item)));
     return nbt::make_compound(std::move(fields));
 }
@@ -156,6 +158,18 @@ bool read_item_entity(const Value& entry, StoredEntity& out) {
         }
         return 0.0;
     };
+    out.age = 0;
+    out.pickup_delay = 0;
+    if (const Value* age = entry.find("Age"); age != nullptr) {
+        if (const auto* v = age->get_if<std::int16_t>()) {
+            out.age = *v;
+        }
+    }
+    if (const Value* delay = entry.find("PickupDelay"); delay != nullptr) {
+        if (const auto* v = delay->get_if<std::int16_t>()) {
+            out.pickup_delay = *v;
+        }
+    }
     out.x = axis(0);
     out.y = axis(1);
     out.z = axis(2);

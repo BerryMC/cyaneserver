@@ -80,7 +80,8 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             context_.containers->remove(bkey);
             for (const auto& stack : chest) {
                 if (!stack.empty()) {
-                    drop_stack(bx + 0.5, by + 0.25, bz + 0.5, stack, bx, bz);
+                    const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
+                    drop_stack(sx, sy, sz, stack, bx, bz);
                 }
             }
         }
@@ -89,7 +90,8 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             context_.furnaces->remove(bkey);
             for (const auto& stack : {state.input, state.fuel, state.output}) {
                 if (!stack.empty()) {
-                    drop_stack(bx + 0.5, by + 0.25, bz + 0.5, stack, bx, bz);
+                    const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
+                    drop_stack(sx, sy, sz, stack, bx, bz);
                 }
             }
             if (furnace_open_ && open_furnace_key_ == bkey) {
@@ -104,7 +106,8 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             context_.crafting_tables->remove(bkey);
             for (const auto& stack : grid) {
                 if (!stack.empty()) {
-                    drop_stack(bx + 0.5, by + 0.25, bz + 0.5, stack, bx, bz);
+                    const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
+                    drop_stack(sx, sy, sz, stack, bx, bz);
                 }
             }
             if (table_open_ && open_table_key_ == bkey) {
@@ -126,7 +129,8 @@ bool Connection::handle_play_digging(ByteSpan payload) {
                                           : ContainerStore::kSmallSlots;
             for (std::size_t slot = 0; slot < limit; ++slot) {
                 if (!small.slots[slot].empty()) {
-                    drop_stack(bx + 0.5, by + 0.25, bz + 0.5, small.slots[slot], bx, bz);
+                    const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
+                    drop_stack(sx, sy, sz, small.slots[slot], bx, bz);
                 }
             }
             if (small_open_ && open_small_key_ == bkey) {
@@ -158,23 +162,26 @@ bool Connection::handle_play_digging(ByteSpan payload) {
         // 方块特性掉落表 + 采集资格：无正确工具时方块破坏但不掉落（vanilla 行为）
         const auto tool = item::tool_of(inventory_.hotbar_item(selected_slot_).id);
         for (const auto& drop : world::block_drops(prev, tool)) {
-            drop_stack(bx + 0.5, by + 0.25, bz + 0.5,
-                       item::ItemStack{drop.item_id, drop.count, drop.damage}, bx, bz);
+            const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
+            drop_stack(sx, sy, sz, item::ItemStack{drop.item_id, drop.count, drop.damage}, bx, bz);
         }
     }
     return true;
 }
 
 void Connection::drop_stack(double x, double y, double z, item::ItemStack stack, std::int32_t bx,
-                            std::int32_t bz) {
+                            std::int32_t bz, double velocity_x, double velocity_y,
+                            double velocity_z, std::int32_t pickup_delay) {
     if (context_.item_drops == nullptr || stack.empty()) {
         return;
     }
-    const std::uint32_t eid = context_.item_drops->spawn(x, y, z, stack, now_ms_);
+    const std::uint32_t eid = context_.item_drops->spawn(x, y, z, stack, velocity_x, velocity_y,
+                                                         velocity_z, pickup_delay);
     if (eid == 0) {
         return;
     }
-    const DroppedItem drop{eid, x, y, z, stack, now_ms_};
+    const DroppedItem drop{eid, x, y, z, velocity_x, velocity_y, velocity_z,
+                           stack, 0, pickup_delay};
     spawn_dropped_item(drop);
     if (context_.hub == nullptr) {
         return;
@@ -468,8 +475,8 @@ void Connection::break_unsupported_neighbors(std::int32_t x, std::int32_t y, std
         // vanilla 走方块自身的 dropBlock：与环境破坏同理，不受创造模式影响
         if (context_.item_drops != nullptr) {
             for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
-                drop_stack(nx + 0.5, ny + 0.25, nz + 0.5,
-                           item::ItemStack{drop.item_id, drop.count, drop.damage}, nx, nz);
+                const auto [sx, sy, sz] = in_block_spawn_pos(nx, ny, nz);
+                drop_stack(sx, sy, sz, item::ItemStack{drop.item_id, drop.count, drop.damage}, nx, nz);
             }
         }
     }

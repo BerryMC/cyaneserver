@@ -198,7 +198,9 @@ private:
     // 掉落物：生成、给自己补发已有、拾取入包
     void spawn_dropped_item(const DroppedItem& drop);
     // 在世界生成一个掉落物（spawn + 本地补发 + 附近玩家广播）
-    void drop_stack(double x, double y, double z, item::ItemStack stack, std::int32_t bx, std::int32_t bz);
+    void drop_stack(double x, double y, double z, item::ItemStack stack, std::int32_t bx,
+                    std::int32_t bz, double velocity_x = 0.0, double velocity_y = 0.0,
+                    double velocity_z = 0.0, std::int32_t pickup_delay = 10);
     // 生成掉落物的两个包（SpawnObject + EntityMetadata）编码到 out_spawn/out_meta
     void encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn, ByteWriter& out_meta) const;
     void send_existing_drops();

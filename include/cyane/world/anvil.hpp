@@ -45,6 +45,8 @@ struct StoredEntity {
     double y{0.0};
     double z{0.0};
     item::ItemStack stack;
+    std::int32_t age{0};           // vanilla NBT Age（Short）
+    std::int32_t pickup_delay{0};  // vanilla NBT PickupDelay（Short）
 };
 
 // 生物实体（region 的 Entities 列表）。type 为 1.12.2 SpawnMob 类型：

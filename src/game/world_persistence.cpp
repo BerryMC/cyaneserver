@@ -219,7 +219,8 @@ Result<std::size_t> WorldPersistence::load() {
                     std::vector<net::DroppedItemState> drops;
                     drops.reserve(decoded->entities.items.size());
                     for (const auto& item : decoded->entities.items) {
-                        drops.push_back(net::DroppedItemState{item.x, item.y, item.z, item.stack});
+                        drops.push_back(net::DroppedItemState{item.x, item.y, item.z, item.stack,
+                                                              item.age, item.pickup_delay});
                     }
                     item_drops_.restore(drops);
                     drop_chunks_.emplace(pos.x, pos.z);

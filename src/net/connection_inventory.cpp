@@ -190,11 +190,56 @@ void Connection::apply_click(std::int16_t slot, std::uint8_t button, std::int32_
         send_inventory();
         return;
     }
+    // mode 4：ClickType.THROW——Q 丢 1 个 / Ctrl+Q 丢全组（slot=-1 为游标堆）
+    if (mode == 4) {
+        item::ItemStack dropped;
+        if (slot == -1) {
+            if (cursor_item_.empty()) {
+                return;
+            }
+            const auto take = static_cast<std::uint8_t>(button == 0 ? 1 : cursor_item_.count);
+            dropped = cursor_item_;
+            dropped.count = take;
+            cursor_item_.count = static_cast<std::uint8_t>(cursor_item_.count - take);
+            if (cursor_item_.count == 0) {
+                cursor_item_ = item::ItemStack::air();
+            }
+        } else if (slot >= 0 && slot < slot_count) {
+            item::ItemStack in_slot = inventory_.slot(static_cast<std::size_t>(slot));
+            if (in_slot.empty()) {
+                return;
+            }
+            const auto take = static_cast<std::uint8_t>(button == 0 ? 1 : in_slot.count);
+            dropped = in_slot;
+            dropped.count = take;
+            in_slot.count = static_cast<std::uint8_t>(in_slot.count - take);
+            inventory_.set_slot(static_cast<std::size_t>(slot), in_slot);
+            send_slot(0, slot, in_slot);
+        } else {
+            return;
+        }
+        // EntityPlayer.dropItem：出生 (posX, posY−0.3+eyeHeight, posZ)、
+        // dropAround 随机环绕初速 + y 0.2、拾取延迟 40
+        const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
+                                                      static_cast<std::int32_t>(player_pos_.z));
+        const auto [vx, vy, vz] = net::throw_velocity();
+        drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, dropped,
+                   cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx, vy, vz, 40);
+        return;
+    }
     if (mode != 0) {
         return;  // 双击/拖拽/数字键等暂不支持
     }
-    // 窗口外点击：丢弃游标（本阶段直接清空，掉落物在拾取模块处理）
+    // 窗口外点击（mode 0）：丢出整个游标堆（dropAround + 延迟 40，vanilla 同）
     if (slot < 0) {
+        if (!cursor_item_.empty()) {
+            const auto cpos =
+                world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
+                                            static_cast<std::int32_t>(player_pos_.z));
+            const auto [vx, vy, vz] = net::throw_velocity();
+            drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, cursor_item_,
+                       cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx, vy, vz, 40);
+        }
         cursor_item_ = item::ItemStack::air();
         return;
     }
@@ -287,8 +332,9 @@ void Connection::take_craft_result(bool all) {
                 const auto cpos = world::ChunkPos::from_world(
                     static_cast<std::int32_t>(player_pos_.x),
                     static_cast<std::int32_t>(player_pos_.z));
-                drop_stack(player_pos_.x, player_pos_.y, player_pos_.z, leftover,
-                           cpos ? cpos->x : 0, cpos ? cpos->z : 0);
+                const auto [vx, vy, vz] = net::throw_velocity();
+                drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, leftover,
+                           cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx, vy, vz, 40);
             }
         } else {
             // 结果槽产物给游标：仅当游标为空或同类且放得下

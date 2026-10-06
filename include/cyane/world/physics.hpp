@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <optional>
 
 #include "cyane/world/blocks.hpp"
 #include "cyane/world/world.hpp"
@@ -30,6 +32,122 @@ struct Aabb {
                                      float height) noexcept {
     const double half = static_cast<double>(width) * 0.5;
     return Aabb{x - half, y, z - half, x + half, y + static_cast<double>(height), z + half};
+}
+
+// AxisAlignedBB.calculateIntercept：线段与盒的六面拦截，取离起点最近者。
+// 返回参数 t ∈ [0,1]（命中点 = from + t×(to−from)）；平行判据照抄
+// Vec3d.intersectXPlane 的分量平方 < 1.0000000116860974e-7。
+[[nodiscard]] inline std::optional<double> segment_aabb_intercept(const Aabb& box, double ax,
+                                                                  double ay, double az, double bx,
+                                                                  double by, double bz) {
+    std::optional<double> best;
+    const double dx = bx - ax;
+    const double dy = by - ay;
+    const double dz = bz - az;
+    const auto plane_t = [](double num, double den) -> std::optional<double> {
+        if (den * den < 1.0000000116860974e-7) {
+            return std::nullopt;
+        }
+        const double t = num / den;
+        if (t < 0.0 || t > 1.0) {
+            return std::nullopt;
+        }
+        return t;
+    };
+    const auto in_y = [&](double t) {
+        return ay + dy * t >= box.min_y && ay + dy * t <= box.max_y;
+    };
+    const auto in_z = [&](double t) {
+        return az + dz * t >= box.min_z && az + dz * t <= box.max_z;
+    };
+    const auto in_x = [&](double t) {
+        return ax + dx * t >= box.min_x && ax + dx * t <= box.max_x;
+    };
+    const auto consider = [&](std::optional<double> t, bool in_bounds) {
+        if (t && in_bounds && (!best || *t < *best)) {
+            best = t;
+        }
+    };
+    if (auto t = plane_t(box.min_x - ax, dx)) {
+        consider(t, in_y(*t) && in_z(*t));
+    }
+    if (auto t = plane_t(box.max_x - ax, dx)) {
+        consider(t, in_y(*t) && in_z(*t));
+    }
+    if (auto t = plane_t(box.min_y - ay, dy)) {
+        consider(t, in_x(*t) && in_z(*t));
+    }
+    if (auto t = plane_t(box.max_y - ay, dy)) {
+        consider(t, in_x(*t) && in_z(*t));
+    }
+    if (auto t = plane_t(box.min_z - az, dz)) {
+        consider(t, in_x(*t) && in_y(*t));
+    }
+    if (auto t = plane_t(box.max_z - az, dz)) {
+        consider(t, in_x(*t) && in_y(*t));
+    }
+    return best;
+}
+
+// world.rayTraceBlocks（简化）：线段体素步进（Amanatides & Woo），
+// 返回首个实心方块的进入参数 t ∈ [0,1]，起点已在实心方块内返回 0。
+[[nodiscard]] inline std::optional<double> block_ray_hit(World& world, double ax, double ay,
+                                                         double az, double bx, double by,
+                                                         double bz) {
+    const auto solid_at = [&](double px, double py, double pz) {
+        return is_solid(world.block_at(static_cast<std::int32_t>(std::floor(px)),
+                                       static_cast<std::int32_t>(std::floor(py)),
+                                       static_cast<std::int32_t>(std::floor(pz))));
+    };
+    if (solid_at(ax, ay, az)) {
+        return 0.0;
+    }
+    auto x = static_cast<std::int32_t>(std::floor(ax));
+    auto y = static_cast<std::int32_t>(std::floor(ay));
+    auto z = static_cast<std::int32_t>(std::floor(az));
+    const double dx = bx - ax;
+    const double dy = by - ay;
+    const double dz = bz - az;
+    const int step_x = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
+    const int step_y = dy > 0 ? 1 : (dy < 0 ? -1 : 0);
+    const int step_z = dz > 0 ? 1 : (dz < 0 ? -1 : 0);
+    const auto boundary = [](double pos, double dir, std::int32_t voxel) {
+        // 到下一体素边界的距离 / 方向（dir=0 时给 inf）
+        if (dir == 0.0) {
+            return std::numeric_limits<double>::infinity();
+        }
+        const double bound = dir > 0 ? static_cast<double>(voxel + 1) : static_cast<double>(voxel);
+        return (bound - pos) / dir;
+    };
+    double t_max_x = boundary(ax, dx, x);
+    double t_max_y = boundary(ay, dy, y);
+    double t_max_z = boundary(az, dz, z);
+    const double t_dx = step_x != 0 ? std::abs(1.0 / dx) : std::numeric_limits<double>::infinity();
+    const double t_dy = step_y != 0 ? std::abs(1.0 / dy) : std::numeric_limits<double>::infinity();
+    const double t_dz = step_z != 0 ? std::abs(1.0 / dz) : std::numeric_limits<double>::infinity();
+    double t = 0.0;
+    while (t <= 1.0) {
+        if (t_max_x <= t_max_y && t_max_x <= t_max_z) {
+            x += step_x;
+            t = t_max_x;
+            t_max_x += t_dx;
+        } else if (t_max_y <= t_max_z) {
+            y += step_y;
+            t = t_max_y;
+            t_max_y += t_dy;
+        } else {
+            z += step_z;
+            t = t_max_z;
+            t_max_z += t_dz;
+        }
+        if (t > 1.0) {
+            break;
+        }
+        if (solid_at(ax + dx * t, ay + dy * t, az + dz * t)) {
+            return t;
+        }
+    }
+    return std::nullopt;
 }
 
 // 盒子是否与任何固体方块相交（按整数格取，整数边界用 epsilon 排除）
