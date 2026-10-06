@@ -228,6 +228,46 @@ bool MobManager::remove_locked(std::uint32_t id) {
     return false;
 }
 
+bool MobManager::interact(std::uint32_t id, std::int16_t held_item_id,
+                           std::int16_t held_item_damage) {
+    std::lock_guard<std::mutex> lock{mutex_};
+    for (auto& mob : mobs_) {
+        if (mob.entity_id != id) {
+            continue;
+        }
+        const auto species = world::mob_type(mob.type);
+        if (!species) {
+            return false;
+        }
+        // 剪羊毛：手持 shears (359) 右键 sheep (91)
+        if (mob.type == 91 && !mob.sheared && held_item_id == 359) {
+            mob.sheared = true;
+            return true;
+        }
+        // 挤奶：手持 bucket (325) 右键 cow (92)
+        if (mob.type == 92 && held_item_id == 325) {
+            return true;
+        }
+        // 喂食繁殖
+        // 牛/羊：wheat (296)；猪：carrot (391) / potato (392)；鸡：seeds (291)
+        bool is_breeding_food = false;
+        if (mob.type == 92 || mob.type == 91) {  // cow / sheep
+            is_breeding_food = (held_item_id == 296);  // wheat
+        } else if (mob.type == 90) {  // pig
+            is_breeding_food = (held_item_id == 391 || held_item_id == 392);  // carrot / potato
+        } else if (mob.type == 93) {  // chicken
+            is_breeding_food = (held_item_id == 291);  // seeds
+        }
+        if (is_breeding_food) {
+            mob.in_love = true;
+            mob.love_timer = 2000;  // 100 秒爱心模式
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapshot> players,
                                bool daytime) {
     MobTickResult result;

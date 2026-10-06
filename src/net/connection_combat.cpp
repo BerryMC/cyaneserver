@@ -8,6 +8,7 @@
 #include "cyane/item/item_traits.hpp"
 #include "cyane/item/item_tools.hpp"
 #include "cyane/world/mob_types.hpp"
+#include "cyane/net/mob_manager.hpp"
 
 namespace cyane::net {
 
@@ -33,9 +34,6 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
     if (!target || !type) {
         return false;
     }
-    if (*type != 1) {  // interact（0）/ interact at（2）：本服务端无交互语义，静默接受
-        return true;
-    }
     if (context_.game_mode == proto::game_mode::kSpectator || dead_) {
         return true;
     }
@@ -50,44 +48,93 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
     if (!species) {
         return true;
     }
-    // 挥臂动画：操作者先看到自己挥拳，其他人也看到
+    if (*type == 1) {
+        // ATTACK：挥臂动画 + 伤害
+        ByteWriter anim;
+        writers::write_animation(anim, player_id_, 0);
+        send_packet(proto::play_cb::kAnimation, anim.data());
+        if (context_.hub != nullptr) {
+            context_.hub->broadcast(player_id_, proto::play_cb::kAnimation, anim.data());
+        }
+        // 伤害：手持攻击力（徒手 1.0）；生物掉血/击退/死亡掉落
+        const float damage = item::attack_damage(inventory_.hotbar_item(selected_slot_).id);
+        const auto hurt = context_.mobs->damage(static_cast<std::uint32_t>(*target), damage,
+                                                player_pos_.x, player_pos_.z);
+        if (!hurt.found) {
+            return true;
+        }
+        constexpr auto kBlocks = proto::sound_category::kBlocks;
+        ByteWriter hurt_status;
+        writers::write_entity_status(hurt_status, static_cast<std::uint32_t>(*target), 2);
+        ByteWriter hurt_sound;
+        writers::write_named_sound(hurt_sound, hurt.died ? species->death_sound : species->hurt_sound,
+                                   kBlocks, static_cast<std::int32_t>(hurt.x),
+                                   static_cast<std::int32_t>(hurt.y),
+                                   static_cast<std::int32_t>(hurt.z), 1.0f, 1.0f);
+        broadcast_entity_packet(hurt_status.data(), static_cast<std::int32_t>(hurt.x),
+                                static_cast<std::int32_t>(hurt.z));
+        send_packet(proto::play_cb::kSoundEffect, hurt_sound.data());
+        if (context_.hub != nullptr) {
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(hurt.x),
+                                                         static_cast<std::int32_t>(hurt.z));
+            if (cpos) {
+                const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+                context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                             proto::play_cb::kSoundEffect, hurt_sound.data());
+            }
+        }
+        if (hurt.died) {
+            // 死亡表现（EntityStatus 3 + 死亡音 + 掉落）由 Server 的死亡事件统一处理：
+            // 实体保留 20 tick 播倒地动画后才真正删除，这里不再立即销毁/掉落，避免双份
+            log::info("{} killed mob {} (type {})", username_, *target, mob->type);
+        }
+        return true;
+    }
+
+    // INTERACT (type 0) / INTERACT_AT (type 2)：
+    // 喂食繁殖 / 剪羊毛 / 挤奶桶
+    const auto held = inventory_.hotbar_item(selected_slot_);
+    const bool interacted = context_.mobs->interact(static_cast<std::uint32_t>(*target), held.id,
+                                                    held.damage);
+    if (!interacted) {
+        return true;
+    }
+    // 挥臂动画
     ByteWriter anim;
     writers::write_animation(anim, player_id_, 0);
     send_packet(proto::play_cb::kAnimation, anim.data());
     if (context_.hub != nullptr) {
         context_.hub->broadcast(player_id_, proto::play_cb::kAnimation, anim.data());
     }
-    // 伤害：手持攻击力（徒手 1.0）；生物掉血/击退/死亡掉落
-    const float damage = item::attack_damage(inventory_.hotbar_item(selected_slot_).id);
-    const auto hurt = context_.mobs->damage(static_cast<std::uint32_t>(*target), damage,
-                                            player_pos_.x, player_pos_.z);
-    if (!hurt.found) {
-        return true;
+    // 实体状态（心形 / 剪羊毛）
+    ByteWriter status;
+    if (mob->type == 91 && held.id == 359) {
+        // 剪羊毛
+        writers::write_entity_status(status, static_cast<std::uint32_t>(*target), 10);
+        broadcast_entity_packet(status.data(), static_cast<std::int32_t>(mob->pos.x),
+                                static_cast<std::int32_t>(mob->pos.z));
+        // 掉落羊毛
+        spawn_dropped_item_at(mob->pos.x, mob->pos.y, mob->pos.z, item::ItemStack{35, 1, 0});
+    } else {
+        // 繁殖 / 挤奶：心形粒子
+        writers::write_entity_status(status, static_cast<std::uint32_t>(*target), 12);
+        broadcast_entity_packet(status.data(), static_cast<std::int32_t>(mob->pos.x),
+                                static_cast<std::int32_t>(mob->pos.z));
     }
-    constexpr auto kBlocks = proto::sound_category::kBlocks;
-    ByteWriter hurt_status;
-    writers::write_entity_status(hurt_status, static_cast<std::uint32_t>(*target), 2);
-    ByteWriter hurt_sound;
-    writers::write_named_sound(hurt_sound, hurt.died ? species->death_sound : species->hurt_sound,
-                               kBlocks, static_cast<std::int32_t>(hurt.x),
-                               static_cast<std::int32_t>(hurt.y),
-                               static_cast<std::int32_t>(hurt.z), 1.0f, 1.0f);
-    broadcast_entity_packet(hurt_status.data(), static_cast<std::int32_t>(hurt.x),
-                            static_cast<std::int32_t>(hurt.z));
-    send_packet(proto::play_cb::kSoundEffect, hurt_sound.data());
-    if (context_.hub != nullptr) {
-        const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(hurt.x),
-                                                       static_cast<std::int32_t>(hurt.z));
-        if (cpos) {
-            const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
-            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
-                                         proto::play_cb::kSoundEffect, hurt_sound.data());
-        }
+    // 消耗手持物品
+    if (held.count > 0) {
+        item::ItemStack after = held;
+        after.count = static_cast<std::uint8_t>(held.count - 1);
+        inventory_.set_slot(item::PlayerInventory::hotbar_slot(selected_slot_), after);
+        send_slot(0, static_cast<std::int16_t>(item::PlayerInventory::hotbar_slot(selected_slot_)),
+                  after);
     }
-    if (hurt.died) {
-        // 死亡表现（EntityStatus 3 + 死亡音 + 掉落）由 Server 的死亡事件统一处理：
-        // 实体保留 20 tick 播倒地动画后才销毁，这里不再立即销毁/掉落，避免双份
-        log::info("{} killed mob {} (type {})", username_, *target, mob->type);
+    // 挤奶：给玩家一个牛奶桶
+    if (mob->type == 92 && held.id == 325) {
+        // 326 = Milk Bucket
+        inventory_.set_slot(item::PlayerInventory::hotbar_slot(selected_slot_), item::ItemStack{326, 1, 0});
+        send_slot(0, static_cast<std::int16_t>(item::PlayerInventory::hotbar_slot(selected_slot_)),
+                  item::ItemStack{326, 1, 0});
     }
     return true;
 }

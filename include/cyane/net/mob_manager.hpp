@@ -75,6 +75,10 @@ struct Mob {
     // 无敌窗（hurtResistantTime=max 20，>10 时仅更高伤害可破防，只结算差值）
     std::int32_t hurt_resistant_ticks{0};
     float last_damage{0.0f};
+    // 交互状态
+    bool sheared{false};     // 羊：被剪毛后不再掉落羊毛
+    bool in_love{false};     // 动物：爱心模式（繁殖冷却）
+    std::int32_t love_timer{0};  // 爱心模式倒计时
 };
 
 // 苦力怕 swell 状态变化：Server 据此播引信音效并广播 metadata（-1 熄灭 / 1 引信中）
@@ -254,6 +258,11 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         return remove_locked(id);
     }
+
+    // 交互（右键生物）：喂食繁殖 / 剪羊毛 / 挤奶桶。返回是否处理过。
+    // 由 Connection::handle_play_use_entity(type=0) 调用。
+    [[nodiscard]] bool interact(std::uint32_t id, std::int16_t held_item_id,
+                                 std::int16_t held_item_damage);
 
     [[nodiscard]] std::size_t size() const {
         std::lock_guard<std::mutex> lock(mutex_);
