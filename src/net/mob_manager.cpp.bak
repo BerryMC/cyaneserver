@@ -187,145 +187,14 @@ bool MobManager::remove_locked(std::uint32_t id) {
     return false;
 }
 
-MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapshot> players,
-                               bool daytime) {
+MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapshot> players) {
     MobTickResult result;
     std::lock_guard<std::mutex> lock{mutex_};
-    std::vector<std::uint32_t> to_remove;
     for (auto& mob : mobs_) {
         const auto species = world::mob_type(mob.type);
         if (!species) {
             continue;
         }
-
-        // ---- 死亡倒计时（onDeath → deathTime 20 tick → setDead） ----
-        if (mob.death_timer >= 0) {
-            if (mob.death_timer == 20) {
-                // 死亡瞬间：EntityStatus 3 + 死亡音 + 掉落（server 端处理，不销毁实体）
-                result.deaths.push_back(
-                    MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, false});
-            }
-            --mob.death_timer;
-            if (mob.death_timer < 0) {
-                // 动画结束：真正销毁
-                result.deaths.push_back(
-                    MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, true});
-                to_remove.push_back(mob.entity_id);
-            }
-            continue;  // 死亡中的生物不跑 AI/物理
-        }
-
-        // ---- 环境音（onEntityUpdate 的 livingSoundTime） ----
-        --mob.living_sound_timer;
-        if (mob.living_sound_timer <= 0) {
-            if (species->ambient_sound != 0) {
-                result.sounds.push_back(MobSound{mob.entity_id, species->ambient_sound,
-                                                 mob.pos.x, mob.pos.y, mob.pos.z});
-            }
-            mob.living_sound_timer = species->talk_interval;
-        }
-
-        // ---- 落差伤害（fall(distance)：ceil(落差-3)，落地瞬间结算） ----
-        if (mob.was_on_ground_last_tick && !mob.on_ground) {
-            mob.fall_start_y = mob.pos.y;  // 刚离地
-        } else if (!mob.was_on_ground_last_tick && mob.on_ground) {
-            const double fall = mob.fall_start_y - mob.pos.y;
-            if (fall > 3.0) {
-                mob.health -= static_cast<float>(std::ceil(fall - 3.0));
-                result.sounds.push_back(MobSound{mob.entity_id, species->hurt_sound, mob.pos.x,
-                                                 mob.pos.y, mob.pos.z});
-                if (mob.health <= 0.0f) {
-                    mob.death_timer = 20;
-                    result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
-                                                     mob.pos.y, mob.pos.z, false});
-                    continue;
-                }
-            }
-            mob.fall_start_y = 0.0;
-        }
-        mob.was_on_ground_last_tick = mob.on_ground;
-
-        // ---- 火焰/岩浆伤害（setOnFireFromLava 4/t、火 1/t） ----
-        const auto feet_block = world.block_at(
-            static_cast<std::int32_t>(std::floor(mob.pos.x)),
-            static_cast<std::int32_t>(std::floor(mob.pos.y)),
-            static_cast<std::int32_t>(std::floor(mob.pos.z)));
-        const auto feet_id = world::block_id(feet_block);
-        float env_damage = 0.0f;
-        if (feet_id == 51) {
-            env_damage = 1.0f;  // 火
-        } else if (feet_id == 10 || feet_id == 11) {
-            env_damage = 4.0f;  // 岩浆
-        }
-        if (env_damage > 0.0f) {
-            mob.health -= env_damage;
-            result.sounds.push_back(MobSound{mob.entity_id, species->hurt_sound, mob.pos.x,
-                                             mob.pos.y, mob.pos.z});
-            if (mob.health <= 0.0f) {
-                mob.death_timer = 20;
-                result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y,
-                                                 mob.pos.z, false});
-                continue;
-            }
-        }
-
-        // ---- 日光燃烧（僵尸/骷髅：白天 + 露天 → setFire(8)，持续烧 1 血/秒） ----
-        if (species->burns_in_daylight && daytime && mob.idle_ticks % 20 == 0) {
-            // canSeeSky 近似：头顶到世界顶无实心方块
-            bool sky_clear = true;
-            for (auto sy = static_cast<std::int32_t>(std::floor(mob.pos.y)) + 2; sy < 256; ++sy) {
-                if (world::is_solid(world.block_at(
-                        static_cast<std::int32_t>(std::floor(mob.pos.x)), sy,
-                        static_cast<std::int32_t>(std::floor(mob.pos.z))))) {
-                    sky_clear = false;
-                    break;
-                }
-            }
-            if (sky_clear && feet_id != 10 && feet_id != 11) {  // 水中/岩浆中不烧
-                mob.health -= 1.0f;
-                result.sounds.push_back(MobSound{mob.entity_id, species->hurt_sound, mob.pos.x,
-                                                 mob.pos.y, mob.pos.z});
-                if (mob.health <= 0.0f) {
-                    mob.death_timer = 20;
-                    result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
-                                                     mob.pos.y, mob.pos.z, false});
-                    continue;
-                }
-            }
-        }
-
-        // ---- Despawn（despawnEntity：>128 格立即消失；>32 格且 idle>600 时 1/800）。
-        // vanilla getClosestPlayerToEntity 无玩家时返回 null → 整个 despawn 逻辑跳过 ----
-        if (!players.empty()) {
-        double nearest_sq = 1e18;
-        for (const auto& p : players) {
-            const double dx = p.x - mob.pos.x;
-            const double dy = p.y - mob.pos.y;
-            const double dz = p.z - mob.pos.z;
-            const double d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < nearest_sq) {
-                nearest_sq = d2;
-            }
-        }
-        if (nearest_sq > 128.0 * 128.0) {
-            result.deaths.push_back(
-                MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, true});
-            to_remove.push_back(mob.entity_id);
-            continue;
-        }
-        if (nearest_sq > 32.0 * 32.0) {
-            ++mob.idle_ticks;
-            if (mob.idle_ticks > 600 && rand01() < 1.0 / 800.0) {
-                result.deaths.push_back(
-                    MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, true});
-                to_remove.push_back(mob.entity_id);
-                continue;
-            }
-        } else {
-            mob.idle_ticks = 0;
-        }
-        }  // players.empty() 门控结束
-
         if (mob.state_ticks > 0) {
             --mob.state_ticks;
         }
@@ -481,28 +350,6 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
 
         switch (mob.ai) {
             case MobAi::idle:
-                // PathfinderGoalLookAtPlayer(8.0F) / RandomLookaround：闲置时看向 8 格内
-                // 最近玩家（faceEntity 限速），否则每 tick 1/50 概率随机转头
-                {
-                    const PlayerSnapshot* look_target = nullptr;
-                    double look_sq = 8.0 * 8.0;
-                    for (const auto& p : players) {
-                        const double dx2 = p.x - mob.pos.x;
-                        const double dz2 = p.z - mob.pos.z;
-                        const double dy2 = p.y - mob.pos.y;
-                        const double d2 = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
-                        if (d2 < look_sq) {
-                            look_sq = d2;
-                            look_target = &p;
-                        }
-                    }
-                    if (look_target != nullptr) {
-                        mob.pos.yaw = yaw_towards(mob.pos.yaw, look_target->x - mob.pos.x,
-                                                  look_target->z - mob.pos.z);
-                    } else if (rand01() < 1.0 / 50.0) {
-                        mob.pos.yaw = static_cast<float>(rand01() * 360.0);
-                    }
-                }
                 // PathfinderGoalRandomStroll：每 tick 1/120 概率经 RandomPositionGenerator
                 // 找 10×7 内随机落点（canEntityStandOnPos 过滤），寻路前往
                 if (rand01() < 1.0 / 120.0) {
@@ -593,10 +440,9 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     if (mob.fuse_ticks >= kFuseTicks) {
                         result.explosions.push_back(
                             MobExplosion{mob.pos.x, mob.pos.y, mob.pos.z, 3.0f});
-                        // 引爆即消失：不播死亡动画/不掉自身战利品，只销毁实体
-                        result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
-                                                         mob.pos.y, mob.pos.z, true});
+                        MobDeath death{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z};
                         (void)remove_locked(mob.entity_id);
+                        result.deaths.push_back(death);
                         break;
                     }
                     if (next == 1) {
@@ -806,16 +652,6 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             result.moved.push_back(MobMove{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z,
                                            mob.pos.yaw});
         }
-    }
-
-    // 移除本拍标记的生物（死亡动画结束 / despawn）
-    if (!to_remove.empty()) {
-        mobs_.erase(std::remove_if(mobs_.begin(), mobs_.end(),
-                                   [&](const Mob& m) {
-                                       return std::find(to_remove.begin(), to_remove.end(),
-                                                        m.entity_id) != to_remove.end();
-                                   }),
-                    mobs_.end());
     }
 
     // EntityLivingBase.collideWithNearbyEntities → Entity.applyEntityCollision：

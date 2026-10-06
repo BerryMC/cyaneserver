@@ -437,7 +437,10 @@ void Server::tick() {
         const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
         // 目标选择用玩家快照（本 tick 取一次，避免每个生物各扫一遍）
         const auto players = hub_->others(net::kNoExclude);
-        const auto mob_events = mobs_->tick(*world_, players);
+        // 白天判定：now/50ms = tick，mod 24000 取 0..11999（vanilla 昼夜半周期；世界时间
+        // 从进程启动起算的近似，无 doDaylightCycle/时间指令）
+        const bool daytime = (now_ms() / 50) % 24000 < 12000;
+        const auto mob_events = mobs_->tick(*world_, players, daytime);
         for (const auto& mob : mob_events.moved) {
             // 只发给生物所在区块视距内的玩家（远端客户端看不到该实体）
             const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(mob.x),
@@ -468,12 +471,25 @@ void Server::tick() {
                                      anim.data());
             }
         }
-        // 生物死亡（爆炸自毁等非玩家击杀）：销毁实体 + 死亡音效
+        // 生物死亡：死亡瞬间（despawn=false）播 EntityStatus 3 + 死亡音 + 掉落；
+        // 动画结束/despawn（despawn=true）只销毁实体
         for (const auto& death : mob_events.deaths) {
-            ByteWriter destroy;
-            const std::uint32_t ids[] = {death.mob_id};
-            net::writers::write_destroy_entities(destroy, ids);
             const auto species = world::mob_type(death.type);
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(death.x),
+                                                           static_cast<std::int32_t>(death.z));
+            if (death.despawn) {
+                ByteWriter destroy;
+                const std::uint32_t ids[] = {death.mob_id};
+                net::writers::write_destroy_entities(destroy, ids);
+                if (cpos) {
+                    hub_->broadcast_near(cpos->x, cpos->z, radius, 0,
+                                         proto::play_cb::kDestroyEntities, destroy.data());
+                }
+                continue;
+            }
+            // EntityStatus 3：客户端播倒地死亡动画（实体 20 tick 后由 despawn 事件销毁）
+            ByteWriter dead_status;
+            net::writers::write_entity_status(dead_status, death.mob_id, 3);
             ByteWriter sound;
             if (species) {
                 net::writers::write_named_sound(sound, species->death_sound,
@@ -482,14 +498,37 @@ void Server::tick() {
                                                 static_cast<std::int32_t>(death.y),
                                                 static_cast<std::int32_t>(death.z), 1.0f, 1.0f);
             }
-            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(death.x),
-                                                           static_cast<std::int32_t>(death.z));
             if (cpos) {
-                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kDestroyEntities,
-                                     destroy.data());
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityStatus,
+                                     dead_status.data());
                 if (species) {
                     hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSoundEffect,
                                          sound.data());
+                }
+            }
+            // 掉落（onDeath 立即掉落；玩家击杀与自然环境死亡统一走这里，避免双份）
+            if (species && item_drops_ != nullptr) {
+                static thread_local std::mt19937 drop_engine{std::random_device{}()};
+                for (const auto& drop : species->drops) {
+                    if (drop.item_id == 0) {
+                        break;
+                    }
+                    if (drop.chance_percent < 100 &&
+                        std::uniform_int_distribution<int>(1, 100)(drop_engine) >
+                            drop.chance_percent) {
+                        continue;
+                    }
+                    const auto count =
+                        drop.max_count > drop.min_count
+                            ? static_cast<std::uint8_t>(std::uniform_int_distribution<int>(
+                                  drop.min_count, drop.max_count)(drop_engine))
+                            : drop.min_count;
+                    if (count == 0) {
+                        continue;
+                    }
+                    spawn_drop_world(death.x, death.y, death.z,
+                                     item::ItemStack{drop.item_id, count, drop.damage},
+                                     cpos ? cpos->x : 0, cpos ? cpos->z : 0);
                 }
             }
         }
@@ -532,6 +571,20 @@ void Server::tick() {
             if (cpos) {
                 hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityMetadata,
                                      meta.data());
+            }
+        }
+        // 环境音（闲置哼声）与环境伤害音（火/岩浆/摔落）
+        for (const auto& snd : mob_events.sounds) {
+            ByteWriter sound;
+            net::writers::write_named_sound(sound, snd.sound_id, proto::sound_category::kBlocks,
+                                            static_cast<std::int32_t>(snd.x),
+                                            static_cast<std::int32_t>(snd.y),
+                                            static_cast<std::int32_t>(snd.z), 1.0f, 1.0f);
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(snd.x),
+                                                           static_cast<std::int32_t>(snd.z));
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSoundEffect,
+                                     sound.data());
             }
         }
         // 骷髅射箭

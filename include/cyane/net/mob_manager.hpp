@@ -63,6 +63,15 @@ struct Mob {
     std::int8_t strafe_fwd{1};     // 走位前后轴（远处前进 / 贴脸后退）
     std::int8_t strafe_side{1};    // 走位左右轴
     std::int32_t strafe_ticks{0};  // 走位翻转计时（每 20 tick 各 0.3 概率翻转）
+    // 环境音计时器（<=0 时播放并重置为 -talkInterval）
+    std::int32_t living_sound_timer{0};
+    // 死亡倒计时（-1 表示存活，否则剩余 tick，到 0 时真正删除）
+    std::int32_t death_timer{-1};
+    // 方块落差伤害：离开地面时记录起始 Y，落地时计算差值
+    double fall_start_y{0.0};
+    bool was_on_ground_last_tick{false};
+    // 生物消失计时器（despawn）
+    std::int32_t idle_ticks{0};
 };
 
 // 苦力怕 swell 状态变化：Server 据此播引信音效并广播 metadata（-1 熄灭 / 1 引信中）
@@ -136,6 +145,15 @@ struct MobDeath {
     double x{0.0};
     double y{0.0};
     double z{0.0};
+    bool despawn{false};  // true = 消失（despawn/死亡动画结束），只发 DestroyEntities
+};
+
+struct MobSound {
+    std::uint32_t entity_id{0};
+    std::int32_t sound_id{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
 };
 
 struct MobTickResult {
@@ -146,6 +164,7 @@ struct MobTickResult {
     std::vector<MobExplosion> explosions;  // 苦力怕引爆（自爆即死亡）
     std::vector<MobIgnition> ignitions;    // 苦力怕点燃（引信开始）
     std::vector<MobDraw> draws;            // 骷髅举弓/收弓
+    std::vector<MobSound> sounds;          // 环境音、伤害音等
 };
 
 // 受伤结果：是否命中、是否致死、剩余血量
@@ -172,9 +191,10 @@ public:
     MobHurt damage(std::uint32_t id, float amount, double from_x, double from_z,
                    float knockback = 0.4f);
 
-    // 推进 AI 与物理一个 tick
+    // 推进 AI 与物理一个 tick；daytime = 世界是否白天（日光燃烧用）
     [[nodiscard]] MobTickResult tick(world::World& world,
-                                     std::span<const PlayerSnapshot> players);
+                                     std::span<const PlayerSnapshot> players,
+                                     bool daytime = false);
 
     [[nodiscard]] std::vector<Mob> snapshot() const {
         std::lock_guard<std::mutex> lock(mutex_);

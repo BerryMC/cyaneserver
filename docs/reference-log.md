@@ -352,3 +352,14 @@
   - **玩家侧同构**：服务端 EntityPlayerMP 的 motion 恒 0（不从客户端同步），knockBack 的"减半"为恒等 → 收到的击退速度 = 离攻击者方向×0.4；竖直踢有 `onGround` 门控（从移动包尾部的 onGround bool 跟踪，`player_on_ground_`），合成后的速度经 SPacketEntityVelocity 下发——此前 Y 固定 0.36 且无门控、无抖动，全部作废。
 - 落地：`src/net/mob_manager.cpp`（tick 的 f6/f7/f8 分流 + 摩擦改 `block_slipperiness×0.91`（冰面生效）+ damage 抖动）、`src/net/connection_combat.cpp`（apply_damage 公式 + `player_on_ground_`）、`src/net/connection_play.cpp`（解析移动包 onGround）、`projectile_manager`（ArrowHit 射手坐标）、`server.cpp`（箭伤击退用射手方向）。
 - 测试：`knockback_pushes_mob_away_and_up`（方向/竖直踢/实际位移）、`airborne_mob_loses_ai_control`（悬空追击 6 tick 漂移 <0.05，旧实现下会跑出 0.25+）；170 测试 × 常规/-Werror/ASan+UBSan 全绿，ASan 服务端实跑无报错。
+
+### R-027 — 死亡动画、环境音、环境伤害、Despawn、闲置注视（ vanilla 生物表现层补全）
+
+- 来源（Forge 反混淆 1.12.2）：`EntityLivingBase.onDeath/onDeathUpdate`（EntityStatus 3 + deathTime 20 + XP）、`EntityLiving.onEntityUpdate`（livingSoundTime 环境音节奏）、`despawnEntity`、`fall(float,float)`、`EntityZombie/AbstractSkeleton.onLivingUpdate`（日光燃烧）、`PathfinderGoalLookAtPlayer/RandomLookaround`。
+- **死亡表现**：`onDeath` → 立即掉落 + `setEntityState(this, 3)`（客户端倒地动画）+ deathTime 计 20 tick → `onDeathUpdate` 到 20 才 `setDead`。落地：`damage()` 致死不再立即移除，改为 `death_timer = 20`；tick 中首拍发 `MobDeath{despawn=false}`（server：EntityStatus 3 + 死亡音 + **统一掉落**），第 20 拍发 `MobDeath{despawn=true}`（server：只 DestroyEntities）。掉落从 connection_combat（玩家击杀）挪到 server 死亡事件统一处理——环境死亡（火/岩浆/摔落/日光）同样掉战利品，且不会双份。苦力怕自爆 = `despawn=true` 直接销毁（无动画无掉落）。deathTime 在存档 NBT 有字段但动画期极短，未持久化。
+- **环境音**：`rand.nextInt(1000) < livingSoundTime++`（interval 默认 80，命中后重置 −80）。落地为确定性的 `talk_interval` 节拍（每 80 tick 一次；苦力怕无 ambient）。音效 id：猪 352/羊 385/牛 166/鸡 161/僵尸 480/骷髅 404/蜘蛛 429（registry 顺序同 R-020）。fire/lava/摔落伤害音复用 hurt_sound。
+- **环境伤害**：火方块（51）1 血/t、岩浆（10/11）4 血/t（`setOnFireFromLava`，判脚下格）；摔落 `ceil(落差−3)` 在落地瞬间结算（`fall_start_y` 记离地高度；vanilla `fall()` 同公式，水/梯子重置未做——生物尚未有水中状态）；日光燃烧：僵尸/骷髅白天 + 露天（头顶逐格无实心，每 20 tick 查一次）→ 1 血/秒（`setFire(8)` 的持续近似）。白天 = `(now_ms/50) % 24000 < 12000`（进程启动起算的近似世界时间，无时间指令）。
+- **Despawn**：vanilla `getClosestPlayerToEntity` 无玩家时返回 null → **整段逻辑跳过**（测试曾因此全灭）。有玩家时：距离² >16384（128 格）立即消失；>1024（32 格）且 idleTime>600 时 1/800 每 tick 消失；<1024 重置 idleTime。
+- **闲置注视**：`PathfinderGoalLookAtPlayer(8.0)` 看 8 格内最近玩家（faceEntity 限速转向）+ `RandomLookaround` 无目标时 1/50 概率随机转头，挂在 idle 分支。
+- 测试：`mob_damage_and_death` 更新（死亡 → 20 tick 动画期 → 移除，中途 despawn=false 事件一次）；170 × 常规/-Werror/ASan+UBSan 全绿，ASan 服务端实跑无报错。
+- 已知保留近似：着火视觉（ON_FIRE metadata flag index 0）未广播——客户端看不到火苗，只有扣血；死亡白烟粒子未发；XP 球未做；水中浮力/游泳未做（生物落水会沉底）。

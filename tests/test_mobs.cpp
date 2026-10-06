@@ -433,7 +433,7 @@ CYANE_TEST(airborne_mob_loses_ai_control) {
     CYANE_CHECK(drift < 0.05);  // 仍在空中：几乎不朝目标移动
 }
 
-// 受伤与死亡：血量递减，归零后从表里移除
+// 受伤与死亡：血量递减；死亡进 20 tick 倒地动画期，动画结束才真正移除
 CYANE_TEST(mob_damage_and_death) {
     world::World world;
     net::MobManager mobs;
@@ -446,8 +446,20 @@ CYANE_TEST(mob_damage_and_death) {
 
     const auto lethal = mobs.damage(id, 5.0f, 1.5, 0.5);
     CYANE_CHECK(lethal.found && lethal.died);
-    CYANE_CHECK_EQ(mobs.size(), std::size_t{0});
-    CYANE_CHECK(!mobs.damage(id, 1.0f, 0.0, 0.0).found);  // 已死的再打：未命中
+    // onDeath：实体保留 20 tick 播倒地动画
+    CYANE_CHECK_EQ(mobs.size(), std::size_t{1});
+    const std::vector<net::PlayerSnapshot> no_players;
+    const auto events = mobs.tick(world, no_players);
+    // 首个死亡 tick 发 despawn=false 事件（EntityStatus 3 + 死亡音 + 掉落）
+    CYANE_CHECK_EQ(events.deaths.size(), std::size_t{1});
+    CYANE_CHECK(!events.deaths[0].despawn);
+    for (int i = 0; i < 19; ++i) {
+        (void)mobs.tick(world, no_players);
+    }
+    CYANE_CHECK_EQ(mobs.size(), std::size_t{1});  // 动画未结束
+    (void)mobs.tick(world, no_players);
+    CYANE_CHECK_EQ(mobs.size(), std::size_t{0});  // 20 tick 到：销毁
+    CYANE_CHECK(!mobs.damage(id, 1.0f, 0.0, 0.0).found);  // 已移除：未命中
 }
 
 // 生成的生物用全局实体 id 分配器（与玩家/掉落物同空间，避免撞号）

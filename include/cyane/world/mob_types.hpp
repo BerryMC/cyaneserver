@@ -40,8 +40,11 @@ struct MobType {
     bool hostile{false};
     bool ranged{false};   // 骷髅：保持距离射箭
     bool explodes{false}; // 苦力怕：近身引信后爆炸
+    bool burns_in_daylight{false};  // 僵尸/骷髅：白天露天着火
+    std::int32_t ambient_sound{0};
     std::int32_t hurt_sound{0};
     std::int32_t death_sound{0};
+    std::int32_t talk_interval{80}; // ticks between ambient sound checks
     std::array<MobDrop, 4> drops{};
 };
 
@@ -51,49 +54,67 @@ struct MobType {
             return MobType{.type = 50, .name = "creeper", .nbt_id = "minecraft:creeper",
                            .width = 0.6f, .height = 1.7f, .health = 20.0f, .speed = 0.25f,
                            .stroll_scale = 0.8f,
-                           .attack_range = 3.0f, .hostile = true, .explodes = true, .hurt_sound = 172,
+                           .attack_range = 3.0f, .hostile = true, .explodes = true,
+                           .burns_in_daylight = false,
+                           .ambient_sound = 0, .hurt_sound = 172,
                            .death_sound = 171,
+                           .talk_interval = 0, // no ambient sound
                            .drops = {{{289, 0, 0, 2}, {}, {}, {}}}};
         case 51:  // 骷髅
             return MobType{.type = 51, .name = "skeleton", .nbt_id = "minecraft:skeleton",
                            .width = 0.6f, .height = 1.99f, .health = 20.0f, .speed = 0.25f,
                            .attack_damage = 2.0f, .follow_range = 16.0f, .attack_range = 15.0f,
-                           .hostile = true, .ranged = true,
-                           .hurt_sound = 406, .death_sound = 405,
+                           .hostile = true, .ranged = true, .burns_in_daylight = true,
+                           .ambient_sound = 404, .hurt_sound = 406, .death_sound = 405,
+                           .talk_interval = 80,
                            .drops = {{{262, 0, 0, 2}, {352, 0, 0, 2}, {}, {}}}};
         case 52:  // 蜘蛛
             return MobType{.type = 52, .name = "spider", .nbt_id = "minecraft:spider",
                            .width = 1.4f, .height = 0.9f, .health = 16.0f, .speed = 0.3f,
                            .stroll_scale = 0.8f,
-                           .attack_damage = 2.0f, .attack_range = 1.2f, .hostile = true, .hurt_sound = 431,
+                           .attack_damage = 2.0f, .attack_range = 1.2f, .hostile = true,
+                           .ambient_sound = 429, .hurt_sound = 431,
                            .death_sound = 430,
+                           .talk_interval = 80,
                            .drops = {{{287, 0, 0, 2}, {375, 0, 0, 1, 33}, {}, {}}}};
         case 54:  // 僵尸
             return MobType{.type = 54, .name = "zombie", .nbt_id = "minecraft:zombie",
                            .width = 0.6f, .height = 1.95f, .health = 20.0f, .speed = 0.23f,
                            .attack_damage = 3.0f, .follow_range = 35.0f, .attack_range = 1.2f,
-                           .hostile = true, .hurt_sound = 485,
+                           .hostile = true, .burns_in_daylight = true,
+                           .ambient_sound = 480, .hurt_sound = 485,
                            .death_sound = 484,
+                           .talk_interval = 80,
                            .drops = {{{367, 0, 0, 2}, {265, 0, 1, 1, 3}, {391, 0, 1, 1, 3},
                                       {392, 0, 1, 1, 3}}}};
         case 90:  // 猪
             return MobType{.type = 90, .name = "pig", .nbt_id = "minecraft:pig", .width = 0.9f,
-                           .height = 0.9f, .health = 10.0f, .speed = 0.25f, .hurt_sound = 354,
-                           .death_sound = 353, .drops = {{{319, 0, 1, 3}, {}, {}, {}}}};
+                           .height = 0.9f, .health = 10.0f, .speed = 0.25f,
+                           .ambient_sound = 352, .hurt_sound = 354,
+                           .death_sound = 353,
+                           .talk_interval = 80,
+                           .drops = {{{319, 0, 1, 3}, {}, {}, {}}}};
         case 91:  // 羊
             return MobType{.type = 91, .name = "sheep", .nbt_id = "minecraft:sheep", .width = 0.9f,
-                           .height = 1.3f, .health = 8.0f, .speed = 0.23f, .panic_scale = 1.25f, .hurt_sound = 387,
+                           .height = 1.3f, .health = 8.0f, .speed = 0.23f, .panic_scale = 1.25f,
+                           .ambient_sound = 385, .hurt_sound = 387,
                            .death_sound = 386,
+                           .talk_interval = 80,
                            .drops = {{{423, 0, 1, 2}, {35, 0, 1, 1}, {}, {}}}};
         case 92:  // 牛
             return MobType{.type = 92, .name = "cow", .nbt_id = "minecraft:cow", .width = 0.9f,
-                           .height = 1.4f, .health = 10.0f, .speed = 0.2f, .panic_scale = 2.0f, .hurt_sound = 168,
+                           .height = 1.4f, .health = 10.0f, .speed = 0.2f, .panic_scale = 2.0f,
+                           .ambient_sound = 166, .hurt_sound = 168,
                            .death_sound = 167,
+                           .talk_interval = 80,
                            .drops = {{{334, 0, 0, 2}, {363, 0, 1, 3}, {}, {}}}};
         case 93:  // 鸡
             return MobType{.type = 93, .name = "chicken", .nbt_id = "minecraft:chicken", .width = 0.4f,
-                           .height = 0.7f, .health = 4.0f, .speed = 0.25f, .panic_scale = 1.4f, .hurt_sound = 164,
-                           .death_sound = 162, .drops = {{{288, 0, 0, 2}, {365, 0, 1, 1}, {}, {}}}};
+                           .height = 0.7f, .health = 4.0f, .speed = 0.25f, .panic_scale = 1.4f,
+                           .ambient_sound = 161, .hurt_sound = 164,
+                           .death_sound = 162,
+                           .talk_interval = 80,
+                           .drops = {{{288, 0, 0, 2}, {365, 0, 1, 1}, {}, {}}}};
         default:
             return std::nullopt;
     }

@@ -85,46 +85,8 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
         }
     }
     if (hurt.died) {
-        // 掉落表 → 掉落物（生存/创造都掉，vanilla 死亡掉落与击杀者模式无关）
-        if (context_.item_drops != nullptr) {
-            for (const auto& drop : species->drops) {
-                if (drop.item_id == 0) {
-                    break;
-                }
-                static thread_local std::mt19937 drop_engine{std::random_device{}()};
-                if (drop.chance_percent < 100 &&
-                    std::uniform_int_distribution<int>(1, 100)(drop_engine) > drop.chance_percent) {
-                    continue;
-                }
-                const auto count = drop.max_count > drop.min_count
-                                       ? static_cast<std::uint8_t>(std::uniform_int_distribution<int>(
-                                             drop.min_count, drop.max_count)(drop_engine))
-                                       : drop.min_count;
-                if (count == 0) {
-                    continue;
-                }
-                spawn_dropped_item_at(static_cast<double>(hurt.x), hurt.y,
-                                      static_cast<double>(hurt.z),
-                                      item::ItemStack{drop.item_id, static_cast<std::uint8_t>(count),
-                                                      drop.damage});
-            }
-        }
-        ByteWriter destroy;
-        const std::uint32_t ids[] = {static_cast<std::uint32_t>(*target)};
-        writers::write_destroy_entities(destroy, ids);
-        ByteWriter hurt_still;
-        (void)hurt_still;
-        // 销毁实体也用 EntityStatus 通道？不——DestroyEntities 是独立包，直接广播
-        send_packet(proto::play_cb::kDestroyEntities, destroy.data());
-        if (context_.hub != nullptr) {
-            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(hurt.x),
-                                                           static_cast<std::int32_t>(hurt.z));
-            if (cpos) {
-                const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
-                context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
-                                             proto::play_cb::kDestroyEntities, destroy.data());
-            }
-        }
+        // 死亡表现（EntityStatus 3 + 死亡音 + 掉落）由 Server 的死亡事件统一处理：
+        // 实体保留 20 tick 播倒地动画后才销毁，这里不再立即销毁/掉落，避免双份
         log::info("{} killed mob {} (type {})", username_, *target, mob->type);
     }
     return true;
