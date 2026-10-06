@@ -134,6 +134,9 @@ private:
     [[nodiscard]] bool handle_play_client_command(ByteSpan payload);
     // UseItem (0x20)：对空中右键——手持食物时进食
     [[nodiscard]] bool handle_play_use_item(ByteSpan payload);
+
+    // 给予玩家经验
+    void add_experience(int value);
     // 0x1D 挥臂动画：限流后转发 Animation(0x06) 给视距内玩家
     [[nodiscard]] bool handle_play_animation(ByteSpan payload);
     // 打开箱子容器：下发 OpenWindow + 容器 WindowItems
@@ -280,6 +283,11 @@ private:
     // 玩家动作状态（潜行/疾跑），供后续移动广播与碰撞使用
     bool sneaking_{false};
     bool sprinting_{false};
+
+    // 玩家经验（Bar、Level、TotalExperience）
+    float experience_{0.0f};
+    int experience_level_{0};
+    int experience_total_{0};
 
     // 玩家背包（windowId=0，46 槽）与当前选中热区栏槽（0..8）
     item::PlayerInventory inventory_;

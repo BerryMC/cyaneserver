@@ -179,4 +179,20 @@ inline void write_entity_head_look(ByteWriter& out, std::uint32_t entity_id, flo
     out.u8(angle_byte(head_yaw));
 }
 
+// SpawnExperienceOrb (0x01): varint entityId | double x | double y | double z | short count
+inline void write_spawn_experience_orb(ByteWriter& out, std::uint32_t entity_id, double x, double y, double z, std::int16_t count) {
+    out.varint(static_cast<std::int32_t>(entity_id));
+    out.f64(x);
+    out.f64(y);
+    out.f64(z);
+    out.i16(count);
+}
+
+// SetExperience (0x40): float experienceBar | varint level | varint totalExperience
+inline void write_set_experience(ByteWriter& out, float experience_bar, std::int32_t level, std::int32_t total_experience) {
+    out.f32(experience_bar);
+    out.varint(level);
+    out.varint(total_experience);
+}
+
 } // namespace cyane::net::writers

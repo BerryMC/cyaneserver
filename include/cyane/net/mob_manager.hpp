@@ -149,6 +149,7 @@ struct MobDeath {
     double y{0.0};
     double z{0.0};
     bool despawn{false};  // true = 消失（despawn/死亡动画结束），只发 DestroyEntities
+    int experience{0};    // 死亡时掉落的经验点数
 };
 
 struct MobSound {

@@ -110,9 +110,11 @@ add_library(cyane_net
   src/net/connection_table.cpp
   src/net/connection_mobs.cpp
   src/net/connection_persistence.cpp
+  src/net/connection_experience.cpp
   src/net/mob_manager.cpp
   src/net/block_ticks.cpp
   src/net/projectile_manager.cpp
+  src/net/xp_orb.cpp
   src/net/net_service.cpp
   src/net/session_service.cpp
 )

@@ -46,6 +46,7 @@ struct MobType {
     std::int32_t hurt_sound{0};
     std::int32_t death_sound{0};
     std::int32_t talk_interval{80}; // ticks between ambient sound checks
+    int xp_value{0};  // 击杀时掉落的经验值（vanilla EntityLiving.getExperiencePoints）
     std::array<MobDrop, 4> drops{};
 };
 
@@ -60,6 +61,7 @@ struct MobType {
                            .ambient_sound = 0, .hurt_sound = 172,
                            .death_sound = 171,
                            .talk_interval = 0, // no ambient sound
+                           .xp_value = 5,
                            .drops = {{{289, 0, 0, 2}, {}, {}, {}}}};
         case 51:  // 骷髅
             return MobType{.type = 51, .name = "skeleton", .nbt_id = "minecraft:skeleton",
@@ -68,6 +70,7 @@ struct MobType {
                            .hostile = true, .ranged = true, .burns_in_daylight = true,
                            .ambient_sound = 404, .hurt_sound = 406, .death_sound = 405,
                            .talk_interval = 80,
+                           .xp_value = 5,
                            .drops = {{{262, 0, 0, 2}, {352, 0, 0, 2}, {}, {}}}};
         case 52:  // 蜘蛛
             return MobType{.type = 52, .name = "spider", .nbt_id = "minecraft:spider",
@@ -77,6 +80,7 @@ struct MobType {
                            .ambient_sound = 429, .hurt_sound = 431,
                            .death_sound = 430,
                            .talk_interval = 80,
+                           .xp_value = 5,
                            .drops = {{{287, 0, 0, 2}, {375, 0, 0, 1, 33}, {}, {}}}};
         case 54:  // 僵尸
             return MobType{.type = 54, .name = "zombie", .nbt_id = "minecraft:zombie",
@@ -87,6 +91,7 @@ struct MobType {
                            .ambient_sound = 480, .hurt_sound = 485,
                            .death_sound = 484,
                            .talk_interval = 80,
+                           .xp_value = 5,
                            .drops = {{{367, 0, 0, 2}, {265, 0, 1, 1, 3}, {391, 0, 1, 1, 3},
                                       {392, 0, 1, 1, 3}}}};
         case 90:  // 猪
@@ -95,6 +100,7 @@ struct MobType {
                            .ambient_sound = 352, .hurt_sound = 354,
                            .death_sound = 353,
                            .talk_interval = 80,
+                           .xp_value = 1,
                            .drops = {{{319, 0, 1, 3}, {}, {}, {}}}};
         case 91:  // 羊
             return MobType{.type = 91, .name = "sheep", .nbt_id = "minecraft:sheep", .width = 0.9f,
@@ -102,6 +108,7 @@ struct MobType {
                            .ambient_sound = 385, .hurt_sound = 387,
                            .death_sound = 386,
                            .talk_interval = 80,
+                           .xp_value = 1,
                            .drops = {{{423, 0, 1, 2}, {35, 0, 1, 1}, {}, {}}}};
         case 92:  // 牛
             return MobType{.type = 92, .name = "cow", .nbt_id = "minecraft:cow", .width = 0.9f,
@@ -109,6 +116,7 @@ struct MobType {
                            .ambient_sound = 166, .hurt_sound = 168,
                            .death_sound = 167,
                            .talk_interval = 80,
+                           .xp_value = 1,
                            .drops = {{{334, 0, 0, 2}, {363, 0, 1, 3}, {}, {}}}};
         case 93:  // 鸡
             return MobType{.type = 93, .name = "chicken", .nbt_id = "minecraft:chicken", .width = 0.4f,
@@ -116,6 +124,7 @@ struct MobType {
                            .ambient_sound = 161, .hurt_sound = 164,
                            .death_sound = 162,
                            .talk_interval = 80,
+                           .xp_value = 1,
                            .drops = {{{288, 0, 0, 2}, {365, 0, 1, 1}, {}, {}}}};
         default:
             return std::nullopt;

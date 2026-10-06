@@ -18,6 +18,7 @@
 #include "cyane/item/crafting.hpp"
 #include "cyane/net/block_ticks.hpp"
 #include "cyane/net/projectile_manager.hpp"
+#include "cyane/net/xp_orb.hpp"
 #include "cyane/net/crafting_table_store.hpp"
 #include "cyane/net/mob_manager.hpp"
 #include "cyane/game/status.hpp"
@@ -113,6 +114,7 @@ private:
     std::unique_ptr<net::FurnaceStore> furnaces_;
     std::unique_ptr<world::CraftingTableStore> crafting_tables_;
     std::unique_ptr<net::MobManager> mobs_;
+    std::unique_ptr<net::XPOrbManager> xp_orb_manager_;
     std::unique_ptr<game::OpManager> op_manager_;
     std::unique_ptr<item::CraftingRegistry> crafting_;
     std::unique_ptr<world::World> world_;

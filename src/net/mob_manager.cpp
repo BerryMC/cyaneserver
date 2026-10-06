@@ -286,8 +286,19 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                                  mob.pos.y, mob.pos.z});
                 if (mob.health <= 0.0f) {
                     mob.death_timer = 20;
+                    // 设置经验值
+                    int experience = 0;
+                    if (species) {
+                        if (species->hostile) {
+                            experience = species->xp_value; // 敌对生物固定 5 点经验
+                        } else {
+                            // 被动生物：1 + rand(3) 点经验
+                            static thread_local std::mt19937 passive_rand{std::random_device{}()};
+                            experience = 1 + std::uniform_int_distribution<int>(0, 2)(passive_rand);
+                        }
+                    }
                     result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
-                                                     mob.pos.y, mob.pos.z, false});
+                                                     mob.pos.y, mob.pos.z, false, experience});
                     continue;
                 }
             }
@@ -313,8 +324,19 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                              mob.pos.y, mob.pos.z});
             if (mob.health <= 0.0f) {
                 mob.death_timer = 20;
+                // 设置经验值
+                int experience = 0;
+                if (species) {
+                    if (species->hostile) {
+                        experience = species->xp_value; // 敌对生物固定 5 点经验
+                    } else {
+                        // 被动生物：1 + rand(3) 点经验
+                        static thread_local std::mt19937 passive_rand{std::random_device{}()};
+                        experience = 1 + std::uniform_int_distribution<int>(0, 2)(passive_rand);
+                    }
+                }
                 result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y,
-                                                 mob.pos.z, false});
+                                                 mob.pos.z, false, experience});
                 continue;
             }
         }
@@ -337,8 +359,19 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                                  mob.pos.y, mob.pos.z});
                 if (mob.health <= 0.0f) {
                     mob.death_timer = 20;
+                    // 设置经验值
+                    int experience = 0;
+                    if (species) {
+                        if (species->hostile) {
+                            experience = species->xp_value; // 敌对生物固定 5 点经验
+                        } else {
+                            // 被动生物：1 + rand(3) 点经验
+                            static thread_local std::mt19937 passive_rand{std::random_device{}()};
+                            experience = 1 + std::uniform_int_distribution<int>(0, 2)(passive_rand);
+                        }
+                    }
                     result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
-                                                     mob.pos.y, mob.pos.z, false});
+                                                     mob.pos.y, mob.pos.z, false, experience});
                     continue;
                 }
             }

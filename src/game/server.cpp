@@ -241,6 +241,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.crafting_tables = server->crafting_tables_.get();
     server->mobs_ = std::make_unique<net::MobManager>();
     context.mobs = server->mobs_.get();
+    server->xp_orb_manager_ = std::make_unique<net::XPOrbManager>();
     // 玩家数据持久化存储
     server->player_data_store_ = std::make_unique<game::PlayerDataStore>();
     server->player_data_store_->set_dir(server->config_.player_data_dir);
@@ -433,6 +434,52 @@ void Server::tick() {
     if (item_drops_ != nullptr && world_ != nullptr) {
         apply_item_tick(item_drops_->tick(*world_));
     }
+    // 更新经验球
+    if (xp_orb_manager_ != nullptr && world_ != nullptr && hub_ != nullptr) {
+        const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
+        const auto players = hub_->others(net::kNoExclude);
+        const auto xp_events = xp_orb_manager_->tick(*world_, players);
+        // 出生包
+        for (const auto& spawned : xp_events.spawned) {
+            ByteWriter spawn;
+            net::writers::write_spawn_experience_orb(spawn, spawned.entity_id, spawned.x,
+                                                     spawned.y, spawned.z, spawned.value);
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(spawned.x),
+                                                          static_cast<std::int32_t>(spawned.z));
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSpawnExperienceOrb,
+                                     spawn.data());
+            }
+        }
+        // 位置同步
+        for (const auto& tp : xp_events.teleported) {
+            ByteWriter teleport;
+            net::writers::write_entity_teleport(teleport, tp.entity_id, tp.x, tp.y, tp.z, 0.0f, 0.0f,
+                                                true);
+            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(tp.x),
+                                                          static_cast<std::int32_t>(tp.z));
+            if (cpos) {
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
+                                     teleport.data());
+            }
+        }
+        // 销毁（消失/拾取）
+        for (const auto& destroyed : xp_events.destroyed) {
+            ByteWriter destroy;
+            const std::uint32_t ids[] = {destroyed.entity_id};
+            net::writers::write_destroy_entities(destroy, ids);
+            // 广播给附近玩家
+            // （这里我们没有位置信息，所以广播给所有玩家）
+            hub_->broadcast_all(proto::play_cb::kDestroyEntities, destroy.data());
+        }
+        // 拾取：给玩家经验
+        for (const auto& collected : xp_events.collected) {
+            // 给玩家发送 SetExperience 包
+            ByteWriter exp;
+            net::writers::write_set_experience(exp, 0.0f, 0, collected.xp_value);
+            hub_->send_to(collected.player_entity_id, proto::play_cb::kSetExperience, exp.data());
+        }
+    }
     if (mobs_ != nullptr) {
         const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
         // 目标选择用玩家快照（本 tick 取一次，避免每个生物各扫一遍）
@@ -530,6 +577,10 @@ void Server::tick() {
                                      item::ItemStack{drop.item_id, count, drop.damage},
                                      cpos ? cpos->x : 0, cpos ? cpos->z : 0);
                 }
+            }
+            // 生成经验球
+            if (xp_orb_manager_ != nullptr && species && death.experience > 0) {
+                xp_orb_manager_->spawn(death.x, death.y, death.z, death.experience);
             }
         }
         // 苦力怕 swell 状态变化：引信中播引信音效 + 白闪 metadata（index 16 VarInt）；
