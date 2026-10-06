@@ -286,7 +286,10 @@ struct MobShape {
 // ---- WalkNodeProcessor / NodeProcessor ----
 class WalkNodeProcessor {
 public:
-    WalkNodeProcessor(World& world, const MobShape& shape) : world_{world}, shape_{shape} {}
+    // vanilla：节点判定读 IBlockAccess（PathFinder 收到的是 ChunkCache），只有两处
+    // AABB 碰撞检查用 entity.world —— 这里对应 blocks_ 快照 + world_ 实体
+    WalkNodeProcessor(World& world, const World::BlockCache& blocks, const MobShape& shape)
+        : world_{world}, blocks_{blocks}, shape_{shape} {}
 
     // 跟随捷径的安全性检查按原版用 canOpenDoors=true/canEnterDoors=true 的节点判定
     void set_can_open_doors(bool value) noexcept { can_open_doors_ = value; }
@@ -300,7 +303,7 @@ public:
             y = static_cast<std::int32_t>(std::floor(pos_y + 0.5));
         } else {
             auto by = static_cast<std::int32_t>(std::floor(pos_y));
-            while (by > 0 && !is_solid(world_.block_at(bx, by, bz))) {
+            while (by > 0 && !is_solid(blocks_.at(bx, by, bz))) {
                 --by;
             }
             y = by + 1;
@@ -337,8 +340,8 @@ public:
             jump = static_cast<std::int32_t>(std::floor(std::max(1.0f, shape_.step_height)));
         }
         const double fall_from = static_cast<double>(current->y) -
-                                 (1.0 - block_top(world_.block_at(current->x, current->y - 1,
-                                                                 current->z)));
+                                 (1.0 - block_top(blocks_.at(current->x, current->y - 1,
+                                                             current->z)));
         // 邻居顺序同原版：SOUTH(z+1) / WEST(x-1) / EAST(x+1) / NORTH(z-1)
         PathPoint* south = get_safe_point(current->x, current->y, current->z + 1, jump, fall_from, 0, 1);
         PathPoint* west = get_safe_point(current->x - 1, current->y, current->z, jump, fall_from, -1, 0);
@@ -497,7 +500,7 @@ private:
                     if (dx * dir_x + dz * dir_z < 0.0) {
                         continue;
                     }
-                    if (is_solid(world_.block_at(bx, by, bz))) {
+                    if (is_solid(blocks_.at(bx, by, bz))) {
                         return false;
                     }
                 }
@@ -523,7 +526,7 @@ private:
         if (const auto it = raw_cache_.find(key); it != raw_cache_.end()) {
             return it->second;
         }
-        const auto state = world_.block_at(x, y, z);
+        const auto state = blocks_.at(x, y, z);
         const auto id = block_id(state);
         const auto meta = state_meta(state);
         PathNodeType type;
@@ -611,8 +614,8 @@ private:
 
     // getPathNodeType(..., entitySizeX/Y/Z, canOpenDoors, canEnterDoors=true)
     [[nodiscard]] PathNodeType node_type(std::int32_t x, std::int32_t y, std::int32_t z) {
-        const bool base_rail = is_rail_block(world_.block_at(x, y, z)) ||
-                               is_rail_block(world_.block_at(x, y - 1, z));
+        const bool base_rail = is_rail_block(blocks_.at(x, y, z)) ||
+                               is_rail_block(blocks_.at(x, y - 1, z));
         bool seen[kPathNodeTypeCount] = {};
         auto base = PathNodeType::blocked;
         for (std::int32_t i = 0; i < shape_.size_x; ++i) {
@@ -663,7 +666,7 @@ private:
                                             std::int32_t face_z) {
         PathPoint* point = nullptr;
         const double ground = static_cast<double>(y) -
-                              (1.0 - block_top(world_.block_at(x, y - 1, z)));
+                              (1.0 - block_top(blocks_.at(x, y - 1, z)));
         if (ground - fall_from > 1.125) {
             return nullptr;
         }
@@ -688,7 +691,7 @@ private:
                 // 起跳位置（朝向来向的那一格）在抬升后的净空检查
                 const double cx = static_cast<double>(x - face_x) + 0.5;
                 const double cz = static_cast<double>(z - face_z) + 0.5;
-                const double expand = block_top(world_.block_at(x, y, z)) - 0.002;
+                const double expand = block_top(blocks_.at(x, y, z)) - 0.002;
                 const Aabb box{cx - half, static_cast<double>(y) + 0.001 - expand, cz - half,
                                cx + half, static_cast<double>(y) + static_cast<double>(shape_.height) + expand,
                                cz + half};
@@ -737,7 +740,8 @@ private:
 
     static constexpr std::int32_t kMaxFallHeight = 3;  // EntityLiving.getMaxFallHeight
 
-    World& world_;
+    World& world_;                    // 仅 AABB 碰撞检查（vanilla: entity.world）
+    const World::BlockCache& blocks_;  // 节点判定（vanilla: PathFinder 的 ChunkCache）
     MobShape shape_;
     bool can_open_doors_{false};
     std::deque<PathPoint> arena_;
@@ -750,7 +754,17 @@ private:
                                                    bool on_ground, float width, float height,
                                                    double tx, double ty, double tz,
                                                    float max_distance) {
-    WalkNodeProcessor processor{world, mob_shape(width, height)};
+    // PathNavigate.getPathToPos/getPathToEntityLiving：搜索框 = pathSearchRange + 8/16 格，
+    // 据此给 PathFinder 传一份覆盖该范围的区块快照
+    const auto radius = static_cast<std::int32_t>(max_distance + 16.0f) / 16 + 1;
+    const auto cache = world.block_cache(ChunkPos::from_world(static_cast<std::int32_t>(std::floor(sx)),
+                                                              static_cast<std::int32_t>(std::floor(sz)))
+                                              ->x,
+                                          ChunkPos::from_world(static_cast<std::int32_t>(std::floor(sx)),
+                                                              static_cast<std::int32_t>(std::floor(sz)))
+                                              ->z,
+                                          radius);
+    WalkNodeProcessor processor{world, cache, mob_shape(width, height)};
     processor.reserve(256, 1024);
     PathPoint* start = processor.get_start(sx, sy, sz, on_ground);
     PathPoint* target = processor.get_path_point_to_coords(tx, ty, tz);
@@ -818,7 +832,10 @@ private:
 // ---- PathNavigateGround.isDirectPathBetweenPoints（pathFollow 的节点捷径） ----
 [[nodiscard]] inline bool is_direct_path_between_points(World& world, const MobShape& shape,
                                                         const Path::Vec& from, const Path::Vec& to) {
-    WalkNodeProcessor processor{world, shape};
+    const auto start = ChunkPos::from_world(static_cast<std::int32_t>(std::floor(from.x)),
+                                            static_cast<std::int32_t>(std::floor(from.z)));
+    const auto cache = world.block_cache(start->x, start->z, 2);
+    WalkNodeProcessor processor{world, cache, shape};
     processor.reserve(128, 512);
     return processor.is_direct_path_between_points(from, to);
 }

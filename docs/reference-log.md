@@ -297,4 +297,21 @@
 - 测试：`pathfinder_never_steps_off_a_cliff`（单步落差 ≤ maxFallHeight；窄坑必须绕行、宽坑只给到崖边的局部路径）、`mob_does_not_walk_off_ledge`（深渊旁 panic/漫游 200 tick 每 tick 断言 y 不低于地面、身体不完全越过崖沿）、`hostile_mob_chases_and_attacks_player`、`passive_mob_retreats_when_hurt`；162 测试 × 3 配置（常规 / -Werror / ASan+UBSan）全绿，ASan 服务端实跑 500 tick 无 sanitizer 报错。
 - **补 `PathNavigateGround.getPathToPos` 的目标归一（漫游/逃窜走不远的一根因）**：`tryMoveToXYZ → getPathToPos` 在寻路前先修目标 —— 目标格是空气就向下找地面再取其上一格（取不到就向上找第一格非空气），目标是固体就上探到第一个非固体格。`RandomPositionGenerator` 给的落点是 `pos + (0..±10, ±7, 0..±10)` 的**原始偏移**，没做这一步时约 1/3 的落点落在草方块内部（`is_full_block` 判据只保证下方是满方块），生物走到崖边就"目标不可达"而原地不动；加上后 60 秒随机漫游位移从 0~1 格变为 14~31 格。
 - **测试断言必须是原版可保证的量**（踩坑记录）：`mob_does_not_walk_off_ledge` 最初断言"pos.x < 4.5"（连崖沿都不许碰），这是被删掉的崖边守卫的**自创**约束，原版并不保证 —— 实测原版语义下生物会走到崖沿前脚（pos.x 可到 4.30~4.49，取决于动量）但不会整体越过（走过去必然坠落）。挖掘范围也不够时生物会**绕行**（z=±11 处跨过 x=5，因为那不在挖掘区内，是实心地面）—— 那是正确行为，不是穿墙。现断言改为：① 深渊挖到世界边缘（无绕行可能）后 200 tick 内每 tick 断言 y 不低于地面高度（掉下去必跌破），② 收敛后 pos.x < 崖沿 + 猪半宽。
+- **性能收尾：给 PathFinder 配 ChunkCache（vanilla world.ChunkCache）**：vanilla 的
+  `PathNavigate.getPathToPos/getPathToEntityLiving` 不把 World 直接交给 PathFinder，而是先建一个
+  `ChunkCache`（只**持有覆盖搜索框的 Chunk 引用**，不复制方块数据），PathFinder/WalkNodeProcessor
+  的节点判定全部读它；只有 getSafePoint 里两处 AABB 碰撞检查用 `entity.world`（真世界）。
+  本实现此前节点判定直接走 `World::block_at` —— 每次读都过一把互斥锁，单次寻路 200 扩展 ×
+  8 邻居 × 多格分类要打上千次锁，实测 214µs/次。照抄 ChunkCache 结构落地 `World::BlockCache`
+  （构造时加锁抓 section 指针表，之后无锁读；未物化区块读时回退 `flat_baseline`，与
+  `block_at` 同语义；范围外 = AIR，与 vanilla 同）后 **~100µs/次**；120 生物 + 1 玩家的
+  tick 平均从 1.5ms 降到 0.77ms（稳态 worst 7~8ms，预算 50ms）。快照里的 section 指针只在
+  本次调用内有效（区块可能被释放），因此快照不跨 tick 保存——与 vanilla 每次寻路新建
+  ChunkCache 的生命周期一致。
+  - **踩坑（负坐标越界判据）**：BlockCache 的 dx/dz 是相对原点区块的偏移（覆盖
+    -radius..+radius），不能用 `dx < 0` 判越界——否则负半轴区块全部读成空气，生物在
+    负坐标区域"看不见地形"（寻路全失败）。正确判据是 `dx < -radius || dx > radius`；
+    且 chunk 坐标换算必须用 `ChunkPos::floor_div`（截断的 `>> 4` 会把 x≥0、z<0 象限错开
+    一个区块——项目里 `ChunkPos::from_world` 的注释早已记过这一条）。用
+    "快照 vs block_at 全量比对"的探针（窗口内 0 mismatch）验证。
 - 已知保留的近似：AI 视线（`can_see`）仍是自写的体素射线（vanilla 为 `Entity.canEntityBeSeen` 的 rayTrace + EntityAITarget 检查）；`PathNavigateGround.getPathToEntityLiving` 的 `.up()` 搜索盒与 `ChunkCache` 只是性能边界，语义一致故未复刻；蜘蛛（宽 1.4）的跳越格子规则按 `width >= 1.0` 分支保留，与源码同。

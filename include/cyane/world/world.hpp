@@ -46,8 +46,7 @@ public:
 
     // 修改方块：物化所在区块并标记脏；缺失 section 由 Chunk 按全空气创建
     // （超平坦区块物化时 section 0 已承载 baseline，不会走到该路径）
-    void set_block(std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state) {
-        if (wy < 0 || wy >= kChunkSizeY) {
+    void set_block(std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state) {        if (wy < 0 || wy >= kChunkSizeY) {
             return;
         }
         const auto pos = ChunkPos::from_world(wx, wz);
@@ -150,6 +149,82 @@ public:
         return chunks_.size();
     }
 
+    // 世界区块只读快照（对应 vanilla world.ChunkCache）：寻路一类"同一批坐标读上千次"
+    // 的只读负载用它。vanilla 的 ChunkCache 只**持有 Chunk 引用**（数组）不复制数据，
+    // 这里同样：构造时加锁把覆盖范围内的 section 指针取出来，之后无锁读。
+    // 指针只保证本次调用内有效（区块可能被释放），因此快照不得跨 tick 保存。
+    class BlockCache {
+    public:
+        BlockCache(World& world, std::int32_t cx, std::int32_t cz, std::int32_t radius) {
+            const auto side = static_cast<std::size_t>(radius * 2 + 1);
+            sections_.assign(side * side * kSectionsPerChunk, nullptr);
+            origin_cx_ = cx;
+            origin_cz_ = cz;
+            side_ = side;
+            radius_ = radius;
+            std::lock_guard<std::mutex> lock{world.mutex_};
+            for (std::int32_t dx = -radius; dx <= radius; ++dx) {
+                for (std::int32_t dz = -radius; dz <= radius; ++dz) {
+                    auto* sc = world.find_locked(ChunkPos{cx + dx, cz + dz});
+                    if (sc == nullptr) {
+                        continue;  // 未物化：留 null，读时回退 baseline
+                    }
+                    auto* dst = sections_.data() + table_offset(dx + radius_, dz + radius_);
+                    for (std::size_t sy = 0; sy < kSectionsPerChunk; ++sy) {
+                        auto* section = sc->chunk.section(sy);
+                        if (section != nullptr && !section->empty()) {
+                            dst[sy] = section;
+                        }
+                    }
+                }
+            }
+        }
+
+        [[nodiscard]] std::uint16_t at(std::int32_t wx, std::int32_t wy,
+                                        std::int32_t wz) const noexcept {
+            if (wy < 0 || wy >= kChunkSizeY) {
+                return kStateAir;
+            }
+            // dx/dz 是相对原点区块的偏移，本就覆盖 -radius..+radius —— 判越界要跟窗口比
+            const auto dx = ChunkPos::floor_div(wx, kChunkSizeX) - origin_cx_;
+            const auto dz = ChunkPos::floor_div(wz, kChunkSizeZ) - origin_cz_;
+            if (dx < -radius_ || dz < -radius_ || dx > radius_ || dz > radius_) {
+                return kStateAir;  // 范围外（等价 vanilla ChunkCache 越界 → AIR）
+            }
+            const auto* section =
+                sections_[table_offset(dx + radius_, dz + radius_) +
+                         static_cast<std::size_t>(wy) / 16];
+            if (section == nullptr) {
+                return flat_baseline(wy);  // 未物化区块 = 超平坦（与 block_at 同语义）
+            }
+            return section->state(section_index(static_cast<std::size_t>(wx & 15),
+                                                static_cast<std::size_t>(wy % 16),
+                                                static_cast<std::size_t>(wz & 15)));
+        }
+
+    private:
+        static constexpr std::size_t kSectionsPerChunk =
+            static_cast<std::size_t>(kChunkSizeY) / 16;
+
+        // 索引必须是 0..side_-1；调用方负责加 radius_ 归零
+        [[nodiscard]] std::size_t table_offset(std::int32_t ix, std::int32_t iz) const noexcept {
+            return (static_cast<std::size_t>(ix) * side_ + static_cast<std::size_t>(iz)) *
+                   kSectionsPerChunk;
+        }
+
+        std::vector<Section*> sections_;
+        std::int32_t origin_cx_{0};
+        std::int32_t origin_cz_{0};
+        std::size_t side_{0};
+        std::int32_t radius_{0};
+    };
+
+    // 覆盖 radius 个区块半径的只读快照（寻路用；越界读为空气，与 vanilla ChunkCache 同）
+    [[nodiscard]] BlockCache block_cache(std::int32_t cx, std::int32_t cz,
+                                         std::int32_t radius) const {
+        return BlockCache{const_cast<World&>(*this), cx, cz, radius};
+    }
+
 private:
     struct StoredChunk {
         Chunk chunk;
@@ -162,6 +237,11 @@ private:
     }
 
     [[nodiscard]] const StoredChunk* find_locked(ChunkPos pos) const {
+        const auto it = chunks_.find(chunk_key(pos));
+        return it != chunks_.end() ? &it->second : nullptr;
+    }
+
+    [[nodiscard]] StoredChunk* find_locked(ChunkPos pos) noexcept {
         const auto it = chunks_.find(chunk_key(pos));
         return it != chunks_.end() ? &it->second : nullptr;
     }
