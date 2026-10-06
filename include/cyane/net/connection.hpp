@@ -204,7 +204,6 @@ private:
     // 生成掉落物的两个包（SpawnObject + EntityMetadata）编码到 out_spawn/out_meta
     void encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn, ByteWriter& out_meta) const;
     void send_existing_drops();
-    void send_existing_mobs();
     // 区块送达后补发该区块内的生物与掉落物（客户端 spawnEntity 需要区块已加载；
     // 生成包先于区块到达会进 entitySpawnQueue，区块期间被卸载就永久不可见）
     void send_chunk_entities(std::int32_t cx, std::int32_t cz);

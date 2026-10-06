@@ -363,3 +363,4 @@
 - **闲置注视**：`PathfinderGoalLookAtPlayer(8.0)` 看 8 格内最近玩家（faceEntity 限速转向）+ `RandomLookaround` 无目标时 1/50 概率随机转头，挂在 idle 分支。
 - 测试：`mob_damage_and_death` 更新（死亡 → 20 tick 动画期 → 移除，中途 despawn=false 事件一次）；170 × 常规/-Werror/ASan+UBSan 全绿，ASan 服务端实跑无报错。
 - 已知保留近似：着火视觉（ON_FIRE metadata flag index 0）未广播——客户端看不到火苗，只有扣血；死亡白烟粒子未发；XP 球未做；水中浮力/游泳未做（生物落水会沉底）。
+- **重生后生物消失的最后一环（R-027 补充）**：区块重流重发链路本身是通的（探针实测 12/12 重发），真正的洞是**死亡动画期与重生重发重叠**——`death_timer > 0` 的生物仍在 `snapshot()` 里，`send_chunk_entities` 会把它当活体重发 SpawnMob，但客户端（removeAllEntities 后）从未收到它的 EntityStatus 3，1 秒后 despawn 事件销毁它——表现为"重生后某生物闪一下就消失"。修复：`send_chunk_entities` 跳过 `death_timer >= 0` 的生物（它们本来马上就要消失，不重发客户端才一致）。同时删除死代码 `send_existing_mobs`（R-023 起无调用方）。
