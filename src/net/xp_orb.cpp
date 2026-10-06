@@ -69,9 +69,9 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
 
         // 更新位置（使用碰撞检测）
         auto box = world::entity_box(it->x, it->y, it->z, 0.25f, 0.25f);
-        double dx = it->velocity_x;
-        double dy = it->velocity_y;
-        double dz = it->velocity_z;
+        double dx = static_cast<double>(it->velocity_x);
+        double dy = static_cast<double>(it->velocity_y);
+        double dz = static_cast<double>(it->velocity_z);
         const auto outcome = world::move_with_collision(world, box, dx, dy, dz, 0.0);
         it->x = (box.min_x + box.max_x) * 0.5;
         it->y = box.min_y;

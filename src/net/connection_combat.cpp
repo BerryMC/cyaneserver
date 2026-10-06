@@ -129,12 +129,11 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
         send_slot(0, static_cast<std::int16_t>(item::PlayerInventory::hotbar_slot(selected_slot_)),
                   after);
     }
-    // 挤奶：给玩家一个牛奶桶
+    // 挤奶：给玩家一个牛奶桶（1.12.2 item id 335；325 空桶 / 326 水桶 / 336 岩浆桶）
     if (mob->type == 92 && held.id == 325) {
-        // 326 = Milk Bucket
-        inventory_.set_slot(item::PlayerInventory::hotbar_slot(selected_slot_), item::ItemStack{326, 1, 0});
+        inventory_.set_slot(item::PlayerInventory::hotbar_slot(selected_slot_), item::ItemStack{335, 1, 0});
         send_slot(0, static_cast<std::int16_t>(item::PlayerInventory::hotbar_slot(selected_slot_)),
-                  item::ItemStack{326, 1, 0});
+                  item::ItemStack{335, 1, 0});
     }
     return true;
 }

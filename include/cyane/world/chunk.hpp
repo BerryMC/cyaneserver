@@ -1,13 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "cyane/world/blocks.hpp"
 #include "cyane/world/blocks.hpp"
 
 namespace cyane::world {
@@ -66,28 +65,33 @@ public:
 
     [[nodiscard]] const ChunkPos& pos() const noexcept { return pos_; }
 
+    // 定长 section 数组：Section 地址与 Chunk 同生命周期稳定（unordered_map 节点内联），
+    // 允许 BlockCache 等在锁外缓存 section 指针做无锁读（vector 版本会因 resize 悬垂）
     [[nodiscard]] Section* section(std::size_t y) noexcept {
-        if (y < sections_.size()) {
-            return &sections_[y];
-        }
-        return nullptr;
+        return y < kSectionCount ? &sections_[y] : nullptr;
     }
 
     [[nodiscard]] const Section* section(std::size_t y) const noexcept {
-        if (y < sections_.size()) {
-            return &sections_[y];
-        }
-        return nullptr;
+        return y < kSectionCount ? &sections_[y] : nullptr;
     }
 
     void set_section(std::size_t y, Section section) {
-        if (y >= sections_.size()) {
-            sections_.resize(y + 1);
+        if (y < kSectionCount) {
+            sections_[y] = std::move(section);
         }
-        sections_[y] = std::move(section);
     }
 
-    [[nodiscard]] std::span<const Section> sections() const noexcept { return sections_; }
+    [[nodiscard]] std::span<const Section> sections() const noexcept { return {sections_}; }
+
+    // 是否有任何 section 携带方块数据（原 sections() 非空判断的等价语义）
+    [[nodiscard]] bool has_blocks() const noexcept {
+        for (const auto& section : sections_) {
+            if (!section.empty()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     [[nodiscard]] Result<std::uint16_t> block_state(std::int32_t wx, std::int32_t wy, std::int32_t wz) const {
         const int sx = wx - pos_.world_x();
@@ -95,11 +99,7 @@ public:
         if (sx < 0 || sx >= kChunkSizeX || sz < 0 || sz >= kChunkSizeZ || wy < 0 || wy >= kChunkSizeY) {
             return make_error(ErrorCode::world, "block coordinates out of chunk bounds");
         }
-        const std::size_t y = static_cast<std::size_t>(wy) / 16;
-        if (y >= sections_.size()) {
-            return kStateAir;
-        }
-        const Section& sec = sections_[y];
+        const Section& sec = sections_[static_cast<std::size_t>(wy) / 16];
         if (sec.empty()) {
             return kStateAir;
         }
@@ -114,17 +114,14 @@ public:
         if (sx < 0 || sx >= kChunkSizeX || sz < 0 || sz >= kChunkSizeZ || wy < 0 || wy >= kChunkSizeY) {
             return;
         }
-        const std::size_t y = static_cast<std::size_t>(wy) / 16;
-        if (y >= sections_.size()) {
-            sections_.resize(y + 1);
-        }
-        sections_[y].set(static_cast<std::size_t>(sx), static_cast<std::size_t>(wy % 16),
-                         static_cast<std::size_t>(sz), state);
+        sections_[static_cast<std::size_t>(wy) / 16].set(
+            static_cast<std::size_t>(sx), static_cast<std::size_t>(wy % 16),
+            static_cast<std::size_t>(sz), state);
     }
 
 private:
     ChunkPos pos_;
-    std::vector<Section> sections_;
+    std::array<Section, kSectionCount> sections_{};
 };
 
 }

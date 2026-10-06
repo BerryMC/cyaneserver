@@ -185,7 +185,7 @@ Result<std::size_t> WorldPersistence::load() {
                 }
                 const world::ChunkPos pos{rx * kRegionChunks + cx, rz * kRegionChunks + cz};
                 const bool has_content =
-                    !decoded->chunk.sections().empty() || !decoded->entities.empty();
+                    !decoded->chunk.has_blocks() || !decoded->entities.empty();
                 world_.load_chunk(pos, std::move(decoded->chunk), /*dirty=*/false,
                                   std::move(**chunk));
                 for (const auto& [key, chest] : decoded->entities.chests) {

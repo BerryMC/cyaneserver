@@ -75,6 +75,10 @@ struct Mob {
     // 无敌窗（hurtResistantTime=max 20，>10 时仅更高伤害可破防，只结算差值）
     std::int32_t hurt_resistant_ticks{0};
     float last_damage{0.0f};
+    // Entity.fire：剩余燃烧 tick（setFire(seconds) = seconds*20；% 20 == 0 的 tick 扣 1 血）
+    std::int32_t fire_ticks{0};
+    // 日光燃烧检查节流（vanilla 每 10 tick 一次）
+    std::int32_t burn_check_ticks{0};
     // 交互状态
     bool sheared{false};     // 羊：被剪毛后不再掉落羊毛
     bool in_love{false};     // 动物：爱心模式（繁殖冷却）
@@ -164,15 +168,26 @@ struct MobSound {
     double z{0.0};
 };
 
+// 自然刷怪生成事件
+struct MobSpawn {
+    std::uint32_t entity_id{0};
+    std::int32_t type{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    float yaw{0.0f};
+};
+
 struct MobTickResult {
     std::vector<MobMove> moved;
     std::vector<MobAttack> attacks;
     std::vector<MobDeath> deaths;
-    std::vector<MobShot> shots;        // 骷髅射箭
+    std::vector<MobShot> shots;        // 骷髎射箭
     std::vector<MobExplosion> explosions;  // 苦力怕引爆（自爆即死亡）
     std::vector<MobIgnition> ignitions;    // 苦力怕点燃（引信开始）
-    std::vector<MobDraw> draws;            // 骷髅举弓/收弓
+    std::vector<MobDraw> draws;            // 骷髎举弓/收弓
     std::vector<MobSound> sounds;          // 环境音、伤害音等
+    std::vector<MobSpawn> spawns;          // 自然刷怪
 };
 
 // 受伤结果：是否命中、是否致死、剩余血量
@@ -193,6 +208,9 @@ public:
 
     // 按类型在指定位置生成一只生物，返回实体 id（未知类型返回 0）
     std::uint32_t spawn(std::int32_t type, double x, double y, double z, float yaw);
+
+    // 内部调用：在已持锁时生成生物（tick→spawn_cycle→spawn 路径）
+    std::uint32_t spawn_locked(std::int32_t type, double x, double y, double z, float yaw);
 
     // 造成伤害（含击退方向）：死亡时从表里移除并回报坐标。
     // 击退强度：近战 0.4（EntityLiving.a(entity, 0.4F, ...)），爆炸传 impact。
@@ -272,6 +290,11 @@ public:
 
 private:
     [[nodiscard]] bool remove_locked(std::uint32_t id);
+
+    // 自然刷怪：每隔 kSpawnIntervalTick 检查玩家周围 24~128 格环，
+    // 依据光照/地形/生物上限生成敌对/被动生物。
+    void spawn_cycle(world::World& world, std::span<const PlayerSnapshot> players,
+                     bool daytime, MobTickResult& result);
 
     mutable std::mutex mutex_;
     std::vector<Mob> mobs_;

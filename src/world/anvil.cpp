@@ -331,7 +331,7 @@ struct SectionArrays {
 
 Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities& entities) {
     List section_list;
-    for (std::size_t sy = 0; sy < chunk.sections().size(); ++sy) {
+    for (std::size_t sy = 0; sy < kSectionCount; ++sy) {
         const auto& section = chunk.sections()[sy];
         if (section.empty()) {
             continue;
@@ -489,10 +489,10 @@ Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkE
     // 逐 section 覆盖 Blocks/Data/Add，保留光照等字段
     if (auto* sections = level->find_mut("Sections"); sections != nullptr) {
         if (auto* list = std::get_if<List>(&sections->data); list != nullptr) {
-            std::vector<bool> patched(chunk.sections().size(), false);
+            std::vector<bool> patched(kSectionCount, false);
             for (auto& section : *list) {
                 const auto y = section.find("Y") ? section.find("Y")->scalar() : std::nullopt;
-                if (!y || *y < 0 || static_cast<std::size_t>(*y) >= chunk.sections().size()) {
+                if (!y || *y < 0 || static_cast<std::size_t>(*y) >= kSectionCount) {
                     continue;
                 }
                 const auto* model = chunk.section(static_cast<std::size_t>(*y));
@@ -511,7 +511,7 @@ Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkE
                 patched[static_cast<std::size_t>(*y)] = true;
             }
             // 模型有而源档缺失的非空 section：追加
-            for (std::size_t sy = 0; sy < chunk.sections().size(); ++sy) {
+            for (std::size_t sy = 0; sy < kSectionCount; ++sy) {
                 const auto* model = chunk.section(sy);
                 if (patched[sy] || model == nullptr || model->states.size() != kSectionBlockCount ||
                     section_all_air(*model)) {

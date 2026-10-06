@@ -226,7 +226,7 @@ CYANE_TEST(region_reads_vanilla_chunk_record_format) {
     // 原版真实区块：位置与超平坦地形不同的方块数据
     CYANE_CHECK_EQ(decoded->chunk.pos().x, 0);
     CYANE_CHECK_EQ(decoded->chunk.pos().z, 0);
-    CYANE_CHECK(!decoded->chunk.sections().empty());
+    CYANE_CHECK(decoded->chunk.has_blocks());
     std::size_t non_air = 0;
     for (const auto& section : decoded->chunk.sections()) {
         for (const auto state : section.states) {
@@ -312,7 +312,7 @@ CYANE_TEST(save_preserves_vanilla_fields_losslessly) {
     const auto original = world::decode_chunk(ByteSpan{original_nbt});
     CYANE_CHECK(original.has_value());
     std::int32_t probe_x = -1, probe_y = -1, probe_z = -1;
-    for (std::size_t sy = 0; sy < original->chunk.sections().size() && probe_y < 0; ++sy) {
+    for (std::size_t sy = 0; sy < world::kSectionCount && probe_y < 0; ++sy) {
         const auto* section = original->chunk.section(sy);
         if (section == nullptr) {
             continue;

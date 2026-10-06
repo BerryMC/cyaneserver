@@ -103,7 +103,7 @@ CYANE_TEST(anvil_all_air_chunk_encodes_with_empty_sections) {
     CYANE_CHECK(encoded.has_value());
     auto decoded = world::decode_chunk(ByteSpan{*encoded});
     CYANE_CHECK(decoded.has_value());
-    CYANE_CHECK(decoded->chunk.sections().empty());
+    CYANE_CHECK(!decoded->chunk.has_blocks());
     CYANE_CHECK(decoded->entities.empty());
 }
 

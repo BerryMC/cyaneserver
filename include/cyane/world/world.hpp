@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <unordered_map>
@@ -70,10 +71,11 @@ public:
     // source_nbt 为磁盘原始 NBT，保存时作为无损打补丁的底（空则整体重编码）。
     void load_chunk(ChunkPos pos, Chunk chunk, bool dirty = false, Bytes source_nbt = {}) {
         std::lock_guard<std::mutex> lock{mutex_};
-        auto& sc = chunks_[chunk_key(pos)];
-        sc.chunk = std::move(chunk);
-        sc.dirty = dirty;
-        sc.source_nbt = std::move(source_nbt);
+        auto sc = std::make_shared<StoredChunk>();
+        sc->chunk = std::move(chunk);
+        sc->dirty = dirty;
+        sc->source_nbt = std::move(source_nbt);
+        chunks_.insert_or_assign(chunk_key(pos), std::move(sc));
     }
 
     // 区块的磁盘原始 NBT（无则空）
@@ -83,6 +85,34 @@ public:
             return sc->source_nbt;
         }
         return {};
+    }
+
+    // 有效光照等级：max(sky_light, block_light)，返回 0 表示该位置无区块/无光照数据。
+    // 用于生成判定：实体只能在区块内（有区块数据）生成。
+    [[nodiscard]] std::uint8_t light_at(std::int32_t wx, std::int32_t wy, std::int32_t wz) const {
+        if (wy < 0 || wy >= kChunkSizeY) {
+            return 0;
+        }
+        const auto pos = ChunkPos::from_world(wx, wz);
+        if (!pos) {
+            return 0;
+        }
+        std::lock_guard<std::mutex> lock{mutex_};
+        const auto* sc = find_locked(*pos);
+        if (sc == nullptr) {
+            return 0;
+        }
+        const auto* section = sc->chunk.section(static_cast<std::size_t>(wy) / 16);
+        if (section == nullptr || section->empty() ||
+            section->sky_light.empty() || section->block_light.empty()) {
+            return 0;
+        }
+        const auto idx = section_index(static_cast<std::size_t>(wx - pos->world_x()),
+                                       static_cast<std::size_t>(wy % 16),
+                                       static_cast<std::size_t>(wz - pos->world_z()));
+        const auto sky = static_cast<std::uint8_t>(section->sky_light[idx >> 1] >> ((idx & 1u) ? 4u : 0u) & 0xF);
+        const auto block = static_cast<std::uint8_t>(section->block_light[idx >> 1] >> ((idx & 1u) ? 4u : 0u) & 0xF);
+        return static_cast<std::uint8_t>(std::max(sky, block));
     }
 
     // 按需加载回调：区块不在内存时（被释放后玩家回来）从磁盘重读，
@@ -115,11 +145,12 @@ public:
         return find_locked(pos) != nullptr;
     }
 
-    // 释放干净区块（内存上限管理）；脏区块保留至落盘
+    // 释放干净区块（内存上限管理）；脏区块保留至落盘。
+    // shared_ptr 所有权：BlockCache 等锁外读者持副本期间区块不会被析构
     void release_chunk(ChunkPos pos) {
         std::lock_guard<std::mutex> lock{mutex_};
         const auto key = chunk_key(pos);
-        if (auto it = chunks_.find(key); it != chunks_.end() && !it->second.dirty) {
+        if (auto it = chunks_.find(key); it != chunks_.end() && !it->second->dirty) {
             chunks_.erase(it);
         }
     }
@@ -129,7 +160,7 @@ public:
         std::lock_guard<std::mutex> lock{mutex_};
         out.reserve(chunks_.size());
         for (const auto& [key, sc] : chunks_) {
-            if (sc.dirty) {
+            if (sc->dirty) {
                 out.push_back(ChunkPos{static_cast<std::int32_t>(key >> 32),
                                        static_cast<std::int32_t>(key & 0xFFFFFFFFll)});
             }
@@ -140,7 +171,7 @@ public:
     void clear_dirty(ChunkPos pos) {
         std::lock_guard<std::mutex> lock{mutex_};
         if (auto it = chunks_.find(chunk_key(pos)); it != chunks_.end()) {
-            it->second.dirty = false;
+            it->second->dirty = false;
         }
     }
 
@@ -152,12 +183,19 @@ public:
     // 世界区块只读快照（对应 vanilla world.ChunkCache）：寻路一类"同一批坐标读上千次"
     // 的只读负载用它。vanilla 的 ChunkCache 只**持有 Chunk 引用**（数组）不复制数据，
     // 这里同样：构造时加锁把覆盖范围内的 section 指针取出来，之后无锁读。
-    // 指针只保证本次调用内有效（区块可能被释放），因此快照不得跨 tick 保存。
+    // 快照同时持有区块的 shared_ptr——锁外读期间区块即便被 release 也只是引用计数
+    // 降级，section（Chunk 内定长数组，地址稳定）始终有效。快照不得跨 tick 保存。
+    struct StoredChunk {
+        Chunk chunk;
+        Bytes source_nbt;  // 磁盘原始 NBT；无损保存时打补丁的底
+        bool dirty{false};
+    };
+
     class BlockCache {
     public:
         BlockCache(World& world, std::int32_t cx, std::int32_t cz, std::int32_t radius) {
             const auto side = static_cast<std::size_t>(radius * 2 + 1);
-            sections_.assign(side * side * kSectionsPerChunk, nullptr);
+            chunks_.assign(side * side, {});
             origin_cx_ = cx;
             origin_cz_ = cz;
             side_ = side;
@@ -165,15 +203,19 @@ public:
             std::lock_guard<std::mutex> lock{world.mutex_};
             for (std::int32_t dx = -radius; dx <= radius; ++dx) {
                 for (std::int32_t dz = -radius; dz <= radius; ++dz) {
-                    auto* sc = world.find_locked(ChunkPos{cx + dx, cz + dz});
-                    if (sc == nullptr) {
-                        continue;  // 未物化：留 null，读时回退 baseline
+                    auto owner = world.find_shared_locked(ChunkPos{cx + dx, cz + dz});
+                    if (owner == nullptr) {
+                        continue;  // 未物化：留空，读时回退 baseline
                     }
-                    auto* dst = sections_.data() + table_offset(dx + radius_, dz + radius_);
+                    const auto slot =
+                        static_cast<std::size_t>(dx + radius_) * side_ +
+                        static_cast<std::size_t>(dz + radius_);
+                    auto& cached = chunks_[slot];
+                    cached.owner = std::move(owner);
                     for (std::size_t sy = 0; sy < kSectionsPerChunk; ++sy) {
-                        auto* section = sc->chunk.section(sy);
+                        const auto* section = cached.owner->chunk.section(sy);
                         if (section != nullptr && !section->empty()) {
-                            dst[sy] = section;
+                            cached.sections[sy] = section;
                         }
                     }
                 }
@@ -191,11 +233,12 @@ public:
             if (dx < -radius_ || dz < -radius_ || dx > radius_ || dz > radius_) {
                 return kStateAir;  // 范围外（等价 vanilla ChunkCache 越界 → AIR）
             }
-            const auto* section =
-                sections_[table_offset(dx + radius_, dz + radius_) +
-                         static_cast<std::size_t>(wy) / 16];
+            const auto slot = static_cast<std::size_t>(dx + radius_) * side_ +
+                              static_cast<std::size_t>(dz + radius_);
+            const auto& cached = chunks_[slot];
+            const auto* section = cached.sections[static_cast<std::size_t>(wy) / 16];
             if (section == nullptr) {
-                return flat_baseline(wy);  // 未物化区块 = 超平坦（与 block_at 同语义）
+                return flat_baseline(wy);  // 空 section：与 block_at 的 baseline 回退同语义
             }
             return section->state(section_index(static_cast<std::size_t>(wx & 15),
                                                 static_cast<std::size_t>(wy % 16),
@@ -206,13 +249,12 @@ public:
         static constexpr std::size_t kSectionsPerChunk =
             static_cast<std::size_t>(kChunkSizeY) / 16;
 
-        // 索引必须是 0..side_-1；调用方负责加 radius_ 归零
-        [[nodiscard]] std::size_t table_offset(std::int32_t ix, std::int32_t iz) const noexcept {
-            return (static_cast<std::size_t>(ix) * side_ + static_cast<std::size_t>(iz)) *
-                   kSectionsPerChunk;
-        }
+        struct CachedChunk {
+            std::shared_ptr<const StoredChunk> owner;
+            std::array<const Section*, kSectionsPerChunk> sections{};
+        };
 
-        std::vector<Section*> sections_;
+        std::vector<CachedChunk> chunks_;
         std::int32_t origin_cx_{0};
         std::int32_t origin_cz_{0};
         std::size_t side_{0};
@@ -226,46 +268,46 @@ public:
     }
 
 private:
-    struct StoredChunk {
-        Chunk chunk;
-        Bytes source_nbt;  // 磁盘原始 NBT；无损保存时打补丁的底
-        bool dirty{false};
-    };
-
     [[nodiscard]] static std::int64_t chunk_key(ChunkPos pos) noexcept {
         return (static_cast<std::int64_t>(pos.x) << 32) | static_cast<std::uint32_t>(pos.z);
     }
 
     [[nodiscard]] const StoredChunk* find_locked(ChunkPos pos) const {
         const auto it = chunks_.find(chunk_key(pos));
-        return it != chunks_.end() ? &it->second : nullptr;
+        return it != chunks_.end() ? it->second.get() : nullptr;
     }
 
     [[nodiscard]] StoredChunk* find_locked(ChunkPos pos) noexcept {
         const auto it = chunks_.find(chunk_key(pos));
-        return it != chunks_.end() ? &it->second : nullptr;
+        return it != chunks_.end() ? it->second.get() : nullptr;
+    }
+
+    // BlockCache 构造用：连同所有权一起交出（锁外读期间区块不会被 release 析构）
+    [[nodiscard]] std::shared_ptr<const StoredChunk> find_shared_locked(ChunkPos pos) const {
+        const auto it = chunks_.find(chunk_key(pos));
+        return it != chunks_.end() ? it->second : nullptr;
     }
 
     [[nodiscard]] StoredChunk& ensure_locked(ChunkPos pos) {
         const auto key = chunk_key(pos);
         if (auto it = chunks_.find(key); it != chunks_.end()) {
-            return it->second;
+            return *it->second;
         }
         // 先试磁盘按需加载（释放区块回归），失败再物化超平坦
         if (loader_) {
             Chunk loaded{pos};
             Bytes source;
             if (loader_(pos, loaded, source)) {
-                auto& sc = chunks_[key];
-                sc.chunk = std::move(loaded);
-                sc.source_nbt = std::move(source);
-                sc.dirty = false;
-                return sc;
+                auto sc = std::make_shared<StoredChunk>();
+                sc->chunk = std::move(loaded);
+                sc->source_nbt = std::move(source);
+                sc->dirty = false;
+                return *chunks_.emplace(key, std::move(sc)).first->second;
             }
         }
-        StoredChunk sc;
-        sc.chunk = materialize_flat(pos);
-        return chunks_.emplace(key, std::move(sc)).first->second;
+        auto sc = std::make_shared<StoredChunk>();
+        sc->chunk = materialize_flat(pos);
+        return *chunks_.emplace(key, std::move(sc)).first->second;
     }
 
     // 超平坦物化：section 0 显式承载 baseline（bedrock/dirt/grass），其余 section 缺失 = 空气
@@ -288,7 +330,8 @@ private:
         }
         return section;
     }    mutable std::mutex mutex_;
-    std::unordered_map<std::int64_t, StoredChunk> chunks_;
+    // shared_ptr：release 后 BlockCache 等锁外读者仍可安全持有区块
+    std::unordered_map<std::int64_t, std::shared_ptr<StoredChunk>> chunks_;
     ChunkLoader loader_;  // WorldPersistence 注入；ensure_locked 在持锁状态下调用
 };
 

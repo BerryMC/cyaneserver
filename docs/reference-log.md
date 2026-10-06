@@ -364,3 +364,13 @@
 - 测试：`mob_damage_and_death` 更新（死亡 → 20 tick 动画期 → 移除，中途 despawn=false 事件一次）；170 × 常规/-Werror/ASan+UBSan 全绿，ASan 服务端实跑无报错。
 - 已知保留近似：着火视觉（ON_FIRE metadata flag index 0）未广播——客户端看不到火苗，只有扣血；死亡白烟粒子未发；XP 球未做；水中浮力/游泳未做（生物落水会沉底）。
 - **重生后生物消失的最后一环（R-027 补充）**：区块重流重发链路本身是通的（探针实测 12/12 重发），真正的洞是**死亡动画期与重生重发重叠**——`death_timer > 0` 的生物仍在 `snapshot()` 里，`send_chunk_entities` 会把它当活体重发 SpawnMob，但客户端（removeAllEntities 后）从未收到它的 EntityStatus 3，1 秒后 despawn 事件销毁它——表现为"重生后某生物闪一下就消失"。修复：`send_chunk_entities` 跳过 `death_timer >= 0` 的生物（它们本来马上就要消失，不重发客户端才一致）。同时删除死代码 `send_existing_mobs`（R-023 起无调用方）。
+
+### R-029 — 崩溃与掉落修复：引爆 UAF、damageDropped、setFire 语义、BlockCache 所有权
+
+- 来源：`EntityCreeper.onExplode/explode()`（自爆即 setDead，无死亡动画）、`Block.damageDropped`（默认返回 0，BlockColored/Sand/Planks/StoneSlab/Quartz/Log 等才保留 meta）、`EntityZombie.onLivingUpdate`（日光点燃：`getBrightness()>0.5 && rand*30<(b-0.4)*2 && canSeeSky` → `setFire(8)`；`Entity.onEntityUpdate`：fire%20==0 时 1 伤害）、1.12.2 物品 id 表（digminecraft item_id_list_pc_1_12：325 空桶/326 水桶/335 牛奶桶；台阶物品 43/126/182，楼梯物品=方块 id）。
+- **引爆 UAF（glibc "double free detected in tcache 2" 根因）**：苦力怕引信到 30 tick 的分支在 `for (auto& mob : mobs_)` 迭代内 `remove_locked`（swap-pop），`break` 只跳出 switch——循环与物理段继续用已析构槽位（其 `path` vector 已 free），重寻路的 move-assign 对悬垂指针再 free → 堆损坏 + 同线程后续掉落物包畸变（"爆炸后掉落物不显示"）。修复：引爆改推 `to_remove`，循环后统一擦除。
+- **掉落 damage 语义**：`block_drops` 默认分支原样回传方块 meta（楼梯朝向、熔炉/箱子朝向位都进了物品 damage）——vanilla `damageDropped` 默认 0。修复：默认掉 damage 0；变体方块（泥土/木板/沙/海绵/砂岩/羊毛/染色玻璃及板/染色陶瓦/石英/圆石墙/石砖/原木&3/ prismarine/红砂岩）保留 meta；双层台阶（43/125/181）掉两个对应半砖（44/126/182，meta&7）。砾石 10% 燧石的 `static mt19937` 改 `thread_local`（连接线程与 tick 线程并发挖/炸的数据竞争）。
+- **日光燃烧**：旧实现挂在 despawn 的 `idle_ticks%20` 上（玩家 32 格内恒 0 → 每 tick 1 血，"几秒晒死"）。改为原版语义：每 10 tick 检查，白天 + 露天 + 光照 b=light/15>0.5 且 `rand*30<(b-0.4)*2` → `fire_ticks=max(fire,160)`（8 秒）；fire>0 期间 %20==0 的 tick 扣 1 血；水/岩浆熄灭/续燃（岩浆 250 tick）。
+- **牛奶桶**：右键牛手持 325（空桶）原发 326（水桶，"接成尿了"）→ 335（milk bucket，1.12.2 id 表核对）。
+- **BlockCache 所有权**（用户场景崩溃面）：`Chunk::sections_` 由 vector 改定长 `std::array<Section,16>`（section 地址随 Chunk 稳定，不再被 set_block_state 的 resize 重排）；`World::chunks_` 改 `shared_ptr<StoredChunk>`，BlockCache 快照持所有权——连接线程 `release_chunk`（区块卸载）与 tick 线程寻路锁外读并发时，被释放区块只是引用计数降级。`sections().empty()` 语义改 `has_blocks()`；anvil/持久化/测试同步。
+- 测试：`creeper_fuse_then_explodes` 等既有爆炸/掉落测试全绿；173 × 常规/-Werror/ASan+UBSan 全绿；探针 5 轮 ×4 次连环爆炸（16 次引爆、244+ 方块破坏、164 掉落物）服务端存活，掉落物 damage 全 0、战利品 id 正确（363/334/365/288/289）。

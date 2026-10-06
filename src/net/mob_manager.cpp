@@ -16,7 +16,12 @@ constexpr double kPi = 3.14159265358979323846;
 
 // 1.12.2 被动生物类型 id
 constexpr std::array<std::int32_t, 4> kPassiveTypes = {90, 91, 92, 93};  // 猪 羊 牛 鸡
+constexpr std::array<std::int32_t, 3> kHostileTypes = {39, 40, 51};     // 僵尸 骷髅 苦力怕
 constexpr std::int32_t kHostileScanInterval = 10;  // 目标扫描节流：每 0.5s
+constexpr std::int32_t kSpawnMinDistance = 24;       // 刷怪最小距离（格）
+constexpr std::int32_t kSpawnMaxDistance = 128;      // 刷怪最大距离（格）
+constexpr std::int32_t kSpawnAttemptsPerCycle = 3;   // 每次刷怪尝试次数
+constexpr int kSpawnCapPerCategory = 5;             // 各类生物上限（敌对/被动各 5 个）
 constexpr std::int32_t kAttackIntervalTicks = 20;  // 近战挥击冷却（vanilla 20 tick）
 constexpr std::int32_t kFuseTicks = 30;            // 苦力怕引信（EntityCreeper.maxFuseTicks）
 constexpr std::int32_t kShootIntervalTicks = 40;   // 骷髅射箭间隔（dm(): 非困难难度 b0=40）
@@ -112,6 +117,11 @@ void MobManager::spawn_passive(std::size_t count, world::World& world, double ce
 }
 
 std::uint32_t MobManager::spawn(std::int32_t type, double x, double y, double z, float yaw) {
+    std::lock_guard<std::mutex> lock{mutex_};
+    return spawn_locked(type, x, y, z, yaw);
+}
+
+std::uint32_t MobManager::spawn_locked(std::int32_t type, double x, double y, double z, float yaw) {
     const auto species = world::mob_type(type);
     if (!species) {
         return 0;
@@ -122,7 +132,6 @@ std::uint32_t MobManager::spawn(std::int32_t type, double x, double y, double z,
     mob.pos = entity::Position{x, y, z, yaw, 0.0f};
     mob.health = species->health;
     mob.state_ticks = rand_ticks(20, 100);
-    std::lock_guard<std::mutex> lock{mutex_};
     mobs_.push_back(std::move(mob));
     return mobs_.back().entity_id;
 }
@@ -230,6 +239,7 @@ bool MobManager::remove_locked(std::uint32_t id) {
 
 bool MobManager::interact(std::uint32_t id, std::int16_t held_item_id,
                            std::int16_t held_item_damage) {
+    (void)held_item_damage;
     std::lock_guard<std::mutex> lock{mutex_};
     for (auto& mob : mobs_) {
         if (mob.entity_id != id) {
@@ -381,11 +391,17 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             }
         }
 
-        // ---- 日光燃烧（僵尸/骷髅：白天 + 露天 → setFire(8)，持续烧 1 血/秒） ----
-        if (species->burns_in_daylight && daytime && mob.idle_ticks % 20 == 0) {
-            // canSeeSky 近似：头顶到世界顶无实心方块
+        // ---- 日光燃烧（僵尸/骷髅）：vanilla 每 10 tick 检查，露天 + 光 > 0.5 →
+        // setFire(8) 起 8 秒（fire_ticks 160）。fire > 0 期间每 20 tick 扣 1 血（Entity.onEntityUpdate）。
+        // 雨水熄灭（isWet）。
+        if (species->burns_in_daylight && mob.burn_check_ticks > 0) {
+            --mob.burn_check_ticks;
+        }
+        if (species->burns_in_daylight && mob.burn_check_ticks <= 0) {
+            mob.burn_check_ticks = 10;  // 原版每 10 tick 检查一次
+            const int32_t fy = static_cast<int32_t>(std::floor(mob.pos.y));
             bool sky_clear = true;
-            for (auto sy = static_cast<std::int32_t>(std::floor(mob.pos.y)) + 2; sy < 256; ++sy) {
+            for (int32_t sy = fy + 2; sy < 256 && sy >= 0; ++sy) {
                 if (world::is_solid(world.block_at(
                         static_cast<std::int32_t>(std::floor(mob.pos.x)), sy,
                         static_cast<std::int32_t>(std::floor(mob.pos.z))))) {
@@ -393,28 +409,44 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     break;
                 }
             }
-            if (sky_clear && feet_id != 10 && feet_id != 11) {  // 水中/岩浆中不烧
+            const bool wet = in_water;
+            if (daytime && sky_clear && !wet) {
+                // vanilla EntityZombie.onLivingUpdate：b = 光的 0..1 值（light/15），
+                // b > 0.5 && rand*30 < (b - 0.4)*2 → setFire(8)（160 tick）
+                const float brightness =
+                    static_cast<float>(world.light_at(
+                        static_cast<std::int32_t>(std::floor(mob.pos.x)), fy,
+                        static_cast<std::int32_t>(std::floor(mob.pos.z)))) /
+                    15.0f;
+                if (brightness > 0.5f && rand01() * 30.0 < static_cast<double>(brightness - 0.4f) * 2.0) {
+                    if (mob.fire_ticks < 160) {
+                        mob.fire_ticks = 160;
+                    }
+                }
+            }
+            if (in_lava) {
+                // setOnFireFromLava：岩浆里 250 tick 起
+                if (mob.fire_ticks < 250) {
+                    mob.fire_ticks = 250;
+                }
+            } else if (in_water) {
+                mob.fire_ticks = 0;  // 雨水/水熄灭
+            }
+        }
+        if (mob.fire_ticks > 0) {
+            if (mob.fire_ticks % 20 == 0) {
                 mob.health -= 1.0f;
                 result.sounds.push_back(MobSound{mob.entity_id, species->hurt_sound, mob.pos.x,
                                                  mob.pos.y, mob.pos.z});
                 if (mob.health <= 0.0f) {
                     mob.death_timer = 20;
-                    // 设置经验值
-                    int experience = 0;
-                    if (species) {
-                        if (species->hostile) {
-                            experience = species->xp_value; // 敌对生物固定 5 点经验
-                        } else {
-                            // 被动生物：1 + rand(3) 点经验
-                            static thread_local std::mt19937 passive_rand{std::random_device{}()};
-                            experience = 1 + std::uniform_int_distribution<int>(0, 2)(passive_rand);
-                        }
-                    }
+                    int experience = species ? (species->hostile ? species->xp_value : 1) : 0;
                     result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
                                                      mob.pos.y, mob.pos.z, false, experience});
                     continue;
                 }
             }
+            --mob.fire_ticks;
         }
 
         // ---- Despawn（despawnEntity：>128 格立即消失；>32 格且 idle>600 时 1/800）。
@@ -721,10 +753,13 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     if (mob.fuse_ticks >= kFuseTicks) {
                         result.explosions.push_back(
                             MobExplosion{mob.pos.x, mob.pos.y, mob.pos.z, 3.0f});
-                        // 引爆即消失：不播死亡动画/不掉自身战利品，只销毁实体
+                        // 引爆即消失：不播死亡动画/不掉自身战利品，只销毁实体。
+                        // 不能在迭代中 swap-pop（pop_back 析构元素后循环会继续踩死槽位
+                        // —— 已释放的 path 缓冲被再次 free 即 tcache double free），
+                        // 统一交给循环结束后的 to_remove 批量擦除
                         result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
                                                          mob.pos.y, mob.pos.z, true});
-                        (void)remove_locked(mob.entity_id);
+                        to_remove.push_back(mob.entity_id);
                         break;
                     }
                     if (next == 1) {
@@ -1008,7 +1043,141 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             other.velocity_z += d1;
         }
     }
+
+    // 自然刷怪
+    spawn_cycle(world, players, daytime, result);
+
     return result;
+}
+
+void MobManager::spawn_cycle(world::World& world, std::span<const PlayerSnapshot> players,
+                              bool daytime, MobTickResult& result) {
+    // 简化刷怪算法：每 tick 1/100 概率触发一次刷怪周期（2 秒一次）
+    // 实际 vanilla 每 tick 都尝试，但概率极低；这里用固定周期简化
+    static thread_local std::int32_t spawn_tick_counter = 0;
+    if (++spawn_tick_counter < 200) {
+        return;  // 每 200 tick（10 秒）刷一次
+    }
+    spawn_tick_counter = 0;
+
+    if (players.empty()) {
+        return;
+    }
+    // 跳过无区块世界（测试/未生成领地）
+    if (world.loaded_chunks() == 0) {
+        return;
+    }
+
+    // 统计当前生物数量（按类别）
+    int hostile_count = 0;
+    int passive_count = 0;
+    for (const auto& m : mobs_) {
+        const auto species = world::mob_type(m.type);
+        if (!species) continue;
+        if (species->hostile) {
+            ++hostile_count;
+        } else {
+            ++passive_count;
+        }
+    }
+
+    // 选择一个随机玩家作为刷怪中心
+    const auto& player =
+        players[static_cast<std::size_t>(rand01() * static_cast<double>(players.size()))];
+
+    for (std::int32_t attempt = 0; attempt < kSpawnAttemptsPerCycle; ++attempt) {
+        // 在刷怪环（24~128 格）内随机选点
+        const double angle = rand01() * 2.0 * kPi;
+        const double radius = kSpawnMinDistance + rand01() * (kSpawnMaxDistance - kSpawnMinDistance);
+        const double sx = player.x + std::cos(angle) * radius;
+        const double sz = player.z + std::sin(angle) * radius;
+
+        // 获取地表高度
+        const auto surface = world.surface_y(static_cast<std::int32_t>(std::floor(sx)),
+                                              static_cast<std::int32_t>(std::floor(sz)));
+        if (surface < 1) {
+            continue;
+        }
+
+        // 确定刷怪类型
+        std::int32_t spawn_type = 0;
+        if (daytime) {
+            // 白天：刷被动生物
+            if (passive_count >= kSpawnCapPerCategory) {
+                continue;
+            }
+            spawn_type = kPassiveTypes[static_cast<std::size_t>(rand01() * 3.999)];
+        } else {
+            // 夜晚：刷敌对生物
+            if (hostile_count >= kSpawnCapPerCategory) {
+                continue;
+            }
+            spawn_type = kHostileTypes[static_cast<std::size_t>(rand01() * 2.999)];
+        }
+
+        const auto species = world::mob_type(spawn_type);
+        if (!species) {
+            continue;
+        }
+
+        // 检查生成位置：地表上方一格，不能被固体方块占据
+        const double spawn_y = static_cast<double>(surface);
+        const auto ground_block = world.block_at(
+            static_cast<std::int32_t>(std::floor(sx)),
+            static_cast<std::int32_t>(std::floor(spawn_y - 1)),
+            static_cast<std::int32_t>(std::floor(sz)));
+        const auto ground_id = world::block_id(ground_block);
+        if (!world::is_solid(ground_block) && ground_id != 2 && ground_id != 3) {
+            // 地表不是固体方块或泥土/石头 → 跳过
+            continue;
+        }
+
+        // 检查光照等级（用于判定是否适合生成）
+        const auto light = world.light_at(
+            static_cast<std::int32_t>(std::floor(sx)),
+            static_cast<std::int32_t>(std::floor(spawn_y)),
+            static_cast<std::int32_t>(std::floor(sz)));
+        if (daytime) {
+            // 白天被动生物：需要光照 >= 8
+            if (light < 8) {
+                continue;
+            }
+        } else {
+            // 夜晚敌对生物：需要光照 <= 7
+            if (light > 7) {
+                continue;
+            }
+        }
+
+        // 检查生成位置上方是否有空间（生物站立空间）
+        const double height = static_cast<double>(species->height);
+        bool can_spawn = true;
+        for (double dy = 0.0; dy < height; dy += 0.5) {
+            const auto bx = static_cast<std::int32_t>(std::floor(sx));
+            const auto by = static_cast<std::int32_t>(std::floor(spawn_y + dy));
+            const auto bz = static_cast<std::int32_t>(std::floor(sz));
+            if (world::is_solid(world.block_at(bx, by, bz))) {
+                can_spawn = false;
+                break;
+            }
+        }
+        if (!can_spawn) {
+            continue;
+        }
+
+        // 生成生物
+        const auto entity_id = spawn_locked(spawn_type, sx, spawn_y, sz,
+                                            static_cast<float>(rand01() * 360.0));
+        if (entity_id != 0) {
+            result.spawns.push_back(MobSpawn{entity_id, spawn_type, sx, spawn_y, sz,
+                                              static_cast<float>(rand01() * 360.0)});
+            if (species->hostile) {
+                ++hostile_count;
+            } else {
+                ++passive_count;
+            }
+        }
+    }
 }
 
 }  // namespace cyane::net

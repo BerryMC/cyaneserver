@@ -84,7 +84,7 @@ struct HarvestRule {
         case 196: return {{430, 0, 1}};  // 金合欢门
         case 197: return {{431, 0, 1}};  // 深色橡木门
         case 13: {                                // 砾石 → 10% 燧石，否则砾石
-            static std::mt19937 engine{std::random_device{}()};
+            static thread_local std::mt19937 engine{std::random_device{}()};
             if (std::uniform_int_distribution<int>(0, 99)(engine) < 10) {
                 return {{318, 0, 1}};
             }
@@ -102,7 +102,24 @@ struct HarvestRule {
         case 7: return {};                       // 基岩
         case 9: case 8: return {};               // 静止/流动水
         case 11: case 10: return {};             // 静止/流动岩浆
-        default: return {{static_cast<std::int16_t>(id), static_cast<std::int16_t>(meta), 1}};
+        // 双层台阶：vanilla 掉两个对应半砖（BlockSlab 双层 getItemDropped count 2）
+        case 43: return {{44, static_cast<std::int16_t>(meta & 0x7), 2}};
+        case 125: return {{126, static_cast<std::int16_t>(meta & 0x7), 2}};
+        case 181: return {{182, static_cast<std::int16_t>(meta & 0x7), 2}};
+        // damageDropped 覆盖为 meta 的方块（颜色/种类变体）：掉落保留 meta
+        // （BlockColored/BlockSand/BlockPlanks/BlockStoneSlab/BlockQuartz/…）
+        case 3: case 5: case 12: case 19: case 24: case 35: case 95: case 98:
+        case 139: case 155: case 159: case 160: case 168: case 179:
+            return {{static_cast<std::int16_t>(id), static_cast<std::int16_t>(meta), 1}};
+        case 17:                                 // 原木：种类位（0-3），轴向位丢弃
+            return {{17, static_cast<std::int16_t>(meta & 0x3), 1}};
+        case 162:
+            return {{162, static_cast<std::int16_t>(meta & 0x3), 1}};
+        // 台阶（单层）：vanilla 掉落 variant 位（BlockStoneSlab.damageDropped → VARIANT）
+        case 44: return {{44, static_cast<std::int16_t>(meta & 0x7), 1}};
+        case 126: return {{126, static_cast<std::int16_t>(meta & 0x7), 1}};
+        case 182: return {{182, static_cast<std::int16_t>(meta & 0x7), 1}};
+        default: return {{static_cast<std::int16_t>(id), 0, 1}};  // damageDropped 默认 0
     }
 }
 
