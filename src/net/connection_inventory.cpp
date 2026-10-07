@@ -220,11 +220,9 @@ void Connection::apply_click(std::int16_t slot, std::uint8_t button, std::int32_
         }
         // EntityPlayer.dropItem：出生 (posX, posY−0.3+eyeHeight, posZ)、
         // dropAround 随机环绕初速 + y 0.2、拾取延迟 40
-        const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
-                                                      static_cast<std::int32_t>(player_pos_.z));
         const auto [vx, vy, vz] = net::throw_velocity();
         drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, dropped,
-                   cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx, vy, vz, 40);
+                   vx, vy, vz, 40);
         return;
     }
     if (mode != 0) {
@@ -233,12 +231,9 @@ void Connection::apply_click(std::int16_t slot, std::uint8_t button, std::int32_
     // 窗口外点击（mode 0）：丢出整个游标堆（dropAround + 延迟 40，vanilla 同）
     if (slot < 0) {
         if (!cursor_item_.empty()) {
-            const auto cpos =
-                world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
-                                            static_cast<std::int32_t>(player_pos_.z));
             const auto [vx, vy, vz] = net::throw_velocity();
             drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, cursor_item_,
-                       cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx, vy, vz, 40);
+                       vx, vy, vz, 40);
         }
         cursor_item_ = item::ItemStack::air();
         return;
@@ -329,12 +324,9 @@ void Connection::take_craft_result(bool all) {
             // shift：产物直接进背包，放不下的部分掉落在脚下
             const item::ItemStack leftover = give_item(result);
             if (!leftover.empty()) {
-                const auto cpos = world::ChunkPos::from_world(
-                    static_cast<std::int32_t>(player_pos_.x),
-                    static_cast<std::int32_t>(player_pos_.z));
                 const auto [vx, vy, vz] = net::throw_velocity();
                 drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, leftover,
-                           cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx, vy, vz, 40);
+                           vx, vy, vz, 40);
             }
         } else {
             // 结果槽产物给游标：仅当游标为空或同类且放得下

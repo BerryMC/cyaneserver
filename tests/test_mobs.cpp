@@ -769,3 +769,92 @@ CYANE_TEST(projectile_hits_player) {
     }
     CYANE_CHECK(hit);
 }
+
+CYANE_TEST(chunk_pos_from_world_double_floors_negative) {
+    const auto p1 = world::ChunkPos::from_world(-0.5, -0.5);
+    CYANE_CHECK(p1.has_value());
+    CYANE_CHECK_EQ(p1->x, -1);
+    CYANE_CHECK_EQ(p1->z, -1);
+
+    const auto p2 = world::ChunkPos::from_world(0.5, 0.5);
+    CYANE_CHECK(p2.has_value());
+    CYANE_CHECK_EQ(p2->x, 0);
+    CYANE_CHECK_EQ(p2->z, 0);
+
+    const auto p3 = world::ChunkPos::from_world(-16.0, -16.0);
+    CYANE_CHECK(p3.has_value());
+    CYANE_CHECK_EQ(p3->x, -1);
+    CYANE_CHECK_EQ(p3->z, -1);
+
+    const auto p4 = world::ChunkPos::from_world(-16.1, -16.1);
+    CYANE_CHECK(p4.has_value());
+    CYANE_CHECK_EQ(p4->x, -2);
+    CYANE_CHECK_EQ(p4->z, -2);
+}
+
+CYANE_TEST(hub_transition_entity_spawns_and_destroys) {
+    net::PlayerHub hub;
+    net::PlayerSnapshot watcher;
+    watcher.entity_id = 100;
+    watcher.x = 0.0;
+    watcher.y = 4.0;
+    watcher.z = 0.0;
+    auto entry = hub.register_player(watcher);
+
+    // 玩家在区块 (0,0)，视距 8（覆盖 [-8..8, -8..8]）
+    ByteWriter spawn_w;
+    net::writers::encode_spawn_mob(spawn_w, 200, 54, 128.0, 4.0, 0.0, 0.0f);
+    const std::pair<std::int32_t, Bytes> pkts[] = {
+        {proto::play_cb::kSpawnMob, Bytes{spawn_w.data().begin(), spawn_w.data().end()}}
+    };
+
+    // 1. 从区块 (9,0) 移动到 (8,0)：玩家从不可见变为可见 -> 收到 SpawnMob
+    hub.transition_entity(9, 0, 8, 0, 8, 200, pkts);
+    {
+        std::lock_guard<std::mutex> lock(entry->mailbox_mutex);
+        CYANE_CHECK_EQ(entry->mailbox.size(), std::size_t{1});
+        if (!entry->mailbox.empty()) {
+            CYANE_CHECK_EQ(entry->mailbox[0].packet_id, proto::play_cb::kSpawnMob);
+        }
+        entry->mailbox.clear();
+    }
+
+    // 2. 从区块 (8,0) 移动到 (7,0)：都在视距内 -> 不发过渡包
+    hub.transition_entity(8, 0, 7, 0, 8, 200, pkts);
+    {
+        std::lock_guard<std::mutex> lock(entry->mailbox_mutex);
+        CYANE_CHECK(entry->mailbox.empty());
+    }
+
+    // 3. 从区块 (8,0) 移出到 (9,0)：离开视距 -> 收到 DestroyEntities
+    hub.transition_entity(8, 0, 9, 0, 8, 200, pkts);
+    {
+        std::lock_guard<std::mutex> lock(entry->mailbox_mutex);
+        CYANE_CHECK_EQ(entry->mailbox.size(), std::size_t{1});
+        if (!entry->mailbox.empty()) {
+            CYANE_CHECK_EQ(entry->mailbox[0].packet_id, proto::play_cb::kDestroyEntities);
+        }
+        entry->mailbox.clear();
+    }
+}
+
+CYANE_TEST(writers_encode_dropped_item_and_mob) {
+    ByteWriter spawn_item;
+    ByteWriter meta_item;
+    net::writers::encode_dropped_item(spawn_item, meta_item, 42, 10.0, 64.0, -10.0,
+                                     0.1, 0.2, -0.1, item::ItemStack{264, 5, 0});
+    CYANE_CHECK(!spawn_item.data().empty());
+    CYANE_CHECK(!meta_item.data().empty());
+
+    ByteWriter spawn_creeper;
+    net::writers::encode_spawn_mob(spawn_creeper, 43, 50, 0.0, 4.0, 0.0, 0.0f);
+    CYANE_CHECK(!spawn_creeper.data().empty());
+
+    ByteWriter spawn_skel;
+    net::writers::encode_spawn_mob(spawn_skel, 44, 51, 0.0, 4.0, 0.0, 0.0f);
+    CYANE_CHECK(!spawn_skel.data().empty());
+
+    ByteWriter equip_skel;
+    net::writers::encode_skeleton_bow(equip_skel, 44);
+    CYANE_CHECK(!equip_skel.data().empty());
+}

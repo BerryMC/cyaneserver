@@ -11,6 +11,7 @@
 #include <span>
 
 #include "cyane/core/bytes.hpp"
+#include "cyane/item/item_stack.hpp"
 
 namespace cyane::net::writers {
 
@@ -73,6 +74,27 @@ inline void write_spawn_mob(ByteWriter& out, std::uint32_t entity_id, std::int32
     out.u8(0xFF);
 }
 
+inline void encode_spawn_mob(ByteWriter& out, std::uint32_t entity_id, std::int32_t type,
+                             double x, double y, double z, float yaw) {
+    ByteWriter meta;
+    if (type == 50) {
+        meta.u8(12);
+        meta.varint(1);
+        meta.varint(-1);
+    } else if (type == 51) {
+        meta.u8(12);
+        meta.varint(6);
+        meta.u8(0);
+    }
+    write_spawn_mob(out, entity_id, type, x, y, z, yaw, meta.data());
+}
+
+inline void encode_skeleton_bow(ByteWriter& out, std::uint32_t entity_id) {
+    out.varint(static_cast<std::int32_t>(entity_id));
+    out.varint(0);
+    item::write_slot(out, item::ItemStack{261, 1, 0});
+}
+
 // SpawnObject (0x00)：varint id | uuid(16) | byte type | f64 x/y/z | byte pitch/yaw
 //   | i32 data | short vx/vy/vz（速度单位 1/8000，data≠0 时客户端才读速度）
 inline void write_spawn_object(ByteWriter& out, std::uint32_t entity_id, std::uint8_t object_type,
@@ -96,6 +118,18 @@ inline void write_spawn_object(ByteWriter& out, std::uint32_t entity_id, std::ui
     out.i16(clamp_i16(vx));
     out.i16(clamp_i16(vy));
     out.i16(clamp_i16(vz));
+}
+
+inline void encode_dropped_item(ByteWriter& out_spawn, ByteWriter& out_meta,
+                                std::uint32_t entity_id, double x, double y, double z,
+                                double vx, double vy, double vz,
+                                const item::ItemStack& stack) {
+    write_spawn_object(out_spawn, entity_id, 2, x, y, z, 0.0f, 0.0f, 1, vx, vy, vz);
+    out_meta.varint(static_cast<std::int32_t>(entity_id));
+    out_meta.u8(6);
+    out_meta.varint(5);
+    item::write_slot(out_meta, stack);
+    out_meta.u8(0xFF);
 }
 
 // EntityVelocity (0x3E)：varint id | short vx/vy/vz（单位 = 1/8000 格/tick）

@@ -8,40 +8,10 @@
 
 namespace cyane::net {
 
-namespace {
-// 1.12.2 EntityItem 的元数据：index 6 = 物品堆叠，type 5 = Slot
-constexpr std::uint8_t kItemMetaIndex = 6;
-constexpr std::uint8_t kMetaTypeSlot = 5;  // 1.9-1.12.2：Item=5、Boolean=6（vanilla RCON 实测 + Cuberite 表，6 是 1.13+ 才引入）
-constexpr std::int32_t kObjectTypeItem = 2;  // SpawnObject type：掉落物
-}
-
 void Connection::encode_dropped_item(const DroppedItem& drop, ByteWriter& out_spawn,
                                      ByteWriter& out_meta) const {
-    // SpawnObject (0x00)：varint id | uuid(16) | byte type | double x/y/z
-    //                    | byte pitch | byte yaw | int data | short vX/vY/vZ
-    out_spawn.varint(static_cast<std::int32_t>(drop.entity_id));
-    std::array<std::uint8_t, 16> uuid{};
-    uuid[15] = static_cast<std::uint8_t>(drop.entity_id & 0xFF);
-    uuid[14] = static_cast<std::uint8_t>((drop.entity_id >> 8) & 0xFF);
-    out_spawn.bytes(ByteSpan{reinterpret_cast<const std::byte*>(uuid.data()), uuid.size()});
-    out_spawn.u8(static_cast<std::uint8_t>(kObjectTypeItem));
-    out_spawn.f64(drop.x);
-    out_spawn.f64(drop.y);
-    out_spawn.f64(drop.z);
-    out_spawn.u8(0);   // pitch
-    out_spawn.u8(0);   // yaw
-    out_spawn.i32(1);  // data≠0：让客户端读取后续速度
-    out_spawn.i16(static_cast<std::int16_t>(static_cast<std::int32_t>(drop.velocity_x * 8000.0)));
-    out_spawn.i16(static_cast<std::int16_t>(static_cast<std::int32_t>(drop.velocity_y * 8000.0)));
-    out_spawn.i16(static_cast<std::int16_t>(static_cast<std::int32_t>(drop.velocity_z * 8000.0)));
-
-    // EntityMetadata (0x3C)：varint id | (byte index | varint type | 值)... | 0xFF 终止
-    // 只写 index 6 的物品堆叠，客户端据此把实体渲染成对应物品
-    out_meta.varint(static_cast<std::int32_t>(drop.entity_id));
-    out_meta.u8(kItemMetaIndex);
-    out_meta.varint(kMetaTypeSlot);
-    item::write_slot(out_meta, drop.stack);
-    out_meta.u8(0xFF);
+    writers::encode_dropped_item(out_spawn, out_meta, drop.entity_id, drop.x, drop.y, drop.z,
+                                 drop.velocity_x, drop.velocity_y, drop.velocity_z, drop.stack);
 }
 
 void Connection::spawn_dropped_item(const DroppedItem& drop) {

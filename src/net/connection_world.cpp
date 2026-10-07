@@ -48,6 +48,47 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     // 创造模式左键即刻破坏(status 0)；生存模式挖掘完成(status 2)才破坏；旁观不可破坏
     const bool creative = context_.game_mode == proto::game_mode::kCreative;
     const bool spectator = context_.game_mode == proto::game_mode::kSpectator;
+
+    if (*status == 3 || *status == 4) {
+        if (spectator) {
+            return true;
+        }
+        item::ItemStack held = inventory_.hotbar_item(selected_slot_);
+        if (held.empty()) {
+            return true;
+        }
+        const std::uint8_t count = (*status == 3) ? held.count : 1;
+        item::ItemStack drop_item = held;
+        drop_item.count = count;
+        held.count = static_cast<std::uint8_t>(held.count - count);
+        if (held.count == 0) {
+            held = item::ItemStack::air();
+        }
+        inventory_.set_slot(item::PlayerInventory::hotbar_slot(selected_slot_), held);
+        send_slot(0, static_cast<std::int16_t>(item::PlayerInventory::hotbar_slot(selected_slot_)), held);
+
+        constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+        const double eye_y = player_pos_.y - 0.3 + 1.62;
+        const double yaw_rad = static_cast<double>(player_pos_.yaw) * kDegToRad;
+        const double pitch_rad = static_cast<double>(player_pos_.pitch) * kDegToRad;
+        constexpr double f2 = 0.3;
+        double vx = -std::sin(yaw_rad) * std::cos(pitch_rad) * f2;
+        double vy = -std::sin(pitch_rad) * f2 + 0.1;
+        double vz = std::cos(yaw_rad) * std::cos(pitch_rad) * f2;
+
+        thread_local std::mt19937 drop_rng{std::random_device{}()};
+        std::uniform_real_distribution<double> angle_dist(0.0, 6.283185307179586);
+        std::uniform_real_distribution<double> rand_dist(0.0, 1.0);
+        const double f3 = angle_dist(drop_rng);
+        const double f2_rand = 0.02 * rand_dist(drop_rng);
+        vx += std::cos(f3) * f2_rand;
+        vy += (rand_dist(drop_rng) - rand_dist(drop_rng)) * 0.1;
+        vz += std::sin(f3) * f2_rand;
+
+        drop_stack(player_pos_.x, eye_y, player_pos_.z, drop_item, vx, vy, vz, 40);
+        return true;
+    }
+
     const bool destroy = !spectator && (creative ? (*status == 0) : (*status == 2));
     const std::int32_t bx = position_x(*packed);
     const std::int32_t by = position_y(*packed);
@@ -81,7 +122,7 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             for (const auto& stack : chest) {
                 if (!stack.empty()) {
                     const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
-                    drop_stack(sx, sy, sz, stack, bx, bz);
+                    drop_stack(sx, sy, sz, stack);
                 }
             }
         }
@@ -91,7 +132,7 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             for (const auto& stack : {state.input, state.fuel, state.output}) {
                 if (!stack.empty()) {
                     const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
-                    drop_stack(sx, sy, sz, stack, bx, bz);
+                    drop_stack(sx, sy, sz, stack);
                 }
             }
             if (furnace_open_ && open_furnace_key_ == bkey) {
@@ -107,7 +148,7 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             for (const auto& stack : grid) {
                 if (!stack.empty()) {
                     const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
-                    drop_stack(sx, sy, sz, stack, bx, bz);
+                    drop_stack(sx, sy, sz, stack);
                 }
             }
             if (table_open_ && open_table_key_ == bkey) {
@@ -130,7 +171,7 @@ bool Connection::handle_play_digging(ByteSpan payload) {
             for (std::size_t slot = 0; slot < limit; ++slot) {
                 if (!small.slots[slot].empty()) {
                     const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
-                    drop_stack(sx, sy, sz, small.slots[slot], bx, bz);
+                    drop_stack(sx, sy, sz, small.slots[slot]);
                 }
             }
             if (small_open_ && open_small_key_ == bkey) {
@@ -163,14 +204,14 @@ bool Connection::handle_play_digging(ByteSpan payload) {
         const auto tool = item::tool_of(inventory_.hotbar_item(selected_slot_).id);
         for (const auto& drop : world::block_drops(prev, tool)) {
             const auto [sx, sy, sz] = in_block_spawn_pos(bx, by, bz);
-            drop_stack(sx, sy, sz, item::ItemStack{drop.item_id, drop.count, drop.damage}, bx, bz);
+            drop_stack(sx, sy, sz, item::ItemStack{drop.item_id, drop.count, drop.damage});
         }
     }
     return true;
 }
 
-void Connection::drop_stack(double x, double y, double z, item::ItemStack stack, std::int32_t bx,
-                            std::int32_t bz, double velocity_x, double velocity_y,
+void Connection::drop_stack(double x, double y, double z, item::ItemStack stack,
+                            double velocity_x, double velocity_y,
                             double velocity_z, std::int32_t pickup_delay) {
     if (context_.item_drops == nullptr || stack.empty()) {
         return;
@@ -186,7 +227,7 @@ void Connection::drop_stack(double x, double y, double z, item::ItemStack stack,
     if (context_.hub == nullptr) {
         return;
     }
-    const auto cpos = world::ChunkPos::from_world(bx, bz);
+    const auto cpos = world::ChunkPos::from_world(x, z);
     if (!cpos) {
         return;
     }
@@ -410,22 +451,12 @@ bool Connection::eat_held_food() {
     return true;
 }
 
-bool Connection::handle_play_use_item(ByteSpan payload) {
-    (void)payload;  // 1.12.2: varint hand，只关心手持物品
-    const item::ItemStack& held = inventory_.hotbar_item(selected_slot_);
-    // 刷怪蛋：对空使用 → 生成在视线前方 1.5 格（vanilla 是射线打到地面处，简化等价）
-    if (const auto egg = world::spawn_egg_type(held.id, held.damage)) {
-        constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
-        const double yaw = static_cast<double>(player_pos_.yaw) * kDegToRad;
-        if (spawn_mob_at(*egg, player_pos_.x - std::sin(yaw) * 1.5, player_pos_.y,
-                         player_pos_.z + std::cos(yaw) * 1.5, player_pos_.yaw + 180.0f)) {
-            consume_held_item();
-        }
-        return true;
-    }
-    (void)eat_held_food();  // 吃不下（满血/非食物）不算协议错误——返回 false 会断连
-    return true;
-}
+	bool Connection::handle_play_use_item(ByteSpan payload) {
+	    (void)payload;  // 1.12.2: varint hand，只关心手持物品
+	    // 刷怪蛋只在点击方块时生效（handle_play_block_place），对空使用不生效——匹配原版
+	    (void)eat_held_food();  // 吃不下（满血/非食物）不算协议错误——返回 false 会断连
+	    return true;
+	}
 
 void Connection::send_block_sound(std::int32_t x, std::int32_t y, std::int32_t z,
                                   std::uint16_t block_id, bool on) {
@@ -476,7 +507,7 @@ void Connection::break_unsupported_neighbors(std::int32_t x, std::int32_t y, std
         if (context_.item_drops != nullptr) {
             for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
                 const auto [sx, sy, sz] = in_block_spawn_pos(nx, ny, nz);
-                drop_stack(sx, sy, sz, item::ItemStack{drop.item_id, drop.count, drop.damage}, nx, nz);
+                drop_stack(sx, sy, sz, item::ItemStack{drop.item_id, drop.count, drop.damage});
             }
         }
     }

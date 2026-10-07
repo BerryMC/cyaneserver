@@ -136,9 +136,12 @@ struct MobState {
 // 本 tick 的事件：由 Server 落地成广播/伤害/掉落（MobManager 不依赖连接与邮箱）
 struct MobMove {
     std::uint32_t entity_id{0};
+    std::int32_t type{0};
     double x{0.0};
     double y{0.0};
     double z{0.0};
+    double old_x{0.0};
+    double old_z{0.0};
     float yaw{0.0f};
 };
 

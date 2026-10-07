@@ -489,20 +489,35 @@ void Server::tick() {
         const bool daytime = (now_ms() / 50) % 24000 < 12000;
         const auto mob_events = mobs_->tick(*world_, players, daytime);
         for (const auto& mob : mob_events.moved) {
-            // 只发给生物所在区块视距内的玩家（远端客户端看不到该实体）
-            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(mob.x),
-                                                           static_cast<std::int32_t>(mob.z));
-            if (!cpos) {
+            const auto old_cpos = world::ChunkPos::from_world(mob.old_x, mob.old_z);
+            const auto new_cpos = world::ChunkPos::from_world(mob.x, mob.z);
+            if (old_cpos && new_cpos && *old_cpos != *new_cpos) {
+                ByteWriter spawn;
+                net::writers::encode_spawn_mob(spawn, mob.entity_id, mob.type, mob.x, mob.y, mob.z,
+                                               mob.yaw);
+                std::vector<std::pair<std::int32_t, Bytes>> pkts;
+                pkts.push_back({proto::play_cb::kSpawnMob,
+                                Bytes{spawn.data().begin(), spawn.data().end()}});
+                if (mob.type == 51) {
+                    ByteWriter equip;
+                    net::writers::encode_skeleton_bow(equip, mob.entity_id);
+                    pkts.push_back({proto::play_cb::kEntityEquipment,
+                                    Bytes{equip.data().begin(), equip.data().end()}});
+                }
+                hub_->transition_entity(old_cpos->x, old_cpos->z, new_cpos->x, new_cpos->z,
+                                        radius, mob.entity_id, pkts);
+            }
+            if (!new_cpos) {
                 continue;
             }
             ByteWriter tp;
             net::writers::write_entity_teleport(tp, mob.entity_id, mob.x, mob.y, mob.z, mob.yaw, 0.0f,
                                                 true);
-            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
+            hub_->broadcast_near(new_cpos->x, new_cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
                                  tp.data());
             ByteWriter head;
             net::writers::write_entity_head_look(head, mob.entity_id, mob.yaw);
-            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityHeadLook,
+            hub_->broadcast_near(new_cpos->x, new_cpos->z, radius, 0, proto::play_cb::kEntityHeadLook,
                                  head.data());
         }
         // 生物近战命中：走 hub 邮箱在目标连接线程扣血（受伤状态/击退/致死）
@@ -573,9 +588,10 @@ void Server::tick() {
                     if (count == 0) {
                         continue;
                     }
+                    const auto [vx, vy, vz] = net::throw_velocity();
                     spawn_drop_world(death.x, death.y, death.z,
                                      item::ItemStack{drop.item_id, count, drop.damage},
-                                     cpos ? cpos->x : 0, cpos ? cpos->z : 0);
+                                     vx, vy, vz);
                 }
             }
             // 生成经验球
@@ -646,6 +662,24 @@ void Server::tick() {
         for (const auto& explosion : mob_events.explosions) {
             apply_explosion(explosion.x, explosion.y, explosion.z, explosion.power);
         }
+        // 自然刷怪生成
+        for (const auto& spawn : mob_events.spawns) {
+            const auto cpos = world::ChunkPos::from_world(spawn.x, spawn.z);
+            if (!cpos) {
+                continue;
+            }
+            ByteWriter writer;
+            net::writers::encode_spawn_mob(writer, spawn.entity_id, spawn.type, spawn.x, spawn.y,
+                                           spawn.z, spawn.yaw);
+            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSpawnMob,
+                                 writer.data());
+            if (spawn.type == 51) {
+                ByteWriter equip;
+                net::writers::encode_skeleton_bow(equip, spawn.entity_id);
+                hub_->broadcast_near(cpos->x, cpos->z, radius, 0,
+                                     proto::play_cb::kEntityEquipment, equip.data());
+            }
+        }
     }
     // 箭飞行与命中
     if (projectiles_ != nullptr && world_ != nullptr && hub_ != nullptr && mobs_ != nullptr) {
@@ -673,8 +707,7 @@ void Server::tick() {
 void Server::apply_item_tick(const net::ItemTickResult& events) {
     const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
     const auto chunk_of = [](double x, double z) {
-        return world::ChunkPos::from_world(static_cast<std::int32_t>(x),
-                                           static_cast<std::int32_t>(z));
+        return world::ChunkPos::from_world(x, z);
     };
     // 消失（5 分钟寿命 / 烧毁）：DestroyEntities；岩浆烧毁附燃烧音
     for (const auto& gone : events.destroyed) {
@@ -701,12 +734,25 @@ void Server::apply_item_tick(const net::ItemTickResult& events) {
     }
     // 位置同步：vanilla tracker 每 20 tick 一次校正（EntityTeleport，客户端本地模拟物理）
     for (const auto& move : events.moved) {
+        const auto old_cpos = world::ChunkPos::from_world(move.old_x, move.old_z);
+        const auto new_cpos = world::ChunkPos::from_world(move.x, move.z);
+        if (old_cpos && new_cpos && *old_cpos != *new_cpos) {
+            ByteWriter spawn;
+            ByteWriter meta;
+            net::writers::encode_dropped_item(spawn, meta, move.entity_id, move.x, move.y, move.z,
+                                              0.0, 0.0, 0.0, move.stack);
+            const std::pair<std::int32_t, Bytes> pkts[] = {
+                {proto::play_cb::kSpawnObject, Bytes{spawn.data().begin(), spawn.data().end()}},
+                {proto::play_cb::kEntityMetadata, Bytes{meta.data().begin(), meta.data().end()}}
+            };
+            hub_->transition_entity(old_cpos->x, old_cpos->z, new_cpos->x, new_cpos->z,
+                                    radius, move.entity_id, pkts);
+        }
         ByteWriter tp;
         net::writers::write_entity_teleport(tp, move.entity_id, move.x, move.y, move.z, 0.0f, 0.0f,
                                             true);
-        const auto cpos = chunk_of(move.x, move.z);
-        if (cpos) {
-            hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
+        if (new_cpos) {
+            hub_->broadcast_near(new_cpos->x, new_cpos->z, radius, 0, proto::play_cb::kEntityTeleport,
                                  tp.data());
         }
     }
@@ -745,25 +791,19 @@ void Server::apply_item_tick(const net::ItemTickResult& events) {
     }
 }
 
-void Server::spawn_drop_world(double x, double y, double z, item::ItemStack stack, std::int32_t bx,
-                              std::int32_t bz) {
+void Server::spawn_drop_world(double x, double y, double z, item::ItemStack stack,
+                              double vx, double vy, double vz) {
     if (item_drops_ == nullptr || stack.empty()) {
         return;
     }
-    const auto eid = item_drops_->spawn(x, y, z, stack, 0.0, 0.0, 0.0, 10);
+    const auto eid = item_drops_->spawn(x, y, z, stack, vx, vy, vz, 10);
     if (eid == 0) {
         return;
     }
-    // SpawnObject(type=2 item, data=1) + EntityMetadata(index 6, type 5 Slot)
     ByteWriter spawn;
-    net::writers::write_spawn_object(spawn, eid, 2, x, y, z, 0.0f, 0.0f, 1, 0, 0, 0);
     ByteWriter meta;
-    meta.varint(static_cast<std::int32_t>(eid));
-    meta.u8(6);
-    meta.varint(5);
-    item::write_slot(meta, stack);
-    meta.u8(0xFF);
-    const auto cpos = world::ChunkPos::from_world(bx, bz);
+    net::writers::encode_dropped_item(spawn, meta, eid, x, y, z, vx, vy, vz, stack);
+    const auto cpos = world::ChunkPos::from_world(x, z);
     if (!cpos) {
         return;
     }
@@ -881,11 +921,9 @@ void Server::apply_explosion(double x, double y, double z, float power) {
             world_->set_block(pos.x, pos.y, pos.z, world::kStateAir);
             if (drop_chance(rng) <= static_cast<int>(100.0f / power)) {
                 for (const auto& drop : world::block_drops(state, item::ToolInfo{})) {
-                    const auto cpos2 = world::ChunkPos::from_world(pos.x, pos.z);
                     const auto [sx, sy, sz] = net::in_block_spawn_pos(pos.x, pos.y, pos.z);
                     spawn_drop_world(sx, sy, sz,
-                                     item::ItemStack{drop.item_id, drop.count, drop.damage},
-                                     cpos2 ? cpos2->x : 0, cpos2 ? cpos2->z : 0);
+                                     item::ItemStack{drop.item_id, drop.count, drop.damage});
                 }
             }
             ByteWriter change;

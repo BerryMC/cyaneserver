@@ -205,11 +205,8 @@ void Connection::broadcast_entity_packet(ByteSpan packet, std::int32_t x, std::i
 }
 
 void Connection::spawn_dropped_item_at(double x, double y, double z, item::ItemStack stack) {
-    const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(x),
-                                                   static_cast<std::int32_t>(z));
     const auto [vx, vy, vz] = net::throw_velocity();
-    drop_stack(x, y - 0.3 + 1.62, z, std::move(stack), cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx,
-               vy, vz, 40);
+    drop_stack(x, y - 0.3 + 1.62, z, std::move(stack), vx, vy, vz, 40);
 }
 
 void Connection::kill_player() {

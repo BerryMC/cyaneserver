@@ -982,8 +982,8 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                 (mob.pos.y - before.y) * (mob.pos.y - before.y) +
                                 (mob.pos.z - before.z) * (mob.pos.z - before.z);
         if (moved_sq > 1e-8) {
-            result.moved.push_back(MobMove{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z,
-                                           mob.pos.yaw});
+            result.moved.push_back(MobMove{mob.entity_id, mob.type, mob.pos.x, mob.pos.y,
+                                           mob.pos.z, before.x, before.z, mob.pos.yaw});
         }
     }
 

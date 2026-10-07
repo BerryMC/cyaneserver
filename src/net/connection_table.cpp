@@ -172,10 +172,7 @@ void Connection::apply_table_click(std::int16_t slot, std::uint8_t button, std::
             consume_table_materials();
             const item::ItemStack leftover = give_item(result);
             if (!leftover.empty()) {
-                const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
-                                                               static_cast<std::int32_t>(player_pos_.z));
-                drop_stack(player_pos_.x, player_pos_.y, player_pos_.z, leftover,
-                           cpos ? cpos->x : 0, cpos ? cpos->z : 0);
+                drop_stack(player_pos_.x, player_pos_.y, player_pos_.z, leftover);
             }
         } else {
             const int total = static_cast<int>(cursor_item_.count) + static_cast<int>(result.count);

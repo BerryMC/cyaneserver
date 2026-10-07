@@ -100,8 +100,8 @@ private:
     // 掉落物 tick 事件落地：消失/位置同步/合并/燃烧音
     void apply_item_tick(const net::ItemTickResult& events);
     // 服务端侧生成掉落物（爆炸破坏方块等非玩家来源），广播给附近玩家
-    void spawn_drop_world(double x, double y, double z, item::ItemStack stack, std::int32_t bx,
-                          std::int32_t bz);
+    void spawn_drop_world(double x, double y, double z, item::ItemStack stack,
+                          double vx = 0.0, double vy = 0.0, double vz = 0.0);
 
     ServerConfig config_;
     std::unique_ptr<game::ServerStatus> status_;

@@ -97,11 +97,9 @@ void Connection::close_client_window(std::uint8_t window_id) {
     if (!cursor_item_.empty()) {
         const item::ItemStack leftover = give_item(cursor_item_);
         if (!leftover.empty()) {
-            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
-                                                           static_cast<std::int32_t>(player_pos_.z));
             const auto [vx, vy, vz] = net::throw_velocity();
             drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, leftover,
-                       cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx, vy, vz, 40);
+                       vx, vy, vz, 40);
         }
         cursor_item_ = item::ItemStack::air();
     }
@@ -127,11 +125,9 @@ bool Connection::handle_play_close_window(ByteSpan payload) {
     if (!cursor_item_.empty()) {
         const item::ItemStack leftover = give_item(cursor_item_);
         if (!leftover.empty()) {
-            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
-                                                           static_cast<std::int32_t>(player_pos_.z));
             const auto [vx, vy, vz] = net::throw_velocity();
             drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, leftover,
-                       cpos ? cpos->x : 0, cpos ? cpos->z : 0, vx, vy, vz, 40);
+                       vx, vy, vz, 40);
         }
         cursor_item_ = item::ItemStack::air();
     }

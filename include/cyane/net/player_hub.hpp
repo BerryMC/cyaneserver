@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "cyane/core/bytes.hpp"
+#include "cyane/net/packet_writers.hpp"
+#include "cyane/proto/packet_ids.hpp"
 
 namespace cyane::net {
 
@@ -214,6 +216,46 @@ public:
         for (const auto& entry : targets) {
             std::lock_guard<std::mutex> lock(entry->mailbox_mutex);
             entry->mailbox.push_back(HubMessage{packet_id, Bytes{payload.begin(), payload.end()}});
+        }
+    }
+
+    void transition_entity(std::int32_t old_cx, std::int32_t old_cz,
+                           std::int32_t new_cx, std::int32_t new_cz,
+                           std::int32_t radius,
+                           std::uint32_t entity_id,
+                           std::span<const std::pair<std::int32_t, Bytes>> spawn_packets) {
+        std::vector<std::shared_ptr<Entry>> to_spawn;
+        std::vector<std::shared_ptr<Entry>> to_destroy;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (const auto& [id, entry] : players_) {
+                const auto& s = entry->snapshot;
+                const std::int32_t pcx = static_cast<std::int32_t>(std::floor(s.x / 16.0));
+                const std::int32_t pcz = static_cast<std::int32_t>(std::floor(s.z / 16.0));
+                const bool in_old = std::max(std::abs(pcx - old_cx), std::abs(pcz - old_cz)) <= radius;
+                const bool in_new = std::max(std::abs(pcx - new_cx), std::abs(pcz - new_cz)) <= radius;
+                if (!in_old && in_new) {
+                    to_spawn.push_back(entry);
+                } else if (in_old && !in_new) {
+                    to_destroy.push_back(entry);
+                }
+            }
+        }
+        for (const auto& entry : to_spawn) {
+            std::lock_guard<std::mutex> lock(entry->mailbox_mutex);
+            for (const auto& [pkt_id, payload] : spawn_packets) {
+                entry->mailbox.push_back(HubMessage{pkt_id, payload});
+            }
+        }
+        if (!to_destroy.empty()) {
+            ByteWriter destroy;
+            const std::uint32_t ids[] = {entity_id};
+            writers::write_destroy_entities(destroy, ids);
+            Bytes destroy_bytes{destroy.data().begin(), destroy.data().end()};
+            for (const auto& entry : to_destroy) {
+                std::lock_guard<std::mutex> lock(entry->mailbox_mutex);
+                entry->mailbox.push_back(HubMessage{proto::play_cb::kDestroyEntities, destroy_bytes});
+            }
         }
     }
 

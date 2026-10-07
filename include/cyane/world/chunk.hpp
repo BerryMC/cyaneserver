@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -31,6 +32,11 @@ struct [[nodiscard]] ChunkPos {
     [[nodiscard]] static std::optional<ChunkPos> from_world(std::int32_t wx, std::int32_t wz) noexcept {
         // 两轴独立地板除：截断除法会把 x≥0、z<0 象限的 z 偏移一个区块
         return ChunkPos{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
+    }
+
+    [[nodiscard]] static std::optional<ChunkPos> from_world(double wx, double wz) noexcept {
+        return from_world(static_cast<std::int32_t>(std::floor(wx)),
+                          static_cast<std::int32_t>(std::floor(wz)));
     }
 
     [[nodiscard]] std::int32_t world_x() const noexcept { return x * kChunkSizeX; }

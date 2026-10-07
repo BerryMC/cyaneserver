@@ -72,6 +72,9 @@ struct ItemMoved {
     double x{0.0};
     double y{0.0};
     double z{0.0};
+    double old_x{0.0};
+    double old_z{0.0};
+    item::ItemStack stack{};
 };
 struct ItemMerged {
     std::uint32_t victim_id{0};
@@ -306,7 +309,8 @@ public:
                                     (item.y - item.sync_y) * (item.y - item.sync_y) +
                                     (item.z - item.sync_z) * (item.z - item.sync_z);
             if (drift_sq > 16.0 || (item.sync_ticks >= 20 && drift_sq > 1e-8)) {
-                result.moved.push_back(ItemMoved{item.entity_id, item.x, item.y, item.z});
+                result.moved.push_back(ItemMoved{item.entity_id, item.x, item.y, item.z,
+                                                 item.sync_x, item.sync_z, item.stack});
                 item.sync_ticks = 0;
                 item.sync_x = item.x;
                 item.sync_y = item.y;
