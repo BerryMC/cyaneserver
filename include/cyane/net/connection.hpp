@@ -330,7 +330,7 @@ private:
     // 区块限流：跨区块时入队，tick 每 tick 最多发 kChunkPerTick 个（约 20/s @10Hz sweep）
     std::deque<world::ChunkPos> pending_chunks_;
     std::unordered_set<std::int64_t> pending_chunk_keys_;
-    static constexpr std::size_t kChunkPerTick = 2;
+    static constexpr std::size_t kChunkPerTick = 32;
     world::ChunkPos last_center_{};
     bool has_center_{false};
 

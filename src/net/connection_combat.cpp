@@ -228,6 +228,25 @@ void Connection::kill_player() {
         writers::write_entity_status(status, player_id_, 3);
         context_.hub->broadcast(player_id_, proto::play_cb::kEntityStatus, status.data());
     }
+
+    // 生存模式玩家死亡：手持/背包/装备物品全部掉落在地（vanilla dropAllItems）
+    // 掉入虚空（y < -64）除外，虚空中物品直接销毁
+    if (context_.game_mode != proto::game_mode::kCreative && player_pos_.y >= -64.0) {
+        for (std::size_t i = 0; i < item::PlayerInventory::kSlotCount; ++i) {
+            const auto stack = inventory_.slot(i);
+            if (!stack.empty()) {
+                const auto [vx, vy, vz] = net::throw_velocity();
+                drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z,
+                           stack, vx, vy, vz, 40);
+                inventory_.set_slot(i, item::ItemStack::air());
+            }
+        }
+    } else if (context_.game_mode != proto::game_mode::kCreative && player_pos_.y < -64.0) {
+        for (std::size_t i = 0; i < item::PlayerInventory::kSlotCount; ++i) {
+            inventory_.set_slot(i, item::ItemStack::air());
+        }
+    }
+
     log::info("{} died", username_);
 }
 
@@ -269,9 +288,9 @@ void Connection::respawn_player() {
     pending_chunks_.clear();
     pending_chunk_keys_.clear();
     has_center_ = false;
-    const auto spawn_chunk = world::ChunkPos::from_world(
-        static_cast<std::int32_t>(player_pos_.x), static_cast<std::int32_t>(player_pos_.z));
+    const auto spawn_chunk = world::ChunkPos::from_world(player_pos_.x, player_pos_.z);
     update_view(spawn_chunk.value_or(world::ChunkPos{0, 0}));
+    send_pending_chunks(49);
 
     // 同维度重生客户端不清世界：不补发实体（避免双份）；
     // 他人端销毁旧实体后按新位置重发本玩家的 SpawnPlayer。
@@ -279,7 +298,6 @@ void Connection::respawn_player() {
     // 否则重生后收不到任何广播（方块/实体/聊天），对他人也不可见。
     broadcast_despawn();
     register_in_hub();
-    broadcast_spawn();
 
     // 客户端 NetHandlerPlayClient.handleRespawn → setDimensionAndSpawnPlayer 里
     // world.removeAllEntities() 且重建全新背包：物品栏必须重发；实体不做全量补发——

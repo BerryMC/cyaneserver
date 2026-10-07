@@ -450,36 +450,44 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         }
 
         // ---- Despawn（despawnEntity：>128 格立即消失；>32 格且 idle>600 时 1/800）。
-        // vanilla getClosestPlayerToEntity 无玩家时返回 null → 整个 despawn 逻辑跳过 ----
-        if (!players.empty()) {
-        double nearest_sq = 1e18;
-        for (const auto& p : players) {
-            const double dx = p.x - mob.pos.x;
-            const double dy = p.y - mob.pos.y;
-            const double dz = p.z - mob.pos.z;
-            const double d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < nearest_sq) {
-                nearest_sq = d2;
+        // 被动生物（动物）在原版 EntityAnimal.canDespawn() 返回 false，永不消失。
+        // vanilla getClosestPlayerToEntity 无有效存活玩家时返回 null → 整个 despawn 逻辑跳过 ----
+        if (species->hostile && !players.empty()) {
+            double nearest_sq = 1e18;
+            bool has_valid_player = false;
+            for (const auto& p : players) {
+                if (p.y < -64.0) {
+                    continue;
+                }
+                const double dx = p.x - mob.pos.x;
+                const double dy = p.y - mob.pos.y;
+                const double dz = p.z - mob.pos.z;
+                const double d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < nearest_sq) {
+                    nearest_sq = d2;
+                }
+                has_valid_player = true;
+            }
+            if (has_valid_player) {
+                if (nearest_sq > 128.0 * 128.0) {
+                    result.deaths.push_back(
+                        MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, true});
+                    to_remove.push_back(mob.entity_id);
+                    continue;
+                }
+                if (nearest_sq > 32.0 * 32.0) {
+                    ++mob.idle_ticks;
+                    if (mob.idle_ticks > 600 && rand01() < 1.0 / 800.0) {
+                        result.deaths.push_back(
+                            MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, true});
+                        to_remove.push_back(mob.entity_id);
+                        continue;
+                    }
+                } else {
+                    mob.idle_ticks = 0;
+                }
             }
         }
-        if (nearest_sq > 128.0 * 128.0) {
-            result.deaths.push_back(
-                MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, true});
-            to_remove.push_back(mob.entity_id);
-            continue;
-        }
-        if (nearest_sq > 32.0 * 32.0) {
-            ++mob.idle_ticks;
-            if (mob.idle_ticks > 600 && rand01() < 1.0 / 800.0) {
-                result.deaths.push_back(
-                    MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, true});
-                to_remove.push_back(mob.entity_id);
-                continue;
-            }
-        } else {
-            mob.idle_ticks = 0;
-        }
-        }  // players.empty() 门控结束
 
         if (mob.state_ticks > 0) {
             --mob.state_ticks;

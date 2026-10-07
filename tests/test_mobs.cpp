@@ -858,3 +858,33 @@ CYANE_TEST(writers_encode_dropped_item_and_mob) {
     net::writers::encode_skeleton_bow(equip_skel, 44);
     CYANE_CHECK(!equip_skel.data().empty());
 }
+
+CYANE_TEST(passive_mobs_do_not_despawn_and_void_player_ignored) {
+    world::World world;
+    net::MobManager mobs;
+    // 猪（90被动）和僵尸（54敌对）都在 (0, 4, 0)
+    const auto pig_id = mobs.spawn(90, 0.5, 4.0, 0.5, 0.0f);
+    const auto zombie_id = mobs.spawn(54, 0.5, 4.0, 0.5, 0.0f);
+    CYANE_CHECK(pig_id != 0 && zombie_id != 0);
+
+    // 1. 玩家在虚空 (0, -70, 0)：距离 > 70，但因在虚空，不应触发敌对生物消失
+    net::PlayerSnapshot void_player = player_at(1, 0.5, -70.0, 0.5);
+    const net::PlayerSnapshot void_players[] = {void_player};
+    auto res1 = mobs.tick(world, void_players);
+    CYANE_CHECK_EQ(res1.deaths.size(), std::size_t{0});
+    CYANE_CHECK(mobs.by_id(zombie_id).has_value());
+    CYANE_CHECK(mobs.by_id(pig_id).has_value());
+
+    // 2. 玩家在远处 (200, 4, 0)：距离 200 > 128
+    // 僵尸（敌对）应被 despawn，猪（被动）永不 despawn
+    net::PlayerSnapshot far_player = player_at(2, 200.0, 4.0, 0.5);
+    const net::PlayerSnapshot far_players[] = {far_player};
+    auto res2 = mobs.tick(world, far_players);
+    CYANE_CHECK_EQ(res2.deaths.size(), std::size_t{1});
+    if (!res2.deaths.empty()) {
+        CYANE_CHECK_EQ(res2.deaths[0].mob_id, zombie_id);
+        CYANE_CHECK(res2.deaths[0].despawn);
+    }
+    CYANE_CHECK(!mobs.by_id(zombie_id).has_value());
+    CYANE_CHECK(mobs.by_id(pig_id).has_value());
+}

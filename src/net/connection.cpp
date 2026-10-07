@@ -145,12 +145,12 @@ void Connection::tick(std::uint64_t now_ms) {
     now_ms_ = now_ms;
     // 先投递他人广播来的消息（进入 play 后 hub_entry_ 有效）
     drain_mailbox();
-    // 检测并拾取附近掉落物
-    collect_items(now_ms);
     // 熔炉窗口打开时同步燃烧/冶炼进度条
     sync_furnace_progress();
-    // 限流发出待发表中的区块（避免跨区块/登录时一次性灌爆 outbox）
+    // 限流发出待发表中的区块（先发区块与实体，再检测拾取）
     send_pending_chunks(kChunkPerTick);
+    // 检测并拾取附近掉落物
+    collect_items(now_ms);
     // 首次进入 play：以当前时间作为存活基线
     if (last_keepalive_recv_ms_ == 0) {
         last_keepalive_recv_ms_ = now_ms;

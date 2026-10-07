@@ -203,9 +203,9 @@ void Connection::send_world_state() {
     time.i64(0);
     send_packet(proto::play_cb::kTimeUpdate, time.data());
 
-    const auto spawn_chunk = world::ChunkPos::from_world(
-        static_cast<std::int32_t>(player_pos_.x), static_cast<std::int32_t>(player_pos_.z));
+    const auto spawn_chunk = world::ChunkPos::from_world(player_pos_.x, player_pos_.z);
     update_view(spawn_chunk.value_or(world::ChunkPos{0, 0}));
+    send_pending_chunks(49);
 
     // 同步整份背包（windowId=0）：客户端据此渲染物品栏
     send_inventory();
