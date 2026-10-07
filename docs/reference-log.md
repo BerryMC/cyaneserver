@@ -374,3 +374,17 @@
 - **牛奶桶**：右键牛手持 325（空桶）原发 326（水桶，"接成尿了"）→ 335（milk bucket，1.12.2 id 表核对）。
 - **BlockCache 所有权**（用户场景崩溃面）：`Chunk::sections_` 由 vector 改定长 `std::array<Section,16>`（section 地址随 Chunk 稳定，不再被 set_block_state 的 resize 重排）；`World::chunks_` 改 `shared_ptr<StoredChunk>`，BlockCache 快照持所有权——连接线程 `release_chunk`（区块卸载）与 tick 线程寻路锁外读并发时，被释放区块只是引用计数降级。`sections().empty()` 语义改 `has_blocks()`；anvil/持久化/测试同步。
 - 测试：`creeper_fuse_then_explodes` 等既有爆炸/掉落测试全绿；173 × 常规/-Werror/ASan+UBSan 全绿；探针 5 轮 ×4 次连环爆炸（16 次引爆、244+ 方块破坏、164 掉落物）服务端存活，掉落物 damage 全 0、战利品 id 正确（363/334/365/288/289）。
+
+### R-030 — 掉落物与生物可见性与重生修复（广播坐标归一、自然刷怪、视距过渡、死亡掉落与突发下发）
+
+- 来源（Forge 反混淆 1.12.2 & Cuberite 源码核对）：`EntityLiving.despawnEntity`（动物 canDespawn 恒 false，离玩家 >128 格清除仅限敌对生物；无存活玩家时跳过）、`EntityPlayer.dropAllItems`（生存死亡掉落全背包，40 tick 延迟）、`NetHandlerPlayClient.handleRespawn`（同维度重生不清理区块缓存与非死亡实体）、Cuberite `cChunk::MoveToChunk`（`cClientDiffCallback` 跨区块视距差量补发与销毁）、`CPacketPlayerDigging`（status 3 DROP_ALL_ITEMS / status 4 DROP_ITEM）。
+- **掉落物广播发往错误区块**：`spawn_drop_world` 与 `drop_stack` 原接口含 `bx, bz` 参数，调用方误传已计算好的区块坐标 `cpos->x, cpos->z`，内部再次调用 `ChunkPos::from_world(bx, bz)` 导致区块坐标被二次除以 16 错发至 (0,0) 区块，附近玩家永久收不到掉落物包。修复：彻底移除 `bx, bz` 参数，统一使用 `double (x, z)` 计算区块。
+- **自然刷怪发包遗漏**：`MobManager::spawn_cycle` 生成的自然生物放入 `result.spawns` 后，`Server::tick` 未做任何处理。修复：补齐 `mob_events.spawns` 广播循环，下发 `SpawnMob`（及骷髅弓 `EntityEquipment`）。
+- **跨区块移动视距过渡（Cuberite cMover 同构）**：生物在未加载区块生成并漫游进入玩家视距时，此前仅发 `EntityTeleport`，客户端因未曾收到 `SpawnMob` 直接丢弃位移包导致隐形。修复：`PlayerHub::transition_entity`，当实体跨越区块时，向新进入视距的玩家补发生成包，向脱离视距的玩家发送 `DestroyEntities`。
+- **快捷栏 Q / Ctrl+Q 丢弃支持**：`handle_play_digging` 补齐 `status 3` 和 `status 4` 处理，按原版视线角度计算朝向初速并生成掉落物，同步扣减背包。
+- **负坐标截断修复**：`ChunkPos::from_world` 增加 `(double, double)` 地板除重载，消除 `x ∈ (-1.0, 0.0)` 截断导致的区块偏移。
+- **重生/登录区块突发下发（Burst Delivery）**：此前 `kChunkPerTick = 2` 导致重生后全视距 289 个区块需 15 秒才能发完，实体出现严重延迟与跨块竞态。修复：`kChunkPerTick` 提升至 32；重生与登录时立即下发内层 49 区块（半径 3，48 格半径），实体瞬间就地就绪。
+- **被动动物免 Despawn 与虚空玩家过滤**：原版动物 `canDespawn()` 恒为 false，修复此前全部生物一刀切 128 格清除的缺陷；计算 despawn 距离时过滤掉入虚空（`y < -64`）的玩家，避免掉虚空清空全图生物。
+- **生存模式死亡掉落**：`kill_player` 在非虚空死亡时遍历背包与装备，生成 40 tick 拾取延迟的抛掷掉落物（原版 `dropAllItems`）；掉入虚空则按原版直接清空。
+- **Tick 顺序调整**：`send_pending_chunks` 调整在 `collect_items` 之前，确保客户端先渲染掉落物再播放拾取动画。
+- 测试：+4 用例（负坐标地板除、transition_entity 过渡增删、掉落物与生物打包、被动动物免清除与虚空玩家忽略）；177 测试全绿。
