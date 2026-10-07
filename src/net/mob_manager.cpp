@@ -299,9 +299,10 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         // ---- 死亡倒计时（onDeath → deathTime 20 tick → setDead） ----
         if (mob.death_timer >= 0) {
             if (mob.death_timer == 20) {
-                // 死亡瞬间：EntityStatus 3 + 死亡音 + 掉落（server 端处理，不销毁实体）
+                // 死亡瞬间：EntityStatus 3 + 死亡音 + 掉落 + 经验球（server 端处理，不销毁实体）
+                const int experience = species ? (species->hostile ? species->xp_value : 1) : 0;
                 result.deaths.push_back(
-                    MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, false});
+                    MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, false, experience});
             }
             --mob.death_timer;
             if (mob.death_timer < 0) {
@@ -901,7 +902,7 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                 MobDraw{mob.entity_id, mob.pos.x, mob.pos.y, mob.pos.z, false});
                             result.shots.push_back(
                                 MobShot{mob.entity_id, target->entity_id, mob.pos.x,
-                                        mob.pos.y + 1.74 /*EntitySkeletonAbstract.getHeadHeight*/,
+                                        mob.pos.y + 1.64 /*EntitySkeleton.getEyeHeight - 0.1*/,
                                         mob.pos.z, target->x, target->y + 1.8 / 3.0, target->z});
                         }
                     }

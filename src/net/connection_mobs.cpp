@@ -82,6 +82,17 @@ void Connection::send_chunk_entities(std::int32_t cx, std::int32_t cz) {
             send_packet(proto::play_cb::kEntityMetadata, meta.data());
         }
     }
+    if (context_.xp_orbs != nullptr) {
+        for (const auto& orb : context_.xp_orbs->snapshot()) {
+            if (!in_chunk(orb.x, orb.z, cx, cz)) {
+                continue;
+            }
+            ByteWriter spawn;
+            writers::write_spawn_experience_orb(spawn, orb.entity_id, orb.x, orb.y, orb.z,
+                                                static_cast<std::int16_t>(orb.value));
+            send_packet(proto::play_cb::kSpawnExperienceOrb, spawn.data());
+        }
+    }
 }
 
 }  // namespace cyane::net

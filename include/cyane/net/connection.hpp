@@ -33,6 +33,7 @@
 #include "cyane/net/mob_manager.hpp"
 #include "cyane/net/item_drop.hpp"
 #include "cyane/net/player_hub.hpp"
+#include "cyane/net/xp_orb.hpp"
 #include "cyane/world/world.hpp"
 #include "cyane/game/player_data.hpp"
 
@@ -67,6 +68,7 @@ struct ConnectionContext {
     BlockTicks* block_ticks{nullptr};  // 世界级延迟方块更新（按钮回弹）
     ItemDropManager* item_drops{nullptr};
     MobManager* mobs{nullptr};
+    XPOrbManager* xp_orbs{nullptr};
     ContainerStore* containers{nullptr};
     FurnaceStore* furnaces{nullptr};
     world::CraftingTableStore* crafting_tables{nullptr};

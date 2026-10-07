@@ -242,6 +242,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     server->mobs_ = std::make_unique<net::MobManager>();
     context.mobs = server->mobs_.get();
     server->xp_orb_manager_ = std::make_unique<net::XPOrbManager>();
+    context.xp_orbs = server->xp_orb_manager_.get();
     // 玩家数据持久化存储
     server->player_data_store_ = std::make_unique<game::PlayerDataStore>();
     server->player_data_store_->set_dir(server->config_.player_data_dir);
@@ -474,10 +475,19 @@ void Server::tick() {
         }
         // 拾取：给玩家经验
         for (const auto& collected : xp_events.collected) {
-            // 给玩家发送 SetExperience 包
-            ByteWriter exp;
-            net::writers::write_set_experience(exp, 0.0f, 0, collected.xp_value);
-            hub_->send_to(collected.player_entity_id, proto::play_cb::kSetExperience, exp.data());
+            hub_->send_experience(collected.player_entity_id, collected.xp_value);
+            // 拾取音效（entity.experience_orb.pickup，id 163）
+            ByteWriter sound;
+            net::writers::write_named_sound(sound, 163, proto::sound_category::kBlocks,
+                                            static_cast<std::int32_t>(collected.x),
+                                            static_cast<std::int32_t>(collected.y),
+                                            static_cast<std::int32_t>(collected.z), 0.1f, 1.0f);
+            hub_->send_to(collected.player_entity_id, proto::play_cb::kSoundEffect, sound.data());
+            // CollectItem 展示飞入玩家动画
+            ByteWriter collect;
+            net::writers::write_collect_item(collect, collected.orb_entity_id,
+                                            collected.player_entity_id, 1);
+            hub_->send_to(collected.player_entity_id, proto::play_cb::kCollectItem, collect.data());
         }
     }
     if (mobs_ != nullptr) {
@@ -834,16 +844,26 @@ void Server::fire_arrow(const net::MobShot& shot) {
     static thread_local std::normal_distribution<double> gauss(0.0, 1.0);
     constexpr double kInaccuracy = 6.0;  // 14 - 难度(普通=2)*4
     const double scatter = 0.0075 * kInaccuracy;
-    const double vx = dx / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
-    const double vy = aim_y / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
-    const double vz = dz / len * kArrowSpeed + gauss(explosion_rng()) * scatter;
+    const double vx = (dx / len + gauss(explosion_rng()) * scatter) * kArrowSpeed;
+    const double vy = (aim_y / len + gauss(explosion_rng()) * scatter) * kArrowSpeed;
+    const double vz = (dz / len + gauss(explosion_rng()) * scatter) * kArrowSpeed;
     // damage 系数 2.0（EntityArrow 默认）：实际伤害在命中时按当时速度计算
     projectiles_->spawn(shot.mob_id, shot.x, shot.y, shot.z, vx, vy, vz, 2.0f);
     const auto arrow_id = projectiles_->snapshot().back().entity_id;
+
+    // EntityArrow.shoot 角度计算：
+    // rotationYaw = atan2(vx, vz) * 180 / PI
+    // rotationPitch = atan2(vy, horizontal_speed) * 180 / PI
+    constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+    const double horiz_v = std::sqrt(vx * vx + vz * vz);
+    const float yaw = static_cast<float>(std::atan2(vx, vz) * kRadToDeg);
+    const float pitch = static_cast<float>(std::atan2(vy, horiz_v) * kRadToDeg);
+    // 原版 data = 1 + shooter_id（客户端 handleSpawnObject 解析为 data - 1）
+    const std::int32_t arrow_data = static_cast<std::int32_t>(shot.mob_id + 1);
+
     ByteWriter spawn;
     net::writers::write_spawn_object(spawn, arrow_id, kObjectTypeArrow, shot.x, shot.y, shot.z,
-                                     static_cast<float>(std::atan2(-vx, vz) * 180.0 / 3.14159265358979),
-                                     0.0f, static_cast<std::int32_t>(shot.mob_id), vx, vy, vz);
+                                     yaw, pitch, arrow_data, vx, vy, vz);
     ByteWriter sound;
     net::writers::write_named_sound(sound, 407 /*entity.skeleton.shoot*/,
                                     proto::sound_category::kBlocks,

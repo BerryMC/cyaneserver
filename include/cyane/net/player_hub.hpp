@@ -43,6 +43,7 @@ struct HubMessage {
     float damage{0.0f};  // >0：生物攻击命中（扣血/受伤状态/击退），来源见 damage_from_x/z
     double damage_from_x{0.0};
     double damage_from_z{0.0};
+    int experience{0};  // >0：拾取经验球累加经验
 };
 
 // 线程安全的多人广播中心：连接跨 reactor 线程时也安全。
@@ -133,6 +134,19 @@ public:
         std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
         it->second->mailbox.push_back(
             HubMessage{0, Bytes{}, false, -1, amount, from_x, from_z});
+        return true;
+    }
+
+    // 经验球拾取：要求目标连接累加经验并升级同步
+    bool send_experience(std::uint32_t target_id, int amount) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = players_.find(target_id);
+        if (it == players_.end()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
+        it->second->mailbox.push_back(
+            HubMessage{0, Bytes{}, false, -1, 0.0f, 0.0, 0.0, amount});
         return true;
     }
 

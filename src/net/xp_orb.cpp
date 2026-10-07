@@ -27,6 +27,7 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
     orb.sync_z = static_cast<int>(std::floor(z * 32.0));
     orb.sync_yaw = 0;
     orbs_.push_back(std::move(orb));
+    newly_spawned_.push_back(XPSpawned{id, x, y, z, static_cast<std::int16_t>(value)});
     return id;
 }
 
@@ -34,6 +35,8 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     XPTickResult result;
+    result.spawned = std::move(newly_spawned_);
+    newly_spawned_.clear();
 
     for (auto it = orbs_.begin(); it != orbs_.end();) {
         // 重力
@@ -119,11 +122,17 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
         if (collected) {
             std::uint32_t orb_id = it->entity_id;
             int xp_value = it->value;
+            const double ox = it->x;
+            const double oy = it->y;
+            const double oz = it->z;
             it = orbs_.erase(it);
             result.collected.push_back({
                 .player_entity_id = collector_id,
                 .orb_entity_id = orb_id,
                 .xp_value = xp_value,
+                .x = ox,
+                .y = oy,
+                .z = oz,
             });
             result.destroyed.push_back({
                 .entity_id = orb_id,

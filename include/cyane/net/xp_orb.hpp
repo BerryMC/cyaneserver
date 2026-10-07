@@ -56,6 +56,9 @@ struct XPCollected {
     std::uint32_t player_entity_id{0};
     std::uint32_t orb_entity_id{0};
     int xp_value{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
 };
 
 struct XPTickResult {
@@ -88,6 +91,7 @@ public:
 private:
     mutable std::mutex mutex_;
     std::vector<XPOrb> orbs_;
+    std::vector<XPSpawned> newly_spawned_;
 };
 
 }  // namespace cyane::net

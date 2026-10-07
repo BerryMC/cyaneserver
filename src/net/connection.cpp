@@ -198,6 +198,10 @@ void Connection::drain_mailbox() {
             apply_damage(msg.damage, msg.damage_from_x, msg.damage_from_z);
             continue;
         }
+        if (msg.experience > 0) {
+            add_experience(msg.experience);
+            continue;
+        }
         send_packet(msg.packet_id, ByteSpan{msg.payload});
     }
 }
