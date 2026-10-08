@@ -161,6 +161,10 @@ void Connection::broadcast_movement(const entity::Position& pos) {
         return;
     }
     context_.hub->update_position(player_id_, pos.x, pos.y, pos.z, pos.yaw, pos.pitch);
+    // 旁观者不广播位移给其他玩家（原版 isSpectatedByPlayer 返回 false → tracker 不发位移包）
+    if (context_.game_mode == proto::game_mode::kSpectator) {
+        return;
+    }
     const std::uint8_t angle_yaw = detail::to_angle_byte(pos.yaw);
     const std::uint8_t angle_pitch = detail::to_angle_byte(pos.pitch);
     // 位置与朝向均未变化：客户端 20Hz 常发 no-op 位移包，跳过广播避免无意义流量
@@ -320,6 +324,8 @@ bool Connection::handle_player_command(std::string_view text) {
 
 
 void Connection::set_game_mode(std::uint8_t mode) {
+    const bool was_spectator = context_.game_mode == proto::game_mode::kSpectator;
+    const bool now_spectator = mode == proto::game_mode::kSpectator;
     context_.game_mode = mode;
     if (context_.hub != nullptr) {
         context_.hub->update_game_mode(player_id_, mode);
@@ -339,11 +345,28 @@ void Connection::set_game_mode(std::uint8_t mode) {
         send_packet(proto::play_cb::kPlayerInfo, info.data());
     }
     send_abilities_for(mode);
+
+    // 旁观者切换：向其他玩家发送 DestroyEntities（隐身）；退出旁观：发送 SpawnPlayer（恢复可见）
+    if (context_.hub != nullptr) {
+        if (now_spectator && !was_spectator) {
+            ByteWriter destroy;
+            const std::uint32_t ids[] = {player_id_};
+            writers::write_destroy_entities(destroy, ids);
+            context_.hub->broadcast(player_id_, proto::play_cb::kDestroyEntities, destroy.data());
+        } else if (!now_spectator && was_spectator) {
+            ByteWriter spawn;
+            detail::write_named_spawn(spawn, player_id_, uuid_.bytes(), player_pos_.x, player_pos_.y,
+                                      player_pos_.z, player_pos_.yaw, player_pos_.pitch);
+            context_.hub->broadcast(player_id_, proto::play_cb::kSpawnPlayer, spawn.data());
+        }
+    }
 }
 
 // 远端切换（/gamemode <他人>）：hub 投递到目标连接的 reactor 线程执行，
 // 保证目标的行为判定（挖掘/放置/飞行）与显示一并更新
 void Connection::apply_remote_gamemode(std::uint8_t mode) {
+    const bool was_spectator = context_.game_mode == proto::game_mode::kSpectator;
+    const bool now_spectator = mode == proto::game_mode::kSpectator;
     context_.game_mode = mode;
     if (context_.hub != nullptr) {
         context_.hub->update_game_mode(player_id_, mode);
@@ -353,6 +376,20 @@ void Connection::apply_remote_gamemode(std::uint8_t mode) {
     gs.f32(static_cast<float>(mode));
     send_packet(proto::play_cb::kGameStateChange, gs.data());
     send_abilities_for(mode);
+    // 旁观者切换：与其他玩家互发 DestroyEntities / SpawnPlayer
+    if (context_.hub != nullptr) {
+        if (now_spectator && !was_spectator) {
+            ByteWriter destroy;
+            const std::uint32_t ids[] = {player_id_};
+            writers::write_destroy_entities(destroy, ids);
+            context_.hub->broadcast(player_id_, proto::play_cb::kDestroyEntities, destroy.data());
+        } else if (!now_spectator && was_spectator) {
+            ByteWriter spawn;
+            detail::write_named_spawn(spawn, player_id_, uuid_.bytes(), player_pos_.x, player_pos_.y,
+                                      player_pos_.z, player_pos_.yaw, player_pos_.pitch);
+            context_.hub->broadcast(player_id_, proto::play_cb::kSpawnPlayer, spawn.data());
+        }
+    }
 }
 
 void Connection::send_abilities_for(std::uint8_t mode) {

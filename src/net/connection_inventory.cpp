@@ -471,6 +471,10 @@ void Connection::broadcast_spawn() {
     detail::write_player_info_add(info, uuid_.bytes(), username_, context_.game_mode);
     context_.hub->broadcast(player_id_, proto::play_cb::kPlayerInfo, info.data());
 
+    // 旁观者不向其他人发送 SpawnPlayer（原版 isSpectatedByPlayer 返回 false）
+    if (context_.game_mode == proto::game_mode::kSpectator) {
+        return;
+    }
     ByteWriter spawn;
     detail::write_named_spawn(spawn, player_id_, uuid_.bytes(), player_pos_.x, player_pos_.y,
                               player_pos_.z, player_pos_.yaw, player_pos_.pitch);
@@ -486,6 +490,10 @@ void Connection::spawn_existing_players() {
         detail::write_player_info_add(info, other.uuid, other.name, other.game_mode);
         send_packet(proto::play_cb::kPlayerInfo, info.data());
 
+        // 旁观者不向其他人发送 SpawnPlayer（原版 isSpectatedByPlayer 返回 false）
+        if (other.game_mode == proto::game_mode::kSpectator) {
+            continue;
+        }
         ByteWriter spawn;
         detail::write_named_spawn(spawn, other.entity_id, other.uuid, other.x, other.y, other.z,
                                   other.yaw, other.pitch);
