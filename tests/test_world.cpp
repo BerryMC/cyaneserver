@@ -647,3 +647,44 @@ CYANE_TEST(button_release_is_world_level) {
     ticks.tick(3000, world, hub, 8);
     CYANE_CHECK_EQ(world.block_at(-3, 70, 5), kReleased);
 }
+
+CYANE_TEST(overworld_generator_produces_deterministic_terrain) {
+    world::gen::ChunkGeneratorOverworld gen1{123456789ULL};
+    world::gen::ChunkGeneratorOverworld gen2{123456789ULL};
+
+    const auto c1 = gen1.generate(0, 0);
+    const auto c2 = gen2.generate(0, 0);
+
+    // 1. 基岩层必定在 y=0
+    CYANE_CHECK_EQ(c1.block_at(0, 0, 0), world::kStateBedrock);
+    CYANE_CHECK_EQ(c1.block_at(8, 0, 8), world::kStateBedrock);
+    CYANE_CHECK_EQ(c1.block_at(15, 0, 15), world::kStateBedrock);
+
+    // 2. 确定性：同种子生成结果完全一致
+    for (std::size_t x = 0; x < 16; ++x) {
+        for (std::size_t z = 0; z < 16; ++z) {
+            CYANE_CHECK_EQ(c1.block_at(x, 0, z), c2.block_at(x, 0, z));
+            CYANE_CHECK_EQ(c1.block_at(x, 60, z), c2.block_at(x, 60, z));
+        }
+    }
+
+    // 3. 地表高度应当大于超平坦的 y=3（自然起伏地形）
+    int max_y = 0;
+    for (int y = 255; y >= 0; --y) {
+        if (c1.block_at(8, y, 8) != world::kStateAir) {
+            max_y = y;
+            break;
+        }
+    }
+    CYANE_CHECK(max_y >= 50); // 自然陆地或水面高度通常在 50~100 之间
+}
+
+CYANE_TEST(world_with_generator_materializes_terrain) {
+    world::World world;
+    world.set_generator(987654321ULL);
+
+    // 当请求未物化区块时，触发生成器
+    const auto chunk = world.chunk_at(world::ChunkPos{2, 2});
+    CYANE_CHECK(chunk.has_blocks());
+    CYANE_CHECK_EQ(chunk.block_at(0, 0, 0), world::kStateBedrock);
+}

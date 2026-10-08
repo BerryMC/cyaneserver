@@ -16,7 +16,7 @@ public:
 
     [[nodiscard]] int next_int(int bound) {
         if ((bound & (bound - 1)) == 0) {
-            return static_cast<int>((static_cast<std::uint64_t>(next(31)) * bound) >> 31);
+            return static_cast<int>((static_cast<std::uint64_t>(next(31)) * static_cast<std::uint64_t>(bound)) >> 31);
         }
         int bits;
         do {
@@ -26,11 +26,13 @@ public:
     }
 
     [[nodiscard]] double next_double() {
-        return (static_cast<std::uint64_t>(next(26)) << 27 | next(27)) * 1.1102230246251565e-16;
+        const auto l = (static_cast<std::int64_t>(next(26)) << 27) + static_cast<std::int64_t>(next(27));
+        return static_cast<double>(l) * 1.1102230246251565e-16;
     }
 
     [[nodiscard]] std::uint64_t next_long() {
-        return (static_cast<std::uint64_t>(next(32)) << 32) | next(32);
+        return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(next(32))) << 32) |
+               static_cast<std::uint64_t>(static_cast<std::uint32_t>(next(32)));
     }
 
 private:
@@ -89,7 +91,8 @@ public:
         if (y_size == 1) {
             // 原版 ySize==1 快速路径（2D Perlin，用于 surface noise 等）
             // 逐行转写原版 ySize==1 分支
-            int i5 = 0, j5 = 0, j = 0, k5 = 0, l5 = 0;
+            int i5 = 0, j5 = 0, j = 0, k5 = 0;
+            std::size_t l5 = 0;
             double d14 = 0, d15 = 0;
             double d16 = 1.0 / noise_scale;
             for (int j2 = 0; j2 < x_size; ++j2) {
@@ -118,7 +121,7 @@ public:
             }
         } else {
             // 原版 3D Perlin 分支
-            int i = 0;
+            std::size_t i = 0;
             double d0 = 1.0 / noise_scale;
             int k = -1, l = 0, i1 = 0, j1 = 0, k1 = 0, l1 = 0, i2 = 0;
             double d1 = 0, d2 = 0, d3 = 0, d4 = 0;
@@ -204,7 +207,7 @@ public:
 class NoiseGeneratorOctaves {
 public:
     NoiseGeneratorOctaves(JavaRandom& rng, int octaves) : octaves_(octaves) {
-        generators_.reserve(octaves);
+        generators_.reserve(static_cast<std::size_t>(octaves));
         for (int i = 0; i < octaves; ++i) {
             generators_.emplace_back(rng);
         }
@@ -214,13 +217,14 @@ public:
         std::vector<double>& noise, int x_off, int y_off, int z_off,
         int x_size, int y_size, int z_size,
         double x_scale, double y_scale, double z_scale) {
-        if (noise.empty() || noise.size() < static_cast<std::size_t>(x_size * y_size * z_size)) {
-            noise.assign(x_size * y_size * z_size, 0.0);
+        const auto total_size = static_cast<std::size_t>(x_size * y_size * z_size);
+        if (noise.empty() || noise.size() < total_size) {
+            noise.assign(total_size, 0.0);
         } else {
             std::fill(noise.begin(), noise.end(), 0.0);
         }
         double d3 = 1.0;
-        for (int j = 0; j < octaves_; ++j) {
+        for (std::size_t j = 0; j < static_cast<std::size_t>(octaves_); ++j) {
             double d0 = x_off * d3 * x_scale;
             double d1 = y_off * d3 * y_scale;
             double d2 = z_off * d3 * z_scale;
@@ -244,13 +248,14 @@ public:
         std::vector<double>& noise, double x_off, double z_off,
         int x_size, int z_size,
         double x_scale, double z_scale, double exponent) {
-        if (noise.empty() || noise.size() < static_cast<std::size_t>(x_size * z_size)) {
-            noise.assign(x_size * z_size, 0.0);
+        const auto total_size = static_cast<std::size_t>(x_size * z_size);
+        if (noise.empty() || noise.size() < total_size) {
+            noise.assign(total_size, 0.0);
         } else {
             std::fill(noise.begin(), noise.end(), 0.0);
         }
         double d3 = 1.0;
-        for (int j = 0; j < octaves_; ++j) {
+        for (std::size_t j = 0; j < static_cast<std::size_t>(octaves_); ++j) {
             double d0 = x_off * d3 * x_scale;
             double d2 = z_off * d3 * z_scale;
             long long k = static_cast<long long>(d0);

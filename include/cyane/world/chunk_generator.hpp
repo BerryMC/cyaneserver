@@ -51,10 +51,12 @@ public:
     [[nodiscard]] Chunk generate(int x, int z) {
         Chunk chunk{ChunkPos{x, z}};
         generate_heightmap(x, z);
-        set_blocks_in_chunk(x, z, chunk);
+        set_blocks_in_chunk(chunk);
         replace_biome_blocks(x, z, chunk);
         return chunk;
     }
+
+    [[nodiscard]] std::uint64_t seed() const noexcept { return seed_; }
 
 private:
     std::uint64_t seed_{0};
@@ -63,7 +65,7 @@ private:
     std::unique_ptr<NoiseGeneratorOctaves> main_noise_;
     std::unique_ptr<NoiseGeneratorImproved> surface_noise_;
     std::unique_ptr<NoiseGeneratorOctaves> depth_noise_;
-    std::vector<double> height_map_{325, 0.0};
+    std::vector<double> height_map_{825, 0.0};
     std::vector<double> depth_region_;
     std::vector<double> main_noise_region_;
     std::vector<double> min_limit_region_;
@@ -77,7 +79,9 @@ private:
             std::array<float, 25> w{};
             for (int i = -2; i <= 2; ++i) {
                 for (int j = -2; j <= 2; ++j) {
-                    w[(i + 2) + (j + 2) * 5] = 10.0f / std::sqrt(static_cast<float>(i * i + j * j + 0.2f));
+                    const auto idx = static_cast<std::size_t>((i + 2) + (j + 2) * 5);
+                    const auto dist_sq = static_cast<float>(i * i + j * j) + 0.2f;
+                    w[idx] = 10.0f / std::sqrt(dist_sq);
                 }
             }
             return w;
@@ -88,14 +92,16 @@ private:
     void generate_heightmap(int x, int z) {
         depth_region_ = depth_noise_->generate_noise_octaves_2d(
             depth_region_, static_cast<double>(x), static_cast<double>(z), 5, 5,
-            settings_.depth_noise_scale_x, settings_.depth_noise_scale_z,
-            settings_.depth_noise_scale_exponent);
-        float f = settings_.coordinate_scale;
-        float f1 = settings_.height_scale;
+            static_cast<double>(settings_.depth_noise_scale_x),
+            static_cast<double>(settings_.depth_noise_scale_z),
+            static_cast<double>(settings_.depth_noise_scale_exponent));
+        const double f = static_cast<double>(settings_.coordinate_scale);
+        const double f1 = static_cast<double>(settings_.height_scale);
         main_noise_region_ = main_noise_->generate_noise_octaves(
             main_noise_region_, x, 0, z, 5, 33, 5,
-            f / settings_.main_noise_scale_x, f1 / settings_.main_noise_scale_y,
-            f / settings_.main_noise_scale_z);
+            f / static_cast<double>(settings_.main_noise_scale_x),
+            f1 / static_cast<double>(settings_.main_noise_scale_y),
+            f / static_cast<double>(settings_.main_noise_scale_z));
         min_limit_region_ = min_limit_noise_->generate_noise_octaves(
             min_limit_region_, x, 0, z, 5, 33, 5, f, f1, f);
         max_limit_region_ = max_limit_noise_->generate_noise_octaves(
@@ -105,27 +111,31 @@ private:
         std::array<biome::BiomeInfo, 100> biomes{};
         for (int i = 0; i < 10; ++i) {
             for (int j = 0; j < 10; ++j) {
-                double n = surface_noise_->populate_noise_array_bilinear(
+                const auto b_idx = static_cast<std::size_t>(i + j * 10);
+                const double n = surface_noise_->populate_noise_array_bilinear(
                     static_cast<double>(x * 16 + i * 4 - 8) * 0.0125,
                     static_cast<double>(z * 16 + j * 4 - 8) * 0.0125);
-                biomes[i + j * 10] = biome::biome_at(x * 16 + i * 4, z * 16 + j * 4, n);
+                biomes[b_idx] = biome::biome_at(x * 16 + i * 4, z * 16 + j * 4, n);
             }
         }
 
-        int idx = 0;
-        int j = 0;
+        std::size_t idx = 0;
+        std::size_t j = 0;
         for (int k = 0; k < 5; ++k) {
             for (int l = 0; l < 5; ++l) {
                 float f2 = 0.0f;
                 float f3 = 0.0f;
                 float f4 = 0.0f;
-                const auto& biome_center = biomes[k + 2 + (l + 2) * 10];
+                const auto center_idx = static_cast<std::size_t>(k + 2 + (l + 2) * 10);
+                const auto& biome_center = biomes[center_idx];
                 for (int j1 = -2; j1 <= 2; ++j1) {
                     for (int k1 = -2; k1 <= 2; ++k1) {
-                        const auto& b = biomes[k + j1 + 2 + (l + k1 + 2) * 10];
-                        float f5 = settings_.biome_depth_offset + b.base_height * settings_.biome_depth_weight;
-                        float f6 = settings_.biome_scale_offset + b.height_variation * settings_.biome_scale_weight;
-                        float f7 = biome_weights()[(j1 + 2) + (k1 + 2) * 5] / (f5 + 2.0f);
+                        const auto b_idx = static_cast<std::size_t>(k + j1 + 2 + (l + k1 + 2) * 10);
+                        const auto& b = biomes[b_idx];
+                        const float f5 = settings_.biome_depth_offset + b.base_height * settings_.biome_depth_weight;
+                        const float f6 = settings_.biome_scale_offset + b.height_variation * settings_.biome_scale_weight;
+                        const auto w_idx = static_cast<std::size_t>((j1 + 2) + (k1 + 2) * 5);
+                        float f7 = biome_weights()[w_idx] / (f5 + 2.0f);
                         if (b.base_height > biome_center.base_height) {
                             f7 /= 2.0f;
                         }
@@ -152,18 +162,17 @@ private:
                     d7 /= 8.0;
                 }
                 ++j;
-                double d8 = f3 + d7 * 0.2;
-                d8 = d8 * settings_.base_size / 8.0;
-                double d0 = settings_.base_size + d8 * 4.0;
+                const double d8 = (static_cast<double>(f3) + d7 * 0.2) * static_cast<double>(settings_.base_size) / 8.0;
+                const double d0 = static_cast<double>(settings_.base_size) + d8 * 4.0;
                 for (int l1 = 0; l1 < 33; ++l1) {
-                    double d1 = (l1 - d0) * settings_.stretch_y * 128.0 / 256.0 / f2;
+                    double d1 = (static_cast<double>(l1) - d0) * static_cast<double>(settings_.stretch_y) * 128.0 / 256.0 / static_cast<double>(f2);
                     if (d1 < 0.0) d1 *= 4.0;
-                    double d2 = min_limit_region_[idx] / settings_.lower_limit_scale;
-                    double d3 = max_limit_region_[idx] / settings_.upper_limit_scale;
-                    double d4 = (main_noise_region_[idx] / 10.0 + 1.0) / 2.0;
+                    const double d2 = min_limit_region_[idx] / static_cast<double>(settings_.lower_limit_scale);
+                    const double d3 = max_limit_region_[idx] / static_cast<double>(settings_.upper_limit_scale);
+                    const double d4 = (main_noise_region_[idx] / 10.0 + 1.0) / 2.0;
                     double d5 = clamped_lerp(d2, d3, d4) - d1;
                     if (l1 > 29) {
-                        double d6 = static_cast<float>(l1 - 29) / 3.0f;
+                        const double d6 = static_cast<double>(l1 - 29) / 3.0;
                         d5 = d5 * (1.0 - d6) + -10.0 * d6;
                     }
                     height_map_[idx] = d5;
@@ -179,8 +188,8 @@ private:
         return a + (b - a) * t;
     }
 
-    void set_blocks_in_chunk(int x, int z, Chunk& chunk) {
-        int i = 0;
+    void set_blocks_in_chunk(Chunk& chunk) {
+        std::size_t i = 0;
         for (int j2 = 0; j2 < 4; ++j2) {
             for (int l2 = 0; l2 < 4; ++l2) {
                 for (int i2 = 0; i2 < 32; ++i2) {
@@ -202,9 +211,9 @@ private:
                             for (int l = 0; l < 4; ++l) {
                                 lvt += (d11 - d10) * 0.25;
                                 if (lvt > 0.0) {
-                                    chunk.set_block(j2 * 4 + k, i2 * 8 + j, l2 * 4 + l, kStateStone);
+                                    chunk.set_block(static_cast<std::size_t>(j2 * 4 + k), i2 * 8 + j, static_cast<std::size_t>(l2 * 4 + l), kStateStone);
                                 } else if (i2 * 8 + j < settings_.sea_level) {
-                                    chunk.set_block(j2 * 4 + k, i2 * 8 + j, l2 * 4 + l, kStateWater);
+                                    chunk.set_block(static_cast<std::size_t>(j2 * 4 + k), i2 * 8 + j, static_cast<std::size_t>(l2 * 4 + l), kStateWater);
                                 }
                             }
                             d10 += d12;
@@ -224,8 +233,8 @@ private:
     void replace_biome_blocks(int x, int z, Chunk& chunk) {
         // surfaceNoise.getRegion(depthBuffer, x*16, z*16, 16, 16, 0.0625, 0.0625, 1.0)
         // 简化：用 Perlin noise 做地表起伏
-        for (int i = 0; i < 16; ++i) {
-            for (int j = 0; j < 16; ++j) {
+        for (std::size_t i = 0; i < 16; ++i) {
+            for (std::size_t j = 0; j < 16; ++j) {
                 // 找地表高度（最高非空气方块）
                 int surface_y = settings_.sea_level;
                 for (int y = 255; y >= 0; --y) {
@@ -237,9 +246,10 @@ private:
                 }
                 // 获取生物群系
                 double n = surface_noise_->populate_noise_array_bilinear(
-                    static_cast<double>(x * 16 + i) * 0.0125,
-                    static_cast<double>(z * 16 + j) * 0.0125);
-                auto b = biome::biome_at(x * 16 + i, z * 16 + j, n);
+                    (static_cast<double>(x * 16) + static_cast<double>(i)) * 0.0125,
+                    (static_cast<double>(z * 16) + static_cast<double>(j)) * 0.0125);
+                auto b = biome::biome_at(static_cast<std::int32_t>(x * 16 + static_cast<int>(i)),
+                                         static_cast<std::int32_t>(z * 16 + static_cast<int>(j)), n);
                 // 地表替换：顶层 top_block，下方 filler_block 3 格
                 if (chunk.block_at(i, surface_y, j) == kStateStone) {
                     chunk.set_block(i, surface_y, j, b.top_block);

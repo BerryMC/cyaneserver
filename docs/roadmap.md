@@ -7,7 +7,7 @@
 - [x] **M2 世界与移动**（ChunkData 编码、玩家移动同步、多人可见、聊天、KeepAlive、动态区块流式加载）
 - [x] **M3 玩法基础**（方块交互、46 格背包与窗口同步、箱子/工作台/熔炉、数据驱动配方、命令与 OP）
 - [x] **M4 存档与世界兼容**（玩家 .dat 双向互通、**完整区块存储**、**原版真实世界加载**、`level.dat` 读写、**无损保存打补丁**、**掉落物与生物落盘**、小容器发射/投掷/漏斗）
-- [ ] M5 世界生成（噪声地形、生物群系过渡、洞穴）
+- [x] **M5 世界生成（核心噪声地形完成）**（Perlin/Improved 噪声引擎、ChunkGeneratorOverworld、生物群系地表替换、level.dat 种子对接）
 - [x] **M6 玩法进阶（核心大部完成）**（敌对生物 AI 与 A* 寻路、苦力怕引爆/骷髅举弓走位射箭、自然刷怪、完整击退与物理重力、经验系统与 XP 球、死亡掉落与动画）
 - [ ] M7 插件基座（嵌入式 JVM、Bukkit API 核心子集、类加载器隔离、事件总线）
 - [ ] M8 Bukkit API 覆盖扩展
@@ -38,7 +38,7 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）为架构与功能广度对�
 | **Combat & Damage** 战斗系统 | `net/connection_combat` `net/projectile_manager` | ✅ | 伤害抗性无敌窗、护甲吸伤、原版击退公式、箭矢物理碰撞、死亡掉落 |
 | **Experience** 经验系统 | `net/xp_orb` `net/connection_experience` | ✅ | 经验球物理/合并/拾取、原版等级经验公式、`SetExperience` 同步 |
 | **Commands & Permission** | `game/op_manager` `net/connection_play` | ✅ | 控制台/玩家共享命令（`/gamemode /tp /kill /op /deop /say /tps /help`） |
-| **Generating** 世界生成 | `world/world`（超平坦 baseline） | ⬜ | M5 规划：多层噪声地形、生物群系、矿物生成 |
+| **Generating** 世界生成 | `world/noise` `world/chunk_generator` `world/biome` | ✅ | **Perlin 噪声地形**（NoiseGeneratorImproved/Octaves）、ChunkGeneratorOverworld、16 种生物群系地表替换 |
 | **Plugin / JNI / Bukkit** | — | ⬜ | M7–M9 规划：内嵌 JVM、Bukkit API 核心实现、NMS shim |
 
 ---
@@ -75,6 +75,17 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）为架构与功能广度对�
 - 原版世界接轨：加载真实原版地图目录（实测 1500+ 区块零错误加载）、`level.dat` 出生点与种子读取。
 - 实体与小容器落盘：掉落物与生物落盘为原版 `Entities` 列表，小容器落盘为 `TileEntities`。
 
+### M5 交付：世界生成（噪声地形）
+- **NoiseGeneratorImproved**（Perlin 改进噪声）：512 项排列表、3D/2D `populateNoiseArray`、quintic smoothstep 插值，逐行转写原版。
+- **NoiseGeneratorOctaves**（八度叠加）：16/8 倍频叠加、3D 与 2D 两个 `generateNoiseOctaves` 重载。
+- **JavaRandom**：复现 `java.util.Random` 的 `nextInt/nextDouble/nextLong`，供噪声构造器洗牌。
+- **ChunkGeneratorOverworld**：
+  - `generateHeightmap`：4 组 Perlin 噪声（depth/main/minLimit/maxLimit）叠加生成 5×5×33 高度图，含生物群系 5×5 权重卷积。
+  - `setBlocksInChunk`：5×5×33 → 16×16×256 三线性插值填充 Stone/Water。
+  - `replaceBiomeBlocks`：按生物群系 topBlock/fillerBlock 替换地表层、基岩层 Y=0。
+- **BiomeInfo 表**：16 种常用生物群系（Ocean/Plains/Desert/Hills/Forest/Taiga/Swamp/River/Beach/StoneBeach/Savanna/Jungle/Snow/BirchForest/RoofedForest/Mesa），携带 baseHeight/heightVariation/topBlock/fillerBlock。
+- **World 集成**：`ensure_locked` 磁盘加载失败时调用生成器生成真实地形，替代超平坦 baseline。`set_generator(seed)` 从 `level.dat` 的 `RandomSeed` 注入。
+
 ### M6 交付（已落地）：玩法进阶与战斗
 - 原版 A\* 寻路：`world/pathfinding.hpp`，`WalkNodeProcessor` 节点代价评估、包围盒尺寸门控、防跳崖保证。
 - 敌对生物 AI：
@@ -99,4 +110,4 @@ Cuberite（`/home/cycy/code/cuberite-master/src`）为架构与功能广度对�
 | 单包编解码延时 | < 500ns | < 200ns |
 | 实体追踪视距过渡 | 零冗余发包 | 切比雪夫视距增量精确推演 |
 | 区块流式下发 | 突发缓冲可控 | 初始 49 区块即时送达，后续 32 区块/tick |
-| 单元测试覆盖 | 核心路径全覆盖 | 177 项自动化测试 100% 通过 |
+| 单元测试覆盖 | 核心路径全覆盖 | 179 项自动化测试 100% 通过 |
