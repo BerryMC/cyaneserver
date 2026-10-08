@@ -677,6 +677,16 @@ CYANE_TEST(overworld_generator_produces_deterministic_terrain) {
         }
     }
     CYANE_CHECK(max_y >= 50); // 自然陆地或水面高度通常在 50~100 之间
+
+    // 4. 地表连续性：相邻方块地表高度平缓过渡（消除 4x4 尖刺断层断崖）
+    for (std::size_t x = 0; x < 15; ++x) {
+        int h1 = 0, h2 = 0;
+        for (int y = 255; y >= 0; --y) {
+            if (c1.block_at(x, y, 8) != world::kStateAir && h1 == 0) h1 = y;
+            if (c1.block_at(x + 1, y, 8) != world::kStateAir && h2 == 0) h2 = y;
+        }
+        CYANE_CHECK(std::abs(h1 - h2) <= 3);
+    }
 }
 
 CYANE_TEST(world_with_generator_materializes_terrain) {

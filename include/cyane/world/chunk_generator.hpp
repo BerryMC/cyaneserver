@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "cyane/world/biome.hpp"
@@ -34,10 +36,10 @@ struct GeneratorSettings {
     bool use_ravines = true;
 };
 
-// ChunkGeneratorOverworld（逐行转写，仅地形噪声+地表替换，不含结构生成器）
+// ChunkGeneratorOverworld（逐行转写 1.12.2 原版）
 class ChunkGeneratorOverworld {
 public:
-    ChunkGeneratorOverworld(std::uint64_t seed) : seed_(seed) {
+    explicit ChunkGeneratorOverworld(std::uint64_t seed) : seed_(seed) {
         JavaRandom rng(seed);
         min_limit_noise_ = std::make_unique<NoiseGeneratorOctaves>(rng, 16);
         max_limit_noise_ = std::make_unique<NoiseGeneratorOctaves>(rng, 16);
@@ -50,8 +52,7 @@ public:
     // 生成一个 16×256×16 的区块（逐行转写 generateHeightmap + setBlocksInChunk）
     [[nodiscard]] Chunk generate(int x, int z) {
         Chunk chunk{ChunkPos{x, z}};
-        generate_heightmap(x, z);
-        set_blocks_in_chunk(chunk);
+        set_blocks_in_chunk(x, z, chunk);
         replace_biome_blocks(x, z, chunk);
         return chunk;
     }
@@ -70,7 +71,6 @@ private:
     std::vector<double> main_noise_region_;
     std::vector<double> min_limit_region_;
     std::vector<double> max_limit_region_;
-    std::vector<double> depth_buffer_{256, 0.0};
     GeneratorSettings settings_;
 
     // biomeWeights[5×5]（对齐原版 ChunkGeneratorOverworld 构造器）
@@ -89,7 +89,7 @@ private:
         return w;
     }
 
-    void generate_heightmap(int x, int z) {
+    void generate_heightmap(int x, int y, int z) {
         depth_region_ = depth_noise_->generate_noise_octaves_2d(
             depth_region_, static_cast<double>(x), static_cast<double>(z), 5, 5,
             static_cast<double>(settings_.depth_noise_scale_x),
@@ -98,24 +98,25 @@ private:
         const double f = static_cast<double>(settings_.coordinate_scale);
         const double f1 = static_cast<double>(settings_.height_scale);
         main_noise_region_ = main_noise_->generate_noise_octaves(
-            main_noise_region_, x, 0, z, 5, 33, 5,
+            main_noise_region_, x, y, z, 5, 33, 5,
             f / static_cast<double>(settings_.main_noise_scale_x),
             f1 / static_cast<double>(settings_.main_noise_scale_y),
             f / static_cast<double>(settings_.main_noise_scale_z));
         min_limit_region_ = min_limit_noise_->generate_noise_octaves(
-            min_limit_region_, x, 0, z, 5, 33, 5, f, f1, f);
+            min_limit_region_, x, y, z, 5, 33, 5, f, f1, f);
         max_limit_region_ = max_limit_noise_->generate_noise_octaves(
-            max_limit_region_, x, 0, z, 5, 33, 5, f, f1, f);
+            max_limit_region_, x, y, z, 5, 33, 5, f, f1, f);
 
-        // 获取 10×10 的生物群系网格
+        // 获取 10×10 的生物群系网格（在 x - 2, z - 2 采样，4 格一个点）
         std::array<biome::BiomeInfo, 100> biomes{};
         for (int i = 0; i < 10; ++i) {
             for (int j = 0; j < 10; ++j) {
                 const auto b_idx = static_cast<std::size_t>(i + j * 10);
+                const int bx = (x - 2 + i) * 4;
+                const int bz = (z - 2 + j) * 4;
                 const double n = surface_noise_->populate_noise_array_bilinear(
-                    static_cast<double>(x * 16 + i * 4 - 8) * 0.0125,
-                    static_cast<double>(z * 16 + j * 4 - 8) * 0.0125);
-                biomes[b_idx] = biome::biome_at(x * 16 + i * 4, z * 16 + j * 4, n);
+                    static_cast<double>(bx) * 0.0125, static_cast<double>(bz) * 0.0125);
+                biomes[b_idx] = biome::biome_at(bx, bz, n);
             }
         }
 
@@ -188,79 +189,118 @@ private:
         return a + (b - a) * t;
     }
 
-    void set_blocks_in_chunk(Chunk& chunk) {
-        std::size_t i = 0;
-        for (int j2 = 0; j2 < 4; ++j2) {
-            for (int l2 = 0; l2 < 4; ++l2) {
+    void set_blocks_in_chunk(int x, int z, Chunk& chunk) {
+        generate_heightmap(x * 4, 0, z * 4);
+
+        for (int i = 0; i < 4; ++i) {
+            const int j = i * 5;
+            const int k = (i + 1) * 5;
+
+            for (int l = 0; l < 4; ++l) {
+                const int i1 = (j + l) * 33;
+                const int j1 = (j + l + 1) * 33;
+                const int k1 = (k + l) * 33;
+                const int l1 = (k + l + 1) * 33;
+
                 for (int i2 = 0; i2 < 32; ++i2) {
-                    double d1 = height_map_[i] * 0.25;
-                    double d2 = height_map_[i + 1] * 0.25;
-                    double d3 = height_map_[i + 33] * 0.25;
-                    double d4 = height_map_[i + 34] * 0.25;
-                    double d5 = (height_map_[i] - d1) * 0.125;
-                    double d6 = (height_map_[i + 1] - d2) * 0.125;
-                    double d7 = (height_map_[i + 33] - d3) * 0.125;
-                    double d8 = (height_map_[i + 34] - d4) * 0.125;
-                    for (int j = 0; j < 8; ++j) {
+                    constexpr double d0 = 0.125;
+                    double d1 = height_map_[static_cast<std::size_t>(i1 + i2)];
+                    double d2 = height_map_[static_cast<std::size_t>(j1 + i2)];
+                    double d3 = height_map_[static_cast<std::size_t>(k1 + i2)];
+                    double d4 = height_map_[static_cast<std::size_t>(l1 + i2)];
+                    const double d5 = (height_map_[static_cast<std::size_t>(i1 + i2 + 1)] - d1) * d0;
+                    const double d6 = (height_map_[static_cast<std::size_t>(j1 + i2 + 1)] - d2) * d0;
+                    const double d7 = (height_map_[static_cast<std::size_t>(k1 + i2 + 1)] - d3) * d0;
+                    const double d8 = (height_map_[static_cast<std::size_t>(l1 + i2 + 1)] - d4) * d0;
+
+                    for (int j2 = 0; j2 < 8; ++j2) {
+                        constexpr double d9 = 0.25;
                         double d10 = d1;
                         double d11 = d2;
-                        double d12 = (d3 - d1) * 0.25;
-                        double d13 = (d4 - d2) * 0.25;
-                        for (int k = 0; k < 4; ++k) {
-                            double lvt = d10 - (d11 - d10) * 0.25;
-                            for (int l = 0; l < 4; ++l) {
-                                lvt += (d11 - d10) * 0.25;
-                                if (lvt > 0.0) {
-                                    chunk.set_block(static_cast<std::size_t>(j2 * 4 + k), i2 * 8 + j, static_cast<std::size_t>(l2 * 4 + l), kStateStone);
-                                } else if (i2 * 8 + j < settings_.sea_level) {
-                                    chunk.set_block(static_cast<std::size_t>(j2 * 4 + k), i2 * 8 + j, static_cast<std::size_t>(l2 * 4 + l), kStateWater);
+                        const double d12 = (d3 - d1) * d9;
+                        const double d13 = (d4 - d2) * d9;
+
+                        for (int k2 = 0; k2 < 4; ++k2) {
+                            const double d16 = (d11 - d10) * d9;
+                            double lvt_45_1 = d10 - d16;
+
+                            for (int l2 = 0; l2 < 4; ++l2) {
+                                lvt_45_1 += d16;
+                                const auto bx = static_cast<std::size_t>(i * 4 + k2);
+                                const auto by = static_cast<std::int32_t>(i2 * 8 + j2);
+                                const auto bz = static_cast<std::size_t>(l * 4 + l2);
+
+                                if (lvt_45_1 > 0.0) {
+                                    chunk.set_block(bx, by, bz, kStateStone);
+                                } else if (by < settings_.sea_level) {
+                                    chunk.set_block(bx, by, bz, kStateWater);
                                 }
                             }
+
                             d10 += d12;
                             d11 += d13;
                         }
+
                         d1 += d5;
                         d2 += d6;
                         d3 += d7;
                         d4 += d8;
                     }
-                    ++i;
                 }
             }
         }
     }
 
     void replace_biome_blocks(int x, int z, Chunk& chunk) {
-        // surfaceNoise.getRegion(depthBuffer, x*16, z*16, 16, 16, 0.0625, 0.0625, 1.0)
-        // 简化：用 Perlin noise 做地表起伏
+        JavaRandom rng(static_cast<std::uint64_t>(x) * 341873128712ULL +
+                       static_cast<std::uint64_t>(z) * 132897987541ULL);
+        const int sea_level = settings_.sea_level;
+
         for (std::size_t i = 0; i < 16; ++i) {
             for (std::size_t j = 0; j < 16; ++j) {
-                // 找地表高度（最高非空气方块）
-                int surface_y = settings_.sea_level;
+                const int wx = x * 16 + static_cast<int>(i);
+                const int wz = z * 16 + static_cast<int>(j);
+                const double noise_val = surface_noise_->populate_noise_array_bilinear(
+                    static_cast<double>(wx) * 0.0625, static_cast<double>(wz) * 0.0625);
+                const auto b = biome::biome_at(wx, wz, noise_val * 0.5);
+
+                const int k = static_cast<int>(noise_val / 3.0 + 3.0 + rng.next_double() * 0.25);
+                int depth = -1;
+                std::uint16_t top = b.top_block;
+                std::uint16_t filler = b.filler_block;
+
                 for (int y = 255; y >= 0; --y) {
-                    auto s = chunk.block_at(i, y, j);
-                    if (s != kStateAir && block_id(s) != 8 && block_id(s) != 9) {
-                        surface_y = y;
-                        break;
-                    }
-                }
-                // 获取生物群系
-                double n = surface_noise_->populate_noise_array_bilinear(
-                    (static_cast<double>(x * 16) + static_cast<double>(i)) * 0.0125,
-                    (static_cast<double>(z * 16) + static_cast<double>(j)) * 0.0125);
-                auto b = biome::biome_at(static_cast<std::int32_t>(x * 16 + static_cast<int>(i)),
-                                         static_cast<std::int32_t>(z * 16 + static_cast<int>(j)), n);
-                // 地表替换：顶层 top_block，下方 filler_block 3 格
-                if (chunk.block_at(i, surface_y, j) == kStateStone) {
-                    chunk.set_block(i, surface_y, j, b.top_block);
-                    for (int dy = 1; dy <= 3 && surface_y - dy >= 0; ++dy) {
-                        if (chunk.block_at(i, surface_y - dy, j) == kStateStone) {
-                            chunk.set_block(i, surface_y - dy, j, b.filler_block);
+                    if (y <= rng.next_int(5)) {
+                        chunk.set_block(i, y, j, kStateBedrock);
+                    } else {
+                        const auto current = chunk.block_at(i, y, j);
+                        if (current == kStateAir) {
+                            depth = -1;
+                        } else if (current == kStateStone) {
+                            if (depth == -1) {
+                                if (k <= 0) {
+                                    top = kStateAir;
+                                    filler = kStateStone;
+                                } else if (y >= sea_level - 4 && y <= sea_level + 1) {
+                                    top = b.top_block;
+                                    filler = b.filler_block;
+                                }
+
+                                depth = k;
+                                if (y >= sea_level - 1) {
+                                    chunk.set_block(i, y, j, top);
+                                } else if (y < sea_level - 7 - k) {
+                                    chunk.set_block(i, y, j, kStateGravel);
+                                } else {
+                                    chunk.set_block(i, y, j, filler);
+                                }
+                            } else if (depth > 0) {
+                                --depth;
+                                chunk.set_block(i, y, j, filler);
+                            }
                         }
                     }
                 }
-                // 基岩层（y=0）
-                chunk.set_block(i, 0, j, kStateBedrock);
             }
         }
     }
