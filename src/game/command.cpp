@@ -349,11 +349,11 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         return true;
     }
 
-    // 8. kill
+    // 8. kill（支持原版实体选择器 @a @p @r @e @s）
     if (cmd == "kill") {
         if (args.empty()) {
             if (!sender.is_player()) {
-                sender.send_feedback("控制台击杀必须指定玩家: /kill <玩家>", true);
+                sender.send_feedback("控制台击杀必须指定目标: /kill <玩家|@a|@p|@r|@e|@s>", true);
                 return true;
             }
             (void)server.kill_player_by_name(sender.name());
@@ -364,10 +364,43 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             sender.send_feedback("权限不足", true);
             return true;
         }
-        if (server.kill_player_by_name(args[0])) {
-            sender.send_feedback(std::format("已杀死 {}", args[0]));
+        const std::string_view target = args[0];
+        if (target == "@s") {
+            if (!sender.is_player()) {
+                sender.send_feedback("控制台无自身实体可击杀", true);
+                return true;
+            }
+            (void)server.kill_player_by_name(sender.name());
+            sender.send_feedback(std::format("已杀死 {}", sender.name()));
+        } else if (target == "@a") {
+            server.kill_all_players();
+            sender.send_feedback("已杀死所有在线玩家");
+        } else if (target == "@p") {
+            const auto* pos = sender.player_position();
+            if (pos == nullptr) {
+                sender.send_feedback("控制台无坐标，无法选取最近玩家", true);
+                return true;
+            }
+            if (server.kill_nearest_player(pos->x, pos->y, pos->z)) {
+                sender.send_feedback("已杀死最近的玩家");
+            } else {
+                sender.send_feedback("附近没有玩家", true);
+            }
+        } else if (target == "@r") {
+            if (server.kill_random_player()) {
+                sender.send_feedback("已随机杀死一名玩家");
+            } else {
+                sender.send_feedback("没有在线玩家", true);
+            }
+        } else if (target == "@e") {
+            server.kill_all_entities();
+            sender.send_feedback("已杀死所有实体");
         } else {
-            sender.send_feedback(std::format("找不到玩家 '{}'", args[0]), true);
+            if (server.kill_player_by_name(target)) {
+                sender.send_feedback(std::format("已杀死 {}", target));
+            } else {
+                sender.send_feedback(std::format("找不到玩家 '{}'", target), true);
+            }
         }
         return true;
     }
@@ -591,13 +624,14 @@ std::vector<std::string> CommandDispatcher::tab_complete(const CommandSender& se
                                                         std::string_view text) {
     (void)sender;
     std::vector<std::string> matches;
-    text = trim_ws(text);
+    // 只去前导斜杠，不去尾随空格（尾随空格标志着已进入参数补全）
     if (!text.empty() && text.front() == '/') {
         text.remove_prefix(1);
     }
-    const auto space = text.find(' ');
-    if (space == std::string_view::npos) {
-        // 补全命令名
+    // 找最后一个空格位置，确定当前正在补全的词
+    const auto last_space = text.rfind(' ');
+    if (last_space == std::string_view::npos) {
+        // 没有空格：补全命令名本身
         static constexpr std::string_view kAllCommands[] = {
             "help", "tps", "list", "gamemode", "defaultgamemode", "tp", "teleport",
             "kill", "time", "weather", "difficulty", "seed", "give", "clear",
@@ -611,32 +645,64 @@ std::vector<std::string> CommandDispatcher::tab_complete(const CommandSender& se
         return matches;
     }
 
-    const std::string_view cmd = text.substr(0, space);
-    const std::string_view rest = trim_ws(text.substr(space + 1));
+    // 有空格：取命令名和当前词前缀
+    const std::string_view cmd = text.substr(0, text.find(' '));
+    const std::string_view prefix = text.substr(last_space + 1);
     const auto names = server.player_names();
 
-    // 补全玩家名
+    // 补全玩家名或实体选择器
     if (cmd == "tp" || cmd == "teleport" || cmd == "kill" || cmd == "op" || cmd == "deop" ||
-        cmd == "give" || cmd == "clear" || (cmd == "gamemode" && rest.find(' ') != std::string_view::npos)) {
-        std::string_view prefix = rest;
-        const auto last_space = rest.rfind(' ');
-        if (last_space != std::string_view::npos) {
-            prefix = rest.substr(last_space + 1);
-        }
+        cmd == "give" || cmd == "clear" ||
+        (cmd == "gamemode" && text.find(' ') != text.find(' ', text.find(' ') + 1))) {
+        // 补全玩家名
         for (const auto& n : names) {
             if (n.starts_with(prefix)) {
                 matches.push_back(n);
             }
         }
+        // kill / tp 命令额外补全实体选择器
+        if (cmd == "kill" || cmd == "tp" || cmd == "teleport") {
+            static constexpr std::string_view kSelectors[] = {"@a", "@p", "@r", "@e", "@s"};
+            for (const auto s : kSelectors) {
+                if (s.starts_with(prefix)) {
+                    matches.push_back(std::string(s));
+                }
+            }
+        }
     } else if (cmd == "gamemode" || cmd == "defaultgamemode") {
         for (const auto m : {"survival", "creative", "adventure", "spectator"}) {
-            if (std::string_view(m).starts_with(rest)) {
+            if (std::string_view(m).starts_with(prefix)) {
                 matches.push_back(m);
             }
         }
-    } else if (cmd == "time" && rest.starts_with("set")) {
-        for (const auto t : {"day", "noon", "night", "midnight"}) {
-            matches.push_back(t);
+    } else if (cmd == "time") {
+        // /time set <...> 或 /time <set|add|query>
+        const auto first_space = text.find(' ');
+        const std::string_view sub = text.substr(first_space + 1, last_space - first_space - 1);
+        if (sub == "set") {
+            for (const auto t : {"day", "noon", "night", "midnight"}) {
+                if (std::string_view(t).starts_with(prefix)) {
+                    matches.push_back(t);
+                }
+            }
+        } else {
+            for (const auto t : {"set", "add", "query"}) {
+                if (std::string_view(t).starts_with(prefix)) {
+                    matches.push_back(t);
+                }
+            }
+        }
+    } else if (cmd == "weather") {
+        for (const auto w : {"clear", "rain", "thunder"}) {
+            if (std::string_view(w).starts_with(prefix)) {
+                matches.push_back(w);
+            }
+        }
+    } else if (cmd == "difficulty") {
+        for (const auto d : {"peaceful", "easy", "normal", "hard"}) {
+            if (std::string_view(d).starts_with(prefix)) {
+                matches.push_back(d);
+            }
         }
     }
     return matches;

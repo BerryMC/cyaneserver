@@ -1074,6 +1074,106 @@ bool Server::kill_player_by_name(std::string_view name) {
     return hub_->send_kill(target_id);
 }
 
+void Server::kill_all_players() {
+    const auto names = hub_->all_player_names();
+    for (const auto& name : names) {
+        const auto id = hub_->player_id_by_name(name);
+        if (id != 0) {
+            hub_->send_kill(id);
+        }
+    }
+}
+
+bool Server::kill_nearest_player(double x, double y, double z) {
+    const auto players = hub_->others(net::kNoExclude);
+    double best_sq = 1e18;
+    std::uint32_t best_id = 0;
+    for (const auto& p : players) {
+        const double dx = p.x - x;
+        const double dy = p.y - y;
+        const double dz = p.z - z;
+        const double d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < best_sq) {
+            best_sq = d2;
+            best_id = p.entity_id;
+        }
+    }
+    if (best_id != 0) {
+        return hub_->send_kill(best_id);
+    }
+    return false;
+}
+
+bool Server::kill_random_player() {
+    const auto names = hub_->all_player_names();
+    if (names.empty()) return false;
+    thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<std::size_t> dist(0, names.size() - 1);
+    const auto& name = names[dist(rng)];
+    const auto id = hub_->player_id_by_name(name);
+    if (id != 0) {
+        return hub_->send_kill(id);
+    }
+    return false;
+}
+
+void Server::kill_mob(std::uint32_t entity_id) {
+    if (mobs_ != nullptr) {
+        mobs_->remove(entity_id);
+    }
+    // 广播 DestroyEntities 给所有在线玩家
+    ByteWriter destroy;
+    const std::uint32_t ids[] = {entity_id};
+    net::writers::write_destroy_entities(destroy, ids);
+    hub_->broadcast_all(proto::play_cb::kDestroyEntities, destroy.data());
+}
+
+void Server::kill_all_entities() {
+    // 1. 所有玩家
+    kill_all_players();
+    // 2. 所有生物
+    if (mobs_ != nullptr) {
+        const auto mobs = mobs_->snapshot();
+        ByteWriter destroy;
+        std::vector<std::uint32_t> ids;
+        ids.reserve(mobs.size());
+        for (const auto& m : mobs) {
+            ids.push_back(m.entity_id);
+        }
+        if (!ids.empty()) {
+            net::writers::write_destroy_entities(destroy, ids);
+            hub_->broadcast_all(proto::play_cb::kDestroyEntities, destroy.data());
+        }
+        for (const auto& m : mobs) {
+            mobs_->remove(m.entity_id);
+        }
+    }
+    // 3. 所有掉落物
+    if (item_drops_ != nullptr) {
+        const auto drops = item_drops_->snapshot();
+        ByteWriter destroy;
+        std::vector<std::uint32_t> ids;
+        ids.reserve(drops.size());
+        for (const auto& d : drops) {
+            ids.push_back(d.entity_id);
+        }
+        if (!ids.empty()) {
+            net::writers::write_destroy_entities(destroy, ids);
+            hub_->broadcast_all(proto::play_cb::kDestroyEntities, destroy.data());
+        }
+        for (const auto& d : drops) {
+            item_drops_->reduce(d.entity_id, item::ItemStack::air());
+        }
+    }
+}
+
+std::vector<net::Mob> Server::all_mobs() const {
+    if (mobs_ != nullptr) {
+        return mobs_->snapshot();
+    }
+    return {};
+}
+
 bool Server::set_player_gamemode(std::string_view name, std::string_view mode) {
     const std::uint32_t target_id = hub_->player_id_by_name(name);
     if (target_id == 0) {

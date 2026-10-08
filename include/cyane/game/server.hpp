@@ -21,6 +21,7 @@
 #include "cyane/net/xp_orb.hpp"
 #include "cyane/net/crafting_table_store.hpp"
 #include "cyane/net/mob_manager.hpp"
+#include "cyane/net/item_drop.hpp"
 #include "cyane/game/status.hpp"
 #include "cyane/net/net_service.hpp"
 #include "cyane/world/world.hpp"
@@ -78,6 +79,18 @@ public:
     void broadcast_system_message(std::string_view message);
     // 根据玩家名杀死一名在线玩家（控制台 /kill 命令）
     [[nodiscard]] bool kill_player_by_name(std::string_view name);
+    // 杀死所有在线玩家（/kill @a）
+    void kill_all_players();
+    // 杀死指定坐标附近最近的玩家（/kill @p）
+    [[nodiscard]] bool kill_nearest_player(double x, double y, double z);
+    // 随机杀死一名在线玩家（/kill @r）
+    [[nodiscard]] bool kill_random_player();
+    // 杀死所有实体（/kill @e，玩家+生物+掉落物）
+    void kill_all_entities();
+    // 杀死指定实体 id 的生物并广播
+    void kill_mob(std::uint32_t entity_id);
+    // 获取所有生物快照（命令系统用）
+    [[nodiscard]] std::vector<net::Mob> all_mobs() const;
     // OP 管理
     [[nodiscard]] const game::OpManager& op_manager() const noexcept { return *op_manager_; }
     [[nodiscard]] bool set_player_gamemode(std::string_view name, std::string_view mode);

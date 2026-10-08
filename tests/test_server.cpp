@@ -116,8 +116,34 @@ CYANE_TEST(command_dispatcher_executes_unified_commands) {
     CYANE_CHECK(!player.errors.empty()); // 报权限不足
     CYANE_CHECK_EQ(srv->time_of_day(), 1500); // 时间未被篡改
 
-    // 4. Tab 补全
+    // 4. Tab 补全：命令名
     const auto matches = cyane::game::CommandDispatcher::tab_complete(console, *srv, "/ti");
     CYANE_CHECK_EQ(matches.size(), std::size_t{1});
     CYANE_CHECK_EQ(matches[0], "/time");
+
+    // 5. Tab 补全：/kill + 空格 → 补全实体选择器（而非重复 /kill）
+    const auto kill_matches = cyane::game::CommandDispatcher::tab_complete(console, *srv, "/kill ");
+    CYANE_CHECK(!kill_matches.empty());
+    bool found_selector = false;
+    for (const auto& m : kill_matches) {
+        CYANE_CHECK(m != "/kill"); // 不应重复命令名
+        if (m == "@a" || m == "@p" || m == "@r" || m == "@e" || m == "@s") {
+            found_selector = true;
+        }
+    }
+    CYANE_CHECK(found_selector);
+
+    // 6. Tab 补全：/kill @ → 补全 @a @p @r @e @s
+    const auto at_matches = cyane::game::CommandDispatcher::tab_complete(console, *srv, "/kill @");
+    CYANE_CHECK_EQ(at_matches.size(), std::size_t{5});
+
+    // 7. kill 实体选择器：@a 杀所有玩家（无玩家在线时不报错）
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "/kill @a"));
+
+    // 8. kill @e 杀所有实体（无实体在线时不报错）
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "/kill @e"));
+
+    // 9. Tab 补全：/weather + 空格 → 补全天气类型
+    const auto weather_matches = cyane::game::CommandDispatcher::tab_complete(console, *srv, "/weather ");
+    CYANE_CHECK_EQ(weather_matches.size(), std::size_t{3});
 }
