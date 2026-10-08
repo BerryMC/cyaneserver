@@ -56,12 +56,13 @@ namespace {
     return std::nullopt;
 }
 
+// gameMode.survival = "Survival Mode" 等（原版语言文件 gameMode.<name>）
 [[nodiscard]] std::string_view mode_to_string(std::uint8_t mode) noexcept {
     switch (mode) {
-        case proto::game_mode::kSurvival: return "Survival";
-        case proto::game_mode::kCreative: return "Creative";
-        case proto::game_mode::kAdventure: return "Adventure";
-        case proto::game_mode::kSpectator: return "Spectator";
+        case proto::game_mode::kSurvival: return "Survival Mode";
+        case proto::game_mode::kCreative: return "Creative Mode";
+        case proto::game_mode::kAdventure: return "Adventure Mode";
+        case proto::game_mode::kSpectator: return "Spectator Mode";
         default: return "Unknown";
     }
 }
@@ -149,54 +150,59 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
 
     // 1. help / ?
     if (cmd == "help" || cmd == "?") {
-        sender.send_feedback("--- 显示帮助页面 ---");
-        sender.send_feedback("/help [页码/命令名] - 显示帮助信息");
-        sender.send_feedback("/list - 查看在线玩家列表");
-        sender.send_feedback("/tps - 查看服务器 TPS 与负载");
+        sender.send_feedback("--- Showing help page 1 of 1 (/help <page>) ---");
+        sender.send_feedback("/help [page|command name]");
+        sender.send_feedback("/list");
+        sender.send_feedback("/tps");
         if (op >= 2) {
-            sender.send_feedback("/gamemode <模式> [玩家] - 切换游戏模式");
-            sender.send_feedback("/defaultgamemode <模式> - 设置默认游戏模式");
-            sender.send_feedback("/tp [玩家] <目标玩家|x y z> - 传送实体");
-            sender.send_feedback("/kill [玩家] - 击杀实体");
-            sender.send_feedback("/time <set|add|query> <数值> - 管理世界时间");
-            sender.send_feedback("/weather <clear|rain|thunder> - 更改天气");
-            sender.send_feedback("/difficulty <难度> - 设置游戏难度");
-            sender.send_feedback("/seed - 查看世界种子");
-            sender.send_feedback("/give <玩家> <物品> [数量] [数据] - 给予物品");
-            sender.send_feedback("/clear [玩家] - 清空物品栏");
-            sender.send_feedback("/say <消息> - 广播系统消息");
+            sender.send_feedback("/gamemode <mode> [player]");
+            sender.send_feedback("/defaultgamemode <mode>");
+            sender.send_feedback("/tp [target player] <destination player|x y z>");
+            sender.send_feedback("/teleport <entity> <x y z>");
+            sender.send_feedback("/kill [player|entity]");
+            sender.send_feedback("/time <set|add|query> <value>");
+            sender.send_feedback("/weather <clear|rain|thunder> [duration]");
+            sender.send_feedback("/difficulty <new difficulty>");
+            sender.send_feedback("/seed");
+            sender.send_feedback("/give <player> <item> [amount] [data]");
+            sender.send_feedback("/clear [player]");
+            sender.send_feedback("/say <message ...>");
         }
         if (op >= 4) {
-            sender.send_feedback("/op <玩家> - 授予玩家管理员权限（等级 4）");
-            sender.send_feedback("/deop <玩家> - 撤销玩家管理员权限");
-            sender.send_feedback("/save-all - 立即保存世界存档");
-            sender.send_feedback("/stop - 安全关闭服务器");
+            sender.send_feedback("/op <player>");
+            sender.send_feedback("/deop <player>");
+            sender.send_feedback("/save-all [flush]");
+            sender.send_feedback("/stop");
         }
+        sender.send_feedback("Tip: Use the <tab> key while typing a command to auto-complete");
         return true;
     }
 
-    // 2. tps
+    // 2. tps（非原版命令，使用原版相近格式）
     if (cmd == "tps") {
-        sender.send_feedback(std::format("TPS: {:.1f} | 在线玩家: {}", server.current_tps(), server.online_players()));
+        sender.send_feedback(std::format("TPS: {:.1f} | Online: {}", server.current_tps(), server.online_players()));
         return true;
     }
 
     // 3. list
     if (cmd == "list") {
         const auto names = server.player_names();
-        std::string list_str = std::format("在线玩家 ({}/{}):", names.size(), server.config().max_players);
-        for (const auto& n : names) {
-            list_str += " ";
-            list_str += n;
+        sender.send_feedback(std::format("There are {}/{} players online:", names.size(), server.config().max_players));
+        std::string list_str;
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (i > 0) list_str += ", ";
+            list_str += names[i];
         }
-        sender.send_feedback(list_str);
+        if (!list_str.empty()) {
+            sender.send_feedback(list_str);
+        }
         return true;
     }
 
     // 4. say
     if (cmd == "say") {
         if (args.empty()) {
-            sender.send_feedback("用法: /say <消息>", true);
+            sender.send_feedback("/say <message ...>", true);
             return true;
         }
         std::string raw_msg;
@@ -204,6 +210,7 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             if (i > 0) raw_msg += " ";
             raw_msg += args[i];
         }
+        // chat.type.announcement = [%s] %s
         const std::string broadcast_msg = std::format("[{}] {}", sender.name(), raw_msg);
         server.broadcast_system_message(broadcast_msg);
         return true;
@@ -212,37 +219,39 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     // 5. gamemode / gm
     if (cmd == "gamemode" || cmd == "gm") {
         if (args.empty()) {
-            sender.send_feedback("用法: /gamemode <survival|creative|adventure|spectator> [玩家]", true);
+            sender.send_feedback("/gamemode <mode> [player]", true);
             return true;
         }
         const auto mode = parse_mode(args[0]);
         if (!mode) {
-            sender.send_feedback(std::format("未知游戏模式: '{}'", args[0]), true);
+            sender.send_feedback(std::format("Unknown game mode: '{}'", args[0]), true);
             return true;
         }
         if (args.size() == 1) {
             if (!sender.is_player()) {
-                sender.send_feedback("控制台修改游戏模式必须指定玩家: /gamemode <模式> <玩家>", true);
+                sender.send_feedback("Console must specify a player: /gamemode <mode> <player>", true);
                 return true;
             }
             if (op < 2) {
-                sender.send_feedback("权限不足", true);
+                sender.send_feedback("You do not have permission to use this command.", true);
                 return true;
             }
             if (server.set_player_gamemode(sender.name(), args[0])) {
-                sender.send_feedback(std::format("自己的游戏模式已更新为 {}", mode_to_string(*mode)));
+                // commands.gamemode.success.self = Set own game mode to %s
+                sender.send_feedback(std::format("Set own game mode to {}", mode_to_string(*mode)));
             }
             return true;
         }
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         const std::string_view target = args[1];
         if (server.set_player_gamemode(target, args[0])) {
-            sender.send_feedback(std::format("已将 {} 的游戏模式设置为 {}", target, mode_to_string(*mode)));
+            // commands.gamemode.success.other = Set %s's game mode to %s
+            sender.send_feedback(std::format("Set {}'s game mode to {}", target, mode_to_string(*mode)));
         } else {
-            sender.send_feedback(std::format("找不到玩家 '{}'", target), true);
+            sender.send_feedback(std::format("Player '{}' not found", target), true);
         }
         return true;
     }
@@ -250,30 +259,31 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     // 6. defaultgamemode
     if (cmd == "defaultgamemode") {
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (args.empty()) {
-            sender.send_feedback("用法: /defaultgamemode <模式>", true);
+            sender.send_feedback("/defaultgamemode <mode>", true);
             return true;
         }
         const auto mode = parse_mode(args[0]);
         if (!mode) {
-            sender.send_feedback(std::format("未知游戏模式: '{}'", args[0]), true);
+            sender.send_feedback(std::format("Unknown game mode: '{}'", args[0]), true);
             return true;
         }
-        sender.send_feedback(std::format("默认游戏模式已更改为 {}", mode_to_string(*mode)));
+        // commands.defaultgamemode.success = The world's default game mode is now %s
+        sender.send_feedback(std::format("The world's default game mode is now {}", mode_to_string(*mode)));
         return true;
     }
 
     // 7. tp / teleport
     if (cmd == "tp" || cmd == "teleport") {
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (args.empty()) {
-            sender.send_feedback("用法: /tp [玩家] <目标玩家|x y z>", true);
+            sender.send_feedback("/tp [target player] <destination player> OR /tp [target player] <x> <y> <z> [<yaw> <pitch>]", true);
             return true;
         }
         // /tp <x> <y> <z>
@@ -282,18 +292,19 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             const auto y = parse_double(args[1]);
             const auto z = parse_double(args[2]);
             if (!x || !y || !z) {
-                sender.send_feedback("坐标解析失败", true);
+                sender.send_feedback("Invalid coordinates", true);
                 return true;
             }
             if (server.teleport_player(sender.name(), *x, *y, *z)) {
-                sender.send_feedback(std::format("已将自己传送到 {:.1f}, {:.1f}, {:.1f}", *x, *y, *z));
+                // commands.tp.success.coordinates = Teleported %s to %s, %s, %s
+                sender.send_feedback(std::format("Teleported {} to {:.1f}, {:.1f}, {:.1f}", sender.name(), *x, *y, *z));
             }
             return true;
         }
         // /tp <target_player>
         if (args.size() == 1) {
             if (!sender.is_player()) {
-                sender.send_feedback("控制台传送必须指定来源与目标: /tp <玩家> <目标>", true);
+                sender.send_feedback("Console must specify source and target: /tp <player> <target>", true);
                 return true;
             }
             if (auto* hub = server.hub()) {
@@ -301,13 +312,14 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
                 for (const auto& o : others) {
                     if (o.name == args[0]) {
                         if (server.teleport_player(sender.name(), o.x, o.y, o.z, o.yaw, o.pitch)) {
-                            sender.send_feedback(std::format("已将自己传送到 {}", args[0]));
+                            // commands.tp.success = Teleported %s to %s
+                            sender.send_feedback(std::format("Teleported {} to {}", sender.name(), args[0]));
                         }
                         return true;
                     }
                 }
             }
-            sender.send_feedback(std::format("找不到玩家 '{}'", args[0]), true);
+            sender.send_feedback(std::format("Player '{}' not found", args[0]), true);
             return true;
         }
         // /tp <player> <x> <y> <z>
@@ -316,13 +328,13 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             const auto y = parse_double(args[2]);
             const auto z = parse_double(args[3]);
             if (!x || !y || !z) {
-                sender.send_feedback("坐标解析失败", true);
+                sender.send_feedback("Invalid coordinates", true);
                 return true;
             }
             if (server.teleport_player(args[0], *x, *y, *z)) {
-                sender.send_feedback(std::format("已将 {} 传送到 {:.1f}, {:.1f}, {:.1f}", args[0], *x, *y, *z));
+                sender.send_feedback(std::format("Teleported {} to {:.1f}, {:.1f}, {:.1f}", args[0], *x, *y, *z));
             } else {
-                sender.send_feedback(std::format("找不到玩家 '{}'", args[0]), true);
+                sender.send_feedback(std::format("Player '{}' not found", args[0]), true);
             }
             return true;
         }
@@ -338,14 +350,14 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
                     }
                 }
                 if (target != nullptr && server.teleport_player(args[0], target->x, target->y, target->z, target->yaw, target->pitch)) {
-                    sender.send_feedback(std::format("已将 {} 传送到 {}", args[0], args[1]));
+                    sender.send_feedback(std::format("Teleported {} to {}", args[0], args[1]));
                     return true;
                 }
             }
-            sender.send_feedback(std::format("找不到目标玩家 '{}'", args[1]), true);
+            sender.send_feedback(std::format("Target player '{}' not found", args[1]), true);
             return true;
         }
-        sender.send_feedback("用法: /tp [玩家] <目标玩家|x y z>", true);
+        sender.send_feedback("/tp [target player] <destination player> OR /tp [target player] <x> <y> <z> [<yaw> <pitch>]", true);
         return true;
     }
 
@@ -353,7 +365,7 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     if (cmd == "kill") {
         if (args.empty()) {
             if (!sender.is_player()) {
-                sender.send_feedback("控制台击杀必须指定目标: /kill <玩家|@a|@p|@r|@e|@s>", true);
+                sender.send_feedback("/kill [player|entity]", true);
                 return true;
             }
             (void)server.kill_player_by_name(sender.name());
@@ -361,13 +373,13 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             return true;
         }
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         const std::string_view target = args[0];
         if (target == "@s") {
             if (!sender.is_player()) {
-                sender.send_feedback("控制台无自身实体可击杀", true);
+                sender.send_feedback("Console has no self entity to kill", true);
                 return true;
             }
             (void)server.kill_player_by_name(sender.name());
@@ -375,13 +387,8 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         } else if (target == "@a") {
             const auto killed = server.kill_all_players();
             if (killed.empty()) {
-                sender.send_feedback("没有在线玩家");
+                sender.send_feedback("No players online");
             } else {
-                std::string names;
-                for (std::size_t i = 0; i < killed.size(); ++i) {
-                    if (i > 0) names += ", ";
-                    names += killed[i];
-                }
                 for (const auto& name : killed) {
                     sender.send_feedback(std::format("Killed {}", name));
                 }
@@ -389,26 +396,26 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         } else if (target == "@p") {
             const auto* pos = sender.player_position();
             if (pos == nullptr) {
-                sender.send_feedback("控制台无坐标，无法选取最近玩家", true);
+                sender.send_feedback("Console has no position to select nearest player", true);
                 return true;
             }
             const auto name = server.kill_nearest_player(pos->x, pos->y, pos->z);
             if (!name.empty()) {
                 sender.send_feedback(std::format("Killed {}", name));
             } else {
-                sender.send_feedback("附近没有玩家", true);
+                sender.send_feedback("No player nearby", true);
             }
         } else if (target == "@r") {
             const auto name = server.kill_random_player();
             if (!name.empty()) {
                 sender.send_feedback(std::format("Killed {}", name));
             } else {
-                sender.send_feedback("没有在线玩家", true);
+                sender.send_feedback("No players online", true);
             }
         } else if (target == "@e") {
             const auto killed = server.kill_all_entities();
             if (killed.empty()) {
-                sender.send_feedback("没有实体可击杀");
+                sender.send_feedback("No entities to kill");
             } else {
                 for (const auto& name : killed) {
                     sender.send_feedback(std::format("Killed {}", name));
@@ -418,7 +425,7 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             if (server.kill_player_by_name(target)) {
                 sender.send_feedback(std::format("Killed {}", target));
             } else {
-                sender.send_feedback(std::format("找不到玩家 '{}'", target), true);
+                sender.send_feedback(std::format("Player '{}' not found", target), true);
             }
         }
         return true;
@@ -427,11 +434,11 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     // 9. time
     if (cmd == "time") {
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (args.empty()) {
-            sender.send_feedback("用法: /time <set|add|query> <数值>", true);
+            sender.send_feedback("/time <set|add|query> <value>", true);
             return true;
         }
         if (args[0] == "set" && args.size() >= 2) {
@@ -442,54 +449,60 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             else if (args[1] == "midnight") target_time = 18000;
             else if (auto parsed = parse_int64(args[1])) target_time = *parsed;
             else {
-                sender.send_feedback(std::format("未知时间 '{}'", args[1]), true);
+                sender.send_feedback(std::format("Unknown time: '{}'", args[1]), true);
                 return true;
             }
             server.set_time_of_day(target_time);
-            sender.send_feedback(std::format("时间已设置为 {}", target_time));
+            // commands.time.set = Set the time to %s
+            sender.send_feedback(std::format("Set the time to {}", target_time));
             return true;
         }
         if (args[0] == "add" && args.size() >= 2) {
             if (auto parsed = parse_int64(args[1])) {
                 server.add_time(*parsed);
-                sender.send_feedback(std::format("时间增加了 {}", *parsed));
+                // commands.time.added = Added %s to the time
+                sender.send_feedback(std::format("Added {} to the time", *parsed));
             } else {
-                sender.send_feedback(std::format("非法数值 '{}'", args[1]), true);
+                sender.send_feedback(std::format("Invalid value: '{}'", args[1]), true);
             }
             return true;
         }
         if (args[0] == "query" && args.size() >= 2) {
             if (args[1] == "daytime") {
-                sender.send_feedback(std::format("时间是 {}", server.time_of_day()));
+                // commands.time.query = Time is %s
+                sender.send_feedback(std::format("Time is {}", server.time_of_day()));
             } else if (args[1] == "gametime") {
-                sender.send_feedback(std::format("世界时间是 {}", server.world_age()));
+                sender.send_feedback(std::format("Time is {}", server.world_age()));
             } else if (args[1] == "day") {
-                sender.send_feedback(std::format("天数是 {}", server.world_age() / 24000));
+                sender.send_feedback(std::format("Day is {}", server.world_age() / 24000));
             }
             return true;
         }
-        sender.send_feedback("用法: /time <set|add|query> <数值>", true);
+        sender.send_feedback("/time <set|add|query> <value>", true);
         return true;
     }
 
     // 10. weather
     if (cmd == "weather") {
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (args.empty()) {
-            sender.send_feedback("用法: /weather <clear|rain|thunder> [持续秒数]", true);
+            sender.send_feedback("/weather <clear|rain|thunder> [duration in seconds]", true);
             return true;
         }
         if (args[0] == "clear") {
-            sender.send_feedback("天气已变更为晴天");
+            // commands.weather.clear = Changing to clear weather
+            sender.send_feedback("Changing to clear weather");
         } else if (args[0] == "rain") {
-            sender.send_feedback("天气已变更为下雨天");
+            // commands.weather.rain = Changing to rainy weather
+            sender.send_feedback("Changing to rainy weather");
         } else if (args[0] == "thunder") {
-            sender.send_feedback("天气已变更为雷雨天");
+            // commands.weather.thunder = Changing to rain and thunder
+            sender.send_feedback("Changing to rain and thunder");
         } else {
-            sender.send_feedback(std::format("未知天气类型 '{}'", args[0]), true);
+            sender.send_feedback(std::format("Unknown weather: '{}'", args[0]), true);
         }
         return true;
     }
@@ -497,40 +510,43 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     // 11. difficulty
     if (cmd == "difficulty") {
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (args.empty()) {
-            sender.send_feedback("用法: /difficulty <peaceful|easy|normal|hard>", true);
+            sender.send_feedback("/difficulty <new difficulty>", true);
             return true;
         }
-        sender.send_feedback(std::format("难度已更改为 {}", args[0]));
+        // commands.difficulty.success = Set game difficulty to %s
+        sender.send_feedback(std::format("Set game difficulty to {}", args[0]));
         return true;
     }
 
     // 12. seed
     if (cmd == "seed") {
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
-        sender.send_feedback("种子: [0]");
+        // commands.seed.success = Seed: %s
+        sender.send_feedback("Seed: [0]");
         return true;
     }
 
     // 13. give
     if (cmd == "give") {
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (args.size() < 2) {
-            sender.send_feedback("用法: /give <玩家> <物品ID/名称> [数量] [数据值]", true);
+            sender.send_feedback("/give <player> <item> [amount] [data] [dataTag]", true);
             return true;
         }
         const auto item_id = resolve_item_id(args[1]);
         if (!item_id) {
-            sender.send_feedback(std::format("未知物品名称或 ID: '{}'", args[1]), true);
+            // commands.give.item.notFound = There is no such item with name %s
+            sender.send_feedback(std::format("There is no such item with name {}", args[1]), true);
             return true;
         }
         std::uint8_t count = 1;
@@ -542,9 +558,10 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             if (auto p = parse_int64(args[3])) damage = static_cast<std::int16_t>(*p);
         }
         if (server.give_player_item(args[0], *item_id, count, damage)) {
-            sender.send_feedback(std::format("已将 {} 个 [{}] 给予 {}", count, args[1], args[0]));
+            // commands.give.success = Given %s * %s to %s
+            sender.send_feedback(std::format("Given {} * {} to {}", args[1], count, args[0]));
         } else {
-            sender.send_feedback(std::format("找不到玩家 '{}'", args[0]), true);
+            sender.send_feedback(std::format("Player '{}' not found", args[0]), true);
         }
         return true;
     }
@@ -553,25 +570,27 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     if (cmd == "clear") {
         if (args.empty()) {
             if (!sender.is_player()) {
-                sender.send_feedback("控制台清空背包必须指定玩家: /clear <玩家>", true);
+                sender.send_feedback("/clear [player]", true);
                 return true;
             }
             if (op < 2) {
-                sender.send_feedback("权限不足", true);
+                sender.send_feedback("You do not have permission to use this command.", true);
                 return true;
             }
             (void)server.clear_player_inventory(sender.name());
-            sender.send_feedback(std::format("已清空 {} 的物品栏", sender.name()));
+            // commands.clear.success = Cleared the inventory of %s, removing %s items
+            sender.send_feedback(std::format("Cleared the inventory of {}, removing all items", sender.name()));
             return true;
         }
         if (op < 2) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (server.clear_player_inventory(args[0])) {
-            sender.send_feedback(std::format("已清空 {} 的物品栏", args[0]));
+            sender.send_feedback(std::format("Cleared the inventory of {}, removing all items", args[0]));
         } else {
-            sender.send_feedback(std::format("找不到玩家 '{}'", args[0]), true);
+            // commands.clear.failure = Could not clear the inventory of %s, no items to remove
+            sender.send_feedback(std::format("Could not clear the inventory of {}, no items to remove", args[0]), true);
         }
         return true;
     }
@@ -579,17 +598,19 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     // 15. op (等级 4)
     if (cmd == "op") {
         if (op < 4) {
-            sender.send_feedback("权限不足（需要等级 4）", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (args.empty()) {
-            sender.send_feedback("用法: /op <玩家>", true);
+            sender.send_feedback("/op <player>", true);
             return true;
         }
         if (server.op_player(args[0])) {
-            sender.send_feedback(std::format("已将 {} 设为管理员 (等级 4)", args[0]));
+            // commands.op.success = Opped %s
+            sender.send_feedback(std::format("Opped {}", args[0]));
         } else {
-            sender.send_feedback(std::format("找不到玩家 '{}'", args[0]), true);
+            // commands.op.failed = Could not op %s
+            sender.send_feedback(std::format("Could not op {}", args[0]), true);
         }
         return true;
     }
@@ -597,17 +618,19 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     // 16. deop
     if (cmd == "deop") {
         if (op < 4) {
-            sender.send_feedback("权限不足（需要等级 4）", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
         if (args.empty()) {
-            sender.send_feedback("用法: /deop <玩家>", true);
+            sender.send_feedback("/deop <player>", true);
             return true;
         }
         if (server.deop_player(args[0])) {
-            sender.send_feedback(std::format("已撤销 {} 的管理员权限", args[0]));
+            // commands.deop.success = De-opped %s
+            sender.send_feedback(std::format("De-opped {}", args[0]));
         } else {
-            sender.send_feedback(std::format("找不到玩家或非管理员 '{}'", args[0]), true);
+            // commands.deop.failed = Could not deop %s
+            sender.send_feedback(std::format("Could not deop {}", args[0]), true);
         }
         return true;
     }
@@ -615,26 +638,30 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
     // 17. save-all / save
     if (cmd == "save-all" || cmd == "save") {
         if (op < 4) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
+        // commands.save.start = Saving...
+        sender.send_feedback("Saving...");
         server.save_world_now();
-        sender.send_feedback("世界存档已保存");
+        // commands.save.success = Saved the world
+        sender.send_feedback("Saved the world");
         return true;
     }
 
     // 18. stop
     if (cmd == "stop") {
         if (op < 4) {
-            sender.send_feedback("权限不足", true);
+            sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
-        sender.send_feedback("正在关闭服务器...");
+        // commands.stop.start = Stopping the server
+        sender.send_feedback("Stopping the server");
         server.request_stop();
         return false;
     }
 
-    sender.send_feedback(std::format("未知命令 '{}'。输入 /help 查看帮助。", cmd), true);
+    sender.send_feedback(std::format("Unknown command '{}'. Try /help for a list of commands.", cmd), true);
     return true;
 }
 
