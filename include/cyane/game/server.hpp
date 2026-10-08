@@ -79,14 +79,14 @@ public:
     void broadcast_system_message(std::string_view message);
     // 根据玩家名杀死一名在线玩家（控制台 /kill 命令）
     [[nodiscard]] bool kill_player_by_name(std::string_view name);
-    // 杀死所有在线玩家（/kill @a）
-    void kill_all_players();
-    // 杀死指定坐标附近最近的玩家（/kill @p）
-    [[nodiscard]] bool kill_nearest_player(double x, double y, double z);
-    // 随机杀死一名在线玩家（/kill @r）
-    [[nodiscard]] bool kill_random_player();
-    // 杀死所有实体（/kill @e，玩家+生物+掉落物）
-    void kill_all_entities();
+    // 杀死所有在线玩家（/kill @a），返回被杀玩家名列表
+    std::vector<std::string> kill_all_players();
+    // 杀死指定坐标附近最近的玩家（/kill @p），返回被杀玩家名（空表示无）
+    [[nodiscard]] std::string kill_nearest_player(double x, double y, double z);
+    // 随机杀死一名在线玩家（/kill @r），返回被杀玩家名（空表示无）
+    [[nodiscard]] std::string kill_random_player();
+    // 杀死所有实体（/kill @e，玩家+生物+掉落物），返回被杀实体名列表
+    std::vector<std::string> kill_all_entities();
     // 杀死指定实体 id 的生物并广播
     void kill_mob(std::uint32_t entity_id);
     // 获取所有生物快照（命令系统用）

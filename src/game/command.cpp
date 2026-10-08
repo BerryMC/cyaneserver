@@ -357,7 +357,7 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
                 return true;
             }
             (void)server.kill_player_by_name(sender.name());
-            sender.send_feedback(std::format("已杀死 {}", sender.name()));
+            sender.send_feedback(std::format("Killed {}", sender.name()));
             return true;
         }
         if (op < 2) {
@@ -371,33 +371,52 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
                 return true;
             }
             (void)server.kill_player_by_name(sender.name());
-            sender.send_feedback(std::format("已杀死 {}", sender.name()));
+            sender.send_feedback(std::format("Killed {}", sender.name()));
         } else if (target == "@a") {
-            server.kill_all_players();
-            sender.send_feedback("已杀死所有在线玩家");
+            const auto killed = server.kill_all_players();
+            if (killed.empty()) {
+                sender.send_feedback("没有在线玩家");
+            } else {
+                std::string names;
+                for (std::size_t i = 0; i < killed.size(); ++i) {
+                    if (i > 0) names += ", ";
+                    names += killed[i];
+                }
+                for (const auto& name : killed) {
+                    sender.send_feedback(std::format("Killed {}", name));
+                }
+            }
         } else if (target == "@p") {
             const auto* pos = sender.player_position();
             if (pos == nullptr) {
                 sender.send_feedback("控制台无坐标，无法选取最近玩家", true);
                 return true;
             }
-            if (server.kill_nearest_player(pos->x, pos->y, pos->z)) {
-                sender.send_feedback("已杀死最近的玩家");
+            const auto name = server.kill_nearest_player(pos->x, pos->y, pos->z);
+            if (!name.empty()) {
+                sender.send_feedback(std::format("Killed {}", name));
             } else {
                 sender.send_feedback("附近没有玩家", true);
             }
         } else if (target == "@r") {
-            if (server.kill_random_player()) {
-                sender.send_feedback("已随机杀死一名玩家");
+            const auto name = server.kill_random_player();
+            if (!name.empty()) {
+                sender.send_feedback(std::format("Killed {}", name));
             } else {
                 sender.send_feedback("没有在线玩家", true);
             }
         } else if (target == "@e") {
-            server.kill_all_entities();
-            sender.send_feedback("已杀死所有实体");
+            const auto killed = server.kill_all_entities();
+            if (killed.empty()) {
+                sender.send_feedback("没有实体可击杀");
+            } else {
+                for (const auto& name : killed) {
+                    sender.send_feedback(std::format("Killed {}", name));
+                }
+            }
         } else {
             if (server.kill_player_by_name(target)) {
-                sender.send_feedback(std::format("已杀死 {}", target));
+                sender.send_feedback(std::format("Killed {}", target));
             } else {
                 sender.send_feedback(std::format("找不到玩家 '{}'", target), true);
             }

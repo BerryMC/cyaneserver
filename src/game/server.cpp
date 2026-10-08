@@ -1074,20 +1074,24 @@ bool Server::kill_player_by_name(std::string_view name) {
     return hub_->send_kill(target_id);
 }
 
-void Server::kill_all_players() {
+std::vector<std::string> Server::kill_all_players() {
+    std::vector<std::string> killed;
     const auto names = hub_->all_player_names();
     for (const auto& name : names) {
         const auto id = hub_->player_id_by_name(name);
         if (id != 0) {
             hub_->send_kill(id);
+            killed.push_back(name);
         }
     }
+    return killed;
 }
 
-bool Server::kill_nearest_player(double x, double y, double z) {
+std::string Server::kill_nearest_player(double x, double y, double z) {
     const auto players = hub_->others(net::kNoExclude);
     double best_sq = 1e18;
     std::uint32_t best_id = 0;
+    std::string best_name;
     for (const auto& p : players) {
         const double dx = p.x - x;
         const double dy = p.y - y;
@@ -1096,75 +1100,87 @@ bool Server::kill_nearest_player(double x, double y, double z) {
         if (d2 < best_sq) {
             best_sq = d2;
             best_id = p.entity_id;
+            best_name = p.name;
         }
     }
     if (best_id != 0) {
-        return hub_->send_kill(best_id);
+        hub_->send_kill(best_id);
+        return best_name;
     }
-    return false;
+    return {};
 }
 
-bool Server::kill_random_player() {
+std::string Server::kill_random_player() {
     const auto names = hub_->all_player_names();
-    if (names.empty()) return false;
+    if (names.empty()) return {};
     thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<std::size_t> dist(0, names.size() - 1);
     const auto& name = names[dist(rng)];
     const auto id = hub_->player_id_by_name(name);
     if (id != 0) {
-        return hub_->send_kill(id);
+        hub_->send_kill(id);
+        return name;
     }
-    return false;
+    return {};
 }
 
 void Server::kill_mob(std::uint32_t entity_id) {
     if (mobs_ != nullptr) {
         mobs_->remove(entity_id);
     }
-    // 广播 DestroyEntities 给所有在线玩家
     ByteWriter destroy;
     const std::uint32_t ids[] = {entity_id};
     net::writers::write_destroy_entities(destroy, ids);
     hub_->broadcast_all(proto::play_cb::kDestroyEntities, destroy.data());
 }
 
-void Server::kill_all_entities() {
+std::vector<std::string> Server::kill_all_entities() {
+    std::vector<std::string> killed;
     // 1. 所有玩家
-    kill_all_players();
+    const auto player_kills = kill_all_players();
+    killed.insert(killed.end(), player_kills.begin(), player_kills.end());
     // 2. 所有生物
     if (mobs_ != nullptr) {
         const auto mobs = mobs_->snapshot();
-        ByteWriter destroy;
-        std::vector<std::uint32_t> ids;
-        ids.reserve(mobs.size());
-        for (const auto& m : mobs) {
-            ids.push_back(m.entity_id);
-        }
-        if (!ids.empty()) {
+        if (!mobs.empty()) {
+            ByteWriter destroy;
+            std::vector<std::uint32_t> ids;
+            ids.reserve(mobs.size());
+            for (const auto& m : mobs) {
+                ids.push_back(m.entity_id);
+                const auto species = world::mob_type(m.type);
+                if (species) {
+                    killed.push_back(std::string{species->name});
+                } else {
+                    killed.push_back(std::format("entity#{}", m.entity_id));
+                }
+            }
             net::writers::write_destroy_entities(destroy, ids);
             hub_->broadcast_all(proto::play_cb::kDestroyEntities, destroy.data());
-        }
-        for (const auto& m : mobs) {
-            mobs_->remove(m.entity_id);
+            for (const auto& m : mobs) {
+                mobs_->remove(m.entity_id);
+            }
         }
     }
     // 3. 所有掉落物
     if (item_drops_ != nullptr) {
         const auto drops = item_drops_->snapshot();
-        ByteWriter destroy;
-        std::vector<std::uint32_t> ids;
-        ids.reserve(drops.size());
-        for (const auto& d : drops) {
-            ids.push_back(d.entity_id);
-        }
-        if (!ids.empty()) {
+        if (!drops.empty()) {
+            ByteWriter destroy;
+            std::vector<std::uint32_t> ids;
+            ids.reserve(drops.size());
+            for (const auto& d : drops) {
+                ids.push_back(d.entity_id);
+                killed.push_back(std::format("item#{}", d.entity_id));
+            }
             net::writers::write_destroy_entities(destroy, ids);
             hub_->broadcast_all(proto::play_cb::kDestroyEntities, destroy.data());
-        }
-        for (const auto& d : drops) {
-            item_drops_->reduce(d.entity_id, item::ItemStack::air());
+            for (const auto& d : drops) {
+                item_drops_->reduce(d.entity_id, item::ItemStack::air());
+            }
         }
     }
+    return killed;
 }
 
 std::vector<net::Mob> Server::all_mobs() const {
