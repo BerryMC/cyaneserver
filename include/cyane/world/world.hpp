@@ -13,6 +13,7 @@
 #include "cyane/world/blocks.hpp"
 #include "cyane/world/chunk.hpp"
 #include "cyane/world/chunk_codec.hpp"
+#include "cyane/world/chunk_generator.hpp"
 
 namespace cyane::world {
 
@@ -78,7 +79,12 @@ public:
         return ensure_locked(pos).chunk;
     }
 
-    // 存档载入：整体替换区块内容（explicit 语义：缺失 section = 空气）。
+    // 设置世界生成器（Server 启动时注入，替换超平坦 baseline）
+    void set_generator(std::uint64_t seed) {
+        generator_ = std::make_unique<gen::ChunkGeneratorOverworld>(seed);
+    }
+
+    // 世界存档：整体替换区块内容（explicit 语义：缺失 section = 空气）。
     // 从磁盘启动载入时 dirty=false（文件即权威，无需回写）；程序化构造传 true。
     // source_nbt 为磁盘原始 NBT，保存时作为无损打补丁的底（空则整体重编码）。
     void load_chunk(ChunkPos pos, Chunk chunk, bool dirty = false, Bytes source_nbt = {}) {
@@ -305,7 +311,7 @@ private:
         if (auto it = chunks_.find(key); it != chunks_.end()) {
             return *it->second;
         }
-        // 先试磁盘按需加载（释放区块回归），失败再物化超平坦
+        // 先试磁盘按需加载（释放区块回归），失败再试世界生成器，最后回退超平坦
         if (loader_) {
             Chunk loaded{pos};
             Bytes source;
@@ -316,6 +322,12 @@ private:
                 sc->dirty = false;
                 return *chunks_.emplace(key, std::move(sc)).first->second;
             }
+        }
+        if (generator_) {
+            auto sc = std::make_shared<StoredChunk>();
+            sc->chunk = generator_->generate(pos.x, pos.z);
+            sc->dirty = true;
+            return *chunks_.emplace(key, std::move(sc)).first->second;
         }
         auto sc = std::make_shared<StoredChunk>();
         sc->chunk = materialize_flat(pos);
@@ -345,6 +357,7 @@ private:
     // shared_ptr：release 后 BlockCache 等锁外读者仍可安全持有区块
     std::unordered_map<std::int64_t, std::shared_ptr<StoredChunk>> chunks_;
     ChunkLoader loader_;  // WorldPersistence 注入；ensure_locked 在持锁状态下调用
+    std::unique_ptr<gen::ChunkGeneratorOverworld> generator_;  // 世界生成器（M5）
 };
 
 }

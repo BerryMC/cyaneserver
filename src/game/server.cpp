@@ -286,6 +286,9 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         context.spawn_y = level->spawn_y;
         context.spawn_z = level->spawn_z;
         log::info("world spawn at ({}, {}, {})", level->spawn_x, level->spawn_y, level->spawn_z);
+        // 注入世界生成器（使用 level.dat 的 RandomSeed）
+        server->world_->set_generator(static_cast<std::uint64_t>(level->seed));
+        log::info("world generator initialized with seed {}", level->seed);
     }
 
     // 世界存档：载入 region/*.mca（方块编辑 + 方块实体 + 掉落物/生物实体），

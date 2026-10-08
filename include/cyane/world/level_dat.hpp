@@ -12,6 +12,7 @@ struct LevelInfo {
     std::int32_t spawn_x{0};
     std::int32_t spawn_y{4};
     std::int32_t spawn_z{0};
+    std::int64_t seed{0};
 };
 
 // 读取 <world>/level.dat（gzip NBT）；文件不存在返回默认值

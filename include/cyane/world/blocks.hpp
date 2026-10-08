@@ -12,6 +12,11 @@ inline constexpr std::uint16_t kStateStone = 1 << 4;
 inline constexpr std::uint16_t kStateGrass = 2 << 4;
 inline constexpr std::uint16_t kStateDirt = 3 << 4;
 inline constexpr std::uint16_t kStateBedrock = 7 << 4;
+inline constexpr std::uint16_t kStateWater = 8 << 4;     // 水（静止水）
+inline constexpr std::uint16_t kStateSand = 12 << 4;      // 沙
+inline constexpr std::uint16_t kStateGravel = 13 << 4;    // 砂砾
+inline constexpr std::uint16_t kStateSnow = 78 << 4;      // 雪层
+inline constexpr std::uint16_t kStateIce = 79 << 4;       // 冰
 inline constexpr std::uint16_t kStateDispenser = 23 << 4;      // 发射器
 inline constexpr std::uint16_t kStateChest = 54 << 4;          // 箱子方块 id=54
 inline constexpr std::uint16_t kStateCraftingTable = 58 << 4;  // 工作台方块 id=58

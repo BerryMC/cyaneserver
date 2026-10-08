@@ -47,6 +47,11 @@ Result<LevelInfo> load_level_dat(const std::filesystem::path& world_dir) {
             info.spawn_z = static_cast<std::int32_t>(*s);
         }
     }
+    if (const auto* v = data->find("RandomSeed"); v != nullptr) {
+        if (const auto s = v->scalar()) {
+            info.seed = *s;
+        }
+    }
     return info;
 }
 

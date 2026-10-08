@@ -125,6 +125,27 @@ public:
             static_cast<std::size_t>(sz), state);
     }
 
+    // 局部坐标设置方块（区块生成器用）
+    void set_block(std::size_t lx, std::int32_t wy, std::size_t lz, std::uint16_t state) {
+        if (lx >= kChunkSizeX || lz >= kChunkSizeZ || wy < 0 || wy >= kChunkSizeY) {
+            return;
+        }
+        sections_[static_cast<std::size_t>(wy) / 16].set(
+            lx, static_cast<std::size_t>(wy % 16), lz, state);
+    }
+
+    // 局部坐标读取方块（区块生成器用）
+    [[nodiscard]] std::uint16_t block_at(std::size_t lx, std::int32_t wy, std::size_t lz) const noexcept {
+        if (lx >= kChunkSizeX || lz >= kChunkSizeZ || wy < 0 || wy >= kChunkSizeY) {
+            return kStateAir;
+        }
+        const auto& sec = sections_[static_cast<std::size_t>(wy) / 16];
+        if (sec.empty()) {
+            return kStateAir;
+        }
+        return sec.state(section_index(lx, static_cast<std::size_t>(wy % 16), lz));
+    }
+
 private:
     ChunkPos pos_;
     std::array<Section, kSectionCount> sections_{};
