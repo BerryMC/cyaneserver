@@ -202,6 +202,35 @@ void Connection::drain_mailbox() {
             add_experience(msg.experience);
             continue;
         }
+        if (msg.tp_flag) {
+            player_pos_.x = msg.tp_x;
+            player_pos_.y = msg.tp_y;
+            player_pos_.z = msg.tp_z;
+            player_pos_.yaw = msg.tp_yaw;
+            player_pos_.pitch = msg.tp_pitch;
+            ++teleport_id_;
+            ByteWriter tp;
+            tp.f64(player_pos_.x);
+            tp.f64(player_pos_.y);
+            tp.f64(player_pos_.z);
+            tp.f32(player_pos_.yaw);
+            tp.f32(player_pos_.pitch);
+            tp.u8(0);
+            tp.varint(teleport_id_);
+            send_packet(proto::play_cb::kPlayerPositionLook, tp.data());
+            continue;
+        }
+        if (msg.give_flag) {
+            (void)give_item(item::ItemStack{msg.give_item_id, msg.give_count, msg.give_damage});
+            continue;
+        }
+        if (msg.clear_flag) {
+            for (std::size_t i = 0; i < item::PlayerInventory::kSlotCount; ++i) {
+                inventory_.set_slot(i, item::ItemStack::air());
+            }
+            send_inventory();
+            continue;
+        }
         send_packet(msg.packet_id, ByteSpan{msg.payload});
     }
 }

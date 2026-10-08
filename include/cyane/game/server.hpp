@@ -85,12 +85,27 @@ public:
     [[nodiscard]] bool deop_player(std::string_view name);
     // 在线玩家名列表（控制台 list 命令）
     [[nodiscard]] std::vector<std::string> player_names() const;
+    // 玩家控制
+    [[nodiscard]] bool teleport_player(std::string_view name, double x, double y, double z, float yaw = 0.0f, float pitch = 0.0f);
+    [[nodiscard]] bool give_player_item(std::string_view name, std::int16_t item_id, std::uint8_t count = 1, std::int16_t damage = 0);
+    [[nodiscard]] bool clear_player_inventory(std::string_view name);
+    // 时间管理
+    [[nodiscard]] std::int64_t world_age() const noexcept { return world_age_; }
+    [[nodiscard]] std::int64_t time_of_day() const noexcept { return time_of_day_; }
+    void set_time_of_day(std::int64_t time);
+    void add_time(std::int64_t delta);
+    // 核心组件访问
+    [[nodiscard]] net::PlayerHub* hub() noexcept { return hub_.get(); }
+    [[nodiscard]] world::World* world() noexcept { return world_.get(); }
     // 世界存档：立即把方块编辑与箱子/熔炉落盘（控制台 save 命令）
     void save_world_now();
     void request_save() { save_pending_.store(true, std::memory_order_relaxed); }
 
 private:
     explicit Server(ServerConfig config);
+
+    std::int64_t world_age_{0};
+    std::int64_t time_of_day_{0};
 
     void tick();
     // 苦力怕爆炸：范围伤害（玩家+生物）+ 破坏方块（含掉落）+ 音效/Explosion 包

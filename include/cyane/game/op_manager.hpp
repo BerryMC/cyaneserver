@@ -37,8 +37,8 @@ public:
         return op_level(uuid) > 0;
     }
 
-    // 添加 OP（需要玩家名，用于反查 UUID）
-    [[nodiscard]] bool op_player(std::string_view uuid, std::string_view name, std::uint8_t level = 2);
+    // 添加 OP（需要玩家名，用于反查 UUID，原版默认等级 4）
+    [[nodiscard]] bool op_player(std::string_view uuid, std::string_view name, std::uint8_t level = 4);
 
     // 降级/移除 OP
     [[nodiscard]] bool deop_player(std::string_view uuid);

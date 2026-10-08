@@ -20,6 +20,7 @@
 #include "cyane/core/config.hpp"
 #include "cyane/core/error.hpp"
 #include "cyane/core/log.hpp"
+#include "cyane/game/command.hpp"
 #include "cyane/game/server.hpp"
 #include "cyane/generated/registry_meta.hpp"
 
@@ -31,7 +32,6 @@ constexpr std::string_view kPrompt = "\033[36m> \033[0m";
 // ANSI 颜色
 constexpr std::string_view kReset  = "\033[0m";
 constexpr std::string_view kGreen  = "\033[32m";
-constexpr std::string_view kYellow = "\033[33m";
 constexpr std::string_view kCyan   = "\033[36m";
 constexpr std::string_view kRed    = "\033[31m";
 constexpr std::string_view kBold   = "\033[1m";
@@ -98,128 +98,24 @@ void print_usage() {
     return ec == std::errc{} && ptr == end;
 }
 
-// 去掉首尾空白
-[[nodiscard]] std::string_view trim(std::string_view text) noexcept {
-    const auto first = text.find_first_not_of(" \t\r\n");
-    if (first == std::string_view::npos) {
-        return {};
+class ConsoleCommandSender : public cyane::game::CommandSender {
+public:
+    [[nodiscard]] std::string_view name() const noexcept override { return "Server"; }
+    [[nodiscard]] bool is_player() const noexcept override { return false; }
+    [[nodiscard]] std::uint8_t op_level() const noexcept override { return 4; }
+    void send_feedback(std::string_view message, bool is_error = false) override {
+        if (is_error) {
+            std::print("{}{}{}\n", kRed, message, kReset);
+        } else {
+            std::print("{}{}{}\n", kGreen, message, kReset);
+        }
     }
-    const auto last = text.find_last_not_of(" \t\r\n");
-    return text.substr(first, last - first + 1);
-}
+};
 
 // 处理一条控制台命令，返回 false 表示需要停止服务器
 [[nodiscard]] bool handle_console_command(cyane::Server& server, std::string_view line) {
-    line = trim(line);
-    if (line.empty()) {
-        return true;
-    }
-    const auto space = line.find(' ');
-    const std::string_view cmd = line.substr(0, space);
-    const std::string_view rest = space == std::string_view::npos ? std::string_view{} : trim(line.substr(space + 1));
-
-    if (cmd == "help" || cmd == "?") {
-        std::print("{}命令列表:{}\n", kBold, kReset);
-        std::print("  {}help{}            显示此帮助\n", kCyan, kReset);
-        std::print("  {}tps{}             显示当前 TPS 与在线人数\n", kCyan, kReset);
-        std::print("  {}list{}            显示在线玩家列表\n", kCyan, kReset);
-        std::print("  {}say{} <消息>      以服务器身份向所有玩家广播\n", kCyan, kReset);
-        std::print("  {}kill{} <玩家名>   杀死指定在线玩家\n", kCyan, kReset);
-        std::print("  {}gamemode{} <模式> <玩家名>  切换游戏模式\n", kCyan, kReset);
-        std::print("  {}op{} <玩家名>     将玩家设为 OP\n", kCyan, kReset);
-        std::print("  {}deop{} <玩家名>   撤销玩家 OP\n", kCyan, kReset);
-        std::print("  {}save{}            立即保存世界存档\n", kCyan, kReset);
-        std::print("  {}stop{}            停止服务器\n", kCyan, kReset);
-        return true;
-    }
-    if (cmd == "tps") {
-        std::print("{}TPS:{} {:.1f} {}|{} {}online:{} {}\n",
-                   kGreen, kReset, server.current_tps(),
-                   kGray, kReset,
-                   kGreen, kReset, server.online_players());
-        return true;
-    }
-    if (cmd == "list") {
-        const auto names = server.player_names();
-        std::print("{}online ({}):{}", kGreen, names.size(), kReset);
-        for (const auto& name : names) {
-            std::print(" {}{}{}", kCyan, name, kReset);
-        }
-        std::print("\n");
-        return true;
-    }
-    if (cmd == "say") {
-        if (rest.empty()) {
-            std::print("{}usage:{} say <message>\n", kYellow, kReset);
-            return true;
-        }
-        const std::string message = std::format("[Server] {}", rest);
-        server.broadcast_system_message(message);
-        std::print("{}[Server]{} {}\n", kYellow, kReset, rest);
-        return true;
-    }
-    if (cmd == "kill") {
-        if (rest.empty()) {
-            std::print("{}usage:{} kill <player>\n", kYellow, kReset);
-            return true;
-        }
-        if (server.kill_player_by_name(rest)) {
-            std::print("{}killed{} {}\n", kRed, kReset, rest);
-        } else {
-            std::print("{}player not found:{} {}\n", kRed, kReset, rest);
-        }
-        return true;
-    }
-    if (cmd == "gamemode") {
-        const auto space2 = rest.find(' ');
-        const std::string_view mode = rest.substr(0, space2);
-        const std::string_view target = space2 == std::string_view::npos ? std::string_view{} : trim(rest.substr(space2 + 1));
-        if (mode.empty() || target.empty()) {
-            std::print("{}usage:{} gamemode <mode> <player>\n", kYellow, kReset);
-            return true;
-        }
-        if (server.set_player_gamemode(target, mode)) {
-            std::print("{}{}{} -> {}{}{}\n", kCyan, target, kReset, kGreen, mode, kReset);
-        } else {
-            std::print("{}player not found or invalid mode:{} {}\n", kRed, kReset, target);
-        }
-        return true;
-    }
-    if (cmd == "op") {
-        if (rest.empty()) {
-            std::print("{}usage:{} op <player>\n", kYellow, kReset);
-            return true;
-        }
-        if (server.op_player(rest)) {
-            std::print("{}opped{} {}\n", kGreen, kReset, rest);
-        } else {
-            std::print("{}player not found:{} {}\n", kRed, kReset, rest);
-        }
-        return true;
-    }
-    if (cmd == "deop") {
-        if (rest.empty()) {
-            std::print("{}usage:{} deop <player>\n", kYellow, kReset);
-            return true;
-        }
-        if (server.deop_player(rest)) {
-            std::print("{}deopped{} {}\n", kGreen, kReset, rest);
-        } else {
-            std::print("{}player not found or not op:{} {}\n", kRed, kReset, rest);
-        }
-        return true;
-    }
-    if (cmd == "save") {
-        server.save_world_now();
-        std::print("{}world saved{}\n", kGreen, kReset);
-        return true;
-    }
-    if (cmd == "stop") {
-        std::print("{}stopping server...{}\n", kYellow, kReset);
-        return false;
-    }
-    std::print("{}unknown command:{} {} {}(try 'help'){}\n", kRed, kReset, cmd, kGray, kReset);
-    return true;
+    ConsoleCommandSender sender;
+    return cyane::game::CommandDispatcher::execute(sender, server, line);
 }
 
 // 重绘当前输入行（调用方须持有 console_lock）

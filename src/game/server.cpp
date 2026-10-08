@@ -203,6 +203,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         server->config_.motd, static_cast<std::int32_t>(server->config_.max_players));
 
     net::ConnectionContext context;
+    context.server = server.get();
     context.status = server->status_.get();
     context.online_mode = server->config_.online_mode;
     context.compression_threshold = server->config_.compression_threshold;
@@ -494,9 +495,15 @@ void Server::tick() {
         const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
         // 目标选择用玩家快照（本 tick 取一次，避免每个生物各扫一遍）
         const auto players = hub_->others(net::kNoExclude);
-        // 白天判定：now/50ms = tick，mod 24000 取 0..11999（vanilla 昼夜半周期；世界时间
-        // 从进程启动起算的近似，无 doDaylightCycle/时间指令）
-        const bool daytime = (now_ms() / 50) % 24000 < 12000;
+        ++world_age_;
+        time_of_day_ = (time_of_day_ + 1) % 24000;
+        if (world_age_ % 20 == 0 && hub_ != nullptr) {
+            ByteWriter time_pkt;
+            time_pkt.i64(world_age_);
+            time_pkt.i64(time_of_day_);
+            hub_->broadcast_all(proto::play_cb::kTimeUpdate, time_pkt.data());
+        }
+        const bool daytime = time_of_day_ < 12000;
         const auto mob_events = mobs_->tick(*world_, players, daytime);
         for (const auto& mob : mob_events.moved) {
             const auto old_cpos = world::ChunkPos::from_world(mob.old_x, mob.old_z);
@@ -1111,6 +1118,42 @@ bool Server::deop_player(std::string_view name) {
 
 std::vector<std::string> Server::player_names() const {
     return hub_->all_player_names();
+}
+
+void Server::set_time_of_day(std::int64_t time) {
+    time_of_day_ = time % 24000;
+    if (time_of_day_ < 0) time_of_day_ += 24000;
+    if (hub_ != nullptr) {
+        ByteWriter time_pkt;
+        time_pkt.i64(world_age_);
+        time_pkt.i64(time_of_day_);
+        hub_->broadcast_all(proto::play_cb::kTimeUpdate, time_pkt.data());
+    }
+}
+
+void Server::add_time(std::int64_t delta) {
+    set_time_of_day(time_of_day_ + delta);
+}
+
+bool Server::teleport_player(std::string_view name, double x, double y, double z, float yaw, float pitch) {
+    if (hub_ == nullptr) return false;
+    const auto target_id = hub_->player_id_by_name(name);
+    if (target_id == 0) return false;
+    return hub_->send_teleport(target_id, x, y, z, yaw, pitch);
+}
+
+bool Server::give_player_item(std::string_view name, std::int16_t item_id, std::uint8_t count, std::int16_t damage) {
+    if (hub_ == nullptr) return false;
+    const auto target_id = hub_->player_id_by_name(name);
+    if (target_id == 0) return false;
+    return hub_->send_give(target_id, item_id, count, damage);
+}
+
+bool Server::clear_player_inventory(std::string_view name) {
+    if (hub_ == nullptr) return false;
+    const auto target_id = hub_->player_id_by_name(name);
+    if (target_id == 0) return false;
+    return hub_->send_clear(target_id);
 }
 
 }

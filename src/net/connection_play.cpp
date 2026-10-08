@@ -14,7 +14,9 @@
 #include "cyane/net/packet_writers.hpp"
 #include "connection_detail.hpp"
 #include "cyane/crypto/digest.hpp"
+#include "cyane/game/command.hpp"
 #include "cyane/game/op_manager.hpp"
+#include "cyane/game/server.hpp"
 #include "cyane/proto/json.hpp"
 
 namespace cyane::net {
@@ -279,242 +281,42 @@ void Connection::send_chat_feedback(std::string_view message) {
     send_packet(proto::play_cb::kChatMessage, chat.data());
 }
 
-// 解析命令词和参数
-static std::pair<std::string_view, std::vector<std::string_view>> split_command(std::string_view text) {
-    // 去掉前导 /
-    if (!text.empty() && text[0] == '/') {
-        text.remove_prefix(1);
-    }
-    // 第一个词是命令名
-    const auto space = text.find_first_of(" \t");
-    std::string_view cmd = text.substr(0, space);
-    std::vector<std::string_view> args;
-    if (space != std::string_view::npos) {
-        std::string_view rest = text.substr(space + 1);
-        while (!rest.empty()) {
-            // 跳过分隔符
-            while (!rest.empty() && (rest[0] == ' ' || rest[0] == '\t')) {
-                rest.remove_prefix(1);
-            }
-            if (rest.empty()) break;
-            const auto next = rest.find_first_of(" \t");
-            args.push_back(rest.substr(0, next));
-            if (next == std::string_view::npos) break;
-            rest = rest.substr(next + 1);
+class PlayerCommandSender : public game::CommandSender {
+public:
+    PlayerCommandSender(Connection& conn, std::string_view name, std::uint8_t op,
+                        const entity::Position& pos, std::uint32_t id)
+        : conn_{conn}, name_{name}, op_{op}, pos_{pos}, id_{id} {}
+
+    [[nodiscard]] std::string_view name() const noexcept override { return name_; }
+    [[nodiscard]] bool is_player() const noexcept override { return true; }
+    [[nodiscard]] std::uint8_t op_level() const noexcept override { return op_; }
+    [[nodiscard]] const entity::Position* player_position() const noexcept override { return &pos_; }
+    [[nodiscard]] std::uint32_t player_entity_id() const noexcept override { return id_; }
+    void send_feedback(std::string_view message, bool is_error = false) override {
+        if (is_error) {
+            conn_.send_chat_feedback(std::format("§c{}", message));
+        } else {
+            conn_.send_chat_feedback(message);
         }
     }
-    return {cmd, args};
-}
 
-// 游戏模式名称 → 数值
-static std::optional<std::uint8_t> parse_game_mode(std::string_view name) {
-    if (name == "survival" || name == "0") return proto::game_mode::kSurvival;
-    if (name == "creative" || name == "1") return proto::game_mode::kCreative;
-    if (name == "adventure" || name == "2") return proto::game_mode::kAdventure;
-    if (name == "spectator" || name == "3") return proto::game_mode::kSpectator;
-    return std::nullopt;
-}
-
-// 游戏模式数值 → 名称
-static std::string_view game_mode_name(std::uint8_t mode) {
-    switch (mode) {
-        case proto::game_mode::kSurvival:  return "survival";
-        case proto::game_mode::kCreative:  return "creative";
-        case proto::game_mode::kAdventure: return "adventure";
-        case proto::game_mode::kSpectator: return "spectator";
-        default: return "unknown";
-    }
-}
+private:
+    Connection& conn_;
+    std::string_view name_;
+    std::uint8_t op_;
+    const entity::Position& pos_;
+    std::uint32_t id_;
+};
 
 bool Connection::handle_player_command(std::string_view text) {
-    const auto [cmd, args] = split_command(text);
-    if (cmd.empty()) {
+    if (context_.server == nullptr) {
         return true;
     }
     const std::uint8_t op = context_.op_manager != nullptr ? context_.op_manager->op_level(uuid_.dashed()) : 0;
-
-    if (cmd == "help") {
-        send_chat_feedback("可用命令: /gamemode /tp /kill /op /deop /say /tps /help");
-        return true;
-    }
-    if (cmd == "gamemode") {
-        if (args.empty()) {
-            send_chat_feedback("用法: /gamemode <survival|creative|adventure|spectator> [玩家]");
-            return true;
-        }
-        const auto mode = parse_game_mode(args[0]);
-        if (!mode) {
-            send_chat_feedback("未知模式: " + std::string(args[0]));
-            return true;
-        }
-        std::string_view target_name = username_;
-        if (args.size() >= 2) {
-            if (op < 2) {
-                send_chat_feedback("§c权限不足");
-                return true;
-            }
-            target_name = args[1];
-        }
-        if (target_name == username_) {
-            set_game_mode(*mode);
-            send_chat_feedback(std::format("游戏模式已切换为 {}", game_mode_name(*mode)));
-        } else {
-            if (context_.hub == nullptr) {
-                send_chat_feedback("玩家不在线: " + std::string(target_name));
-                return true;
-            }
-            const auto target_id = context_.hub->player_id_by_name(target_name);
-            if (target_id == 0) {
-                send_chat_feedback("玩家不在线: " + std::string(target_name));
-                return true;
-            }
-            // 目标玩家的 uuid 广播其模式变更（Tab 栏条目按 uuid 匹配）
-            const auto target_uuid = context_.hub->player_uuid_by_name(target_name);
-            if (target_uuid) {
-                ByteWriter info;
-                detail::write_player_info_game_mode(info, *target_uuid, *mode);
-                context_.hub->broadcast_all(proto::play_cb::kPlayerInfo, info.data());
-            }
-            // 让目标连接更新自身行为判定并发 PlayerAbilities
-            context_.hub->send_gamemode(target_id, *mode);
-            send_chat_feedback(std::format("{} 的游戏模式已切换为 {}", target_name, game_mode_name(*mode)));
-        }
-        return true;
-    }
-    if (cmd == "tp") {
-        if (args.empty()) {
-            send_chat_feedback("用法: /tp <玩家>");
-            return true;
-        }
-        if (op < 2) {
-            send_chat_feedback("§c权限不足");
-            return true;
-        }
-        if (context_.hub == nullptr) {
-            send_chat_feedback("玩家不在线: " + std::string(args[0]));
-            return true;
-        }
-        const auto others = context_.hub->others(player_id_);
-        for (const auto& other : others) {
-            if (other.name == args[0]) {
-                player_pos_.x = other.x;
-                player_pos_.y = other.y;
-                player_pos_.z = other.z;
-                ++teleport_id_;
-                cyane::ByteWriter tp;
-                tp.f64(other.x);
-                tp.f64(other.y);
-                tp.f64(other.z);
-                tp.f32(player_pos_.yaw);
-                tp.f32(player_pos_.pitch);
-                tp.u8(0);
-                tp.varint(teleport_id_);
-                send_packet(proto::play_cb::kPlayerPositionLook, tp.data());
-                send_chat_feedback(std::format("已传送到 {}", args[0]));
-                return true;
-            }
-        }
-        send_chat_feedback("玩家不在线: " + std::string(args[0]));
-        return true;
-    }
-    if (cmd == "kill") {
-        if (args.empty()) {
-            kill_player();
-        } else {
-            if (op < 2) {
-                send_chat_feedback("§c权限不足");
-                return true;
-            }
-            if (context_.hub == nullptr) {
-                send_chat_feedback("玩家不在线: " + std::string(args[0]));
-                return true;
-            }
-            const auto target_id = context_.hub->player_id_by_name(args[0]);
-            if (target_id == 0) {
-                send_chat_feedback("玩家不在线: " + std::string(args[0]));
-                return true;
-            }
-            context_.hub->send_kill(target_id);
-            send_chat_feedback(std::format("已杀死 {}", args[0]));
-        }
-        return true;
-    }
-    if (cmd == "say") {
-        if (op < 2) {
-            send_chat_feedback("§c权限不足");
-            return true;
-        }
-        if (args.empty()) {
-            send_chat_feedback("用法: /say <消息>");
-            return true;
-        }
-        std::string msg = "[Server] ";
-        for (std::size_t i = 0; i < args.size(); ++i) {
-            if (i > 0) msg += ' ';
-            msg += args[i];
-        }
-        ByteWriter chat;
-        chat.string(proto::chat_text(msg));
-        chat.u8(0);
-        if (context_.hub != nullptr) {
-            context_.hub->broadcast_all(proto::play_cb::kChatMessage, chat.data());
-        }
-        return true;
-    }
-    if (cmd == "tps") {
-        const double tps = context_.tick_stats != nullptr ? context_.tick_stats->tps() : 0.0;
-        send_chat_feedback(std::format("TPS: {:.1f}", tps));
-        return true;
-    }
-    if (cmd == "op") {
-        if (args.empty()) {
-            send_chat_feedback("用法: /op <玩家>");
-            return true;
-        }
-        if (op < 4) {
-            send_chat_feedback("§c权限不足");
-            return true;
-        }
-        if (context_.hub == nullptr) {
-            send_chat_feedback("玩家不在线: " + std::string(args[0]));
-            return true;
-        }
-        const auto uuid_opt = context_.hub->player_uuid_by_name(args[0]);
-        if (!uuid_opt) {
-            send_chat_feedback("玩家不在线: " + std::string(args[0]));
-            return true;
-        }
-        const std::string target_uuid = Uuid::from_bytes(*uuid_opt).dashed();
-        (void)context_.op_manager->op_player(target_uuid, args[0]);
-        send_chat_feedback(std::format("已将 {} 设为 OP", args[0]));
-        return true;
-    }
-    if (cmd == "deop") {
-        if (args.empty()) {
-            send_chat_feedback("用法: /deop <玩家>");
-            return true;
-        }
-        if (op < 4) {
-            send_chat_feedback("§c权限不足");
-            return true;
-        }
-        if (context_.hub == nullptr) {
-            send_chat_feedback("玩家不在线: " + std::string(args[0]));
-            return true;
-        }
-        const auto uuid_opt = context_.hub->player_uuid_by_name(args[0]);
-        if (!uuid_opt) {
-            send_chat_feedback("玩家不在线: " + std::string(args[0]));
-            return true;
-        }
-        const std::string target_uuid = Uuid::from_bytes(*uuid_opt).dashed();
-        (void)context_.op_manager->deop_player(target_uuid);
-        send_chat_feedback(std::format("已撤销 {} 的 OP 权限", args[0]));
-        return true;
-    }
-    send_chat_feedback("未知命令: /" + std::string(cmd));
-    return true;
+    PlayerCommandSender sender{*this, username_, op, player_pos_, player_id_};
+    return game::CommandDispatcher::execute(sender, *context_.server, text);
 }
+
 
 void Connection::set_game_mode(std::uint8_t mode) {
     context_.game_mode = mode;
@@ -612,46 +414,10 @@ bool Connection::handle_tab_complete(ByteSpan payload) {
         *assume_command || (!text->empty() && text->at(0) == '/');
 
     if (command_mode) {
-        // 命令补全（文本可能为空：客户端对空命令框也会发 assumeCommand=true）
-        const std::string cmd_text = text->empty() ? "" : text->substr(1); // 去掉 /
-        // 找到命令名
-        const auto space = cmd_text.find_first_of(" \t");
-        std::string cmd_name = cmd_text.substr(0, space);
-        std::string arg_text = "";
-        if (space != std::string::npos) {
-            arg_text = cmd_text.substr(space + 1);
-        }
-
-        if (space == std::string::npos) {
-            // 还没有空格：补全命令名本身
-            static constexpr std::array commands = {
-                "gamemode", "tp", "kill", "op", "deop", "help", "say", "stop"
-            };
-            for (const auto& c : commands) {
-                if (std::string_view(c).starts_with(cmd_name)) {
-                    matches.push_back(std::format("/{}", c));
-                }
-            }
-        } else if (cmd_name == "gamemode") {
-            // 补全模式名
-            static constexpr std::array modes = {
-                "survival", "creative", "adventure", "spectator"
-            };
-            for (const auto& m : modes) {
-                if (std::string_view(m).starts_with(arg_text)) {
-                    matches.push_back(std::string(m));
-                }
-            }
-        } else if (cmd_name == "tp" || cmd_name == "op" || cmd_name == "deop") {
-            // 补全玩家名
-            if (context_.hub != nullptr) {
-                const auto players = context_.hub->all_player_names();
-                for (const auto& name : players) {
-                    if (std::string_view(name).starts_with(arg_text)) {
-                        matches.push_back(name);
-                    }
-                }
-            }
+        if (context_.server != nullptr) {
+            const std::uint8_t op = context_.op_manager != nullptr ? context_.op_manager->op_level(uuid_.dashed()) : 0;
+            PlayerCommandSender sender{*this, username_, op, player_pos_, player_id_};
+            matches = game::CommandDispatcher::tab_complete(sender, *context_.server, *text);
         }
     } else {
         // 聊天玩家名补全（assumeCommand=false）：不区分大小写的前缀匹配

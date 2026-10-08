@@ -44,6 +44,17 @@ struct HubMessage {
     double damage_from_x{0.0};
     double damage_from_z{0.0};
     int experience{0};  // >0：拾取经验球累加经验
+    bool tp_flag{false};
+    double tp_x{0.0};
+    double tp_y{0.0};
+    double tp_z{0.0};
+    float tp_yaw{0.0f};
+    float tp_pitch{0.0f};
+    bool give_flag{false};
+    std::int16_t give_item_id{0};
+    std::uint8_t give_count{0};
+    std::int16_t give_damage{0};
+    bool clear_flag{false};
 };
 
 // 线程安全的多人广播中心：连接跨 reactor 线程时也安全。
@@ -147,6 +158,53 @@ public:
         std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
         it->second->mailbox.push_back(
             HubMessage{0, Bytes{}, false, -1, 0.0f, 0.0, 0.0, amount});
+        return true;
+    }
+
+    bool send_teleport(std::uint32_t target_id, double x, double y, double z, float yaw, float pitch) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = players_.find(target_id);
+        if (it == players_.end()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
+        HubMessage msg{};
+        msg.tp_flag = true;
+        msg.tp_x = x;
+        msg.tp_y = y;
+        msg.tp_z = z;
+        msg.tp_yaw = yaw;
+        msg.tp_pitch = pitch;
+        it->second->mailbox.push_back(std::move(msg));
+        return true;
+    }
+
+    bool send_give(std::uint32_t target_id, std::int16_t item_id, std::uint8_t count, std::int16_t damage) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = players_.find(target_id);
+        if (it == players_.end()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
+        HubMessage msg{};
+        msg.give_flag = true;
+        msg.give_item_id = item_id;
+        msg.give_count = count;
+        msg.give_damage = damage;
+        it->second->mailbox.push_back(std::move(msg));
+        return true;
+    }
+
+    bool send_clear(std::uint32_t target_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = players_.find(target_id);
+        if (it == players_.end()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> mlock(it->second->mailbox_mutex);
+        HubMessage msg{};
+        msg.clear_flag = true;
+        it->second->mailbox.push_back(std::move(msg));
         return true;
     }
 

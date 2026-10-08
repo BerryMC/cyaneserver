@@ -37,6 +37,10 @@
 #include "cyane/world/world.hpp"
 #include "cyane/game/player_data.hpp"
 
+namespace cyane {
+class Server;
+}
+
 namespace cyane::game {
 class OpManager;
 }
@@ -55,6 +59,7 @@ public:
 };
 
 struct ConnectionContext {
+    Server* server{nullptr};
     const StatusProvider* status{nullptr};
     const crypto::RsaKeyPair* keys{nullptr};
     const SessionService* sessions{nullptr};
@@ -104,6 +109,7 @@ public:
 
     void send_packet(std::int32_t packet_id, ByteSpan fields);
     void disconnect(std::string_view reason);
+    void send_chat_feedback(std::string_view message);
 
     // 由所属 reactor 线程周期调用（sweep 时）：驱动 KeepAlive 与超时检测
     void tick(std::uint64_t now_ms);
@@ -218,8 +224,6 @@ private:
     void consume_held_item();
     // 玩家聊天命令处理
     bool handle_player_command(std::string_view text);
-    // 发送聊天框反馈
-    void send_chat_feedback(std::string_view message);
     void collect_items(std::uint64_t now_ms);
     // 把一个堆叠尽量塞进玩家背包（热区栏优先，再主背包），返回未放下的剩余
     [[nodiscard]] item::ItemStack give_item(item::ItemStack stack);
