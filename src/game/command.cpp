@@ -692,22 +692,55 @@ std::vector<std::string> CommandDispatcher::tab_complete(const CommandSender& se
     }
 
     // 有空格：取命令名和当前词前缀
-    const std::string_view cmd = text.substr(0, text.find(' '));
+    // 解析参数序号（第几个空格 = 第几个参数，0-based）
+    const auto first_space = text.find(' ');
+    const std::string_view cmd = text.substr(0, first_space);
     const std::string_view prefix = text.substr(last_space + 1);
+    // 计算当前是第几个参数（空格数 = 参数索引）
+    int arg_index = 0;
+    for (std::size_t i = 0; i < last_space; ++i) {
+        if (text[i] == ' ') {
+            ++arg_index;
+            // 跳过连续空格
+            while (i + 1 < last_space && text[i + 1] == ' ') ++i;
+        }
+    }
     const auto names = server.player_names();
 
-    // 补全玩家名或实体选择器
-    if (cmd == "tp" || cmd == "teleport" || cmd == "kill" || cmd == "op" || cmd == "deop" ||
-        cmd == "give" || cmd == "clear" ||
-        (cmd == "gamemode" && text.find(' ') != text.find(' ', text.find(' ') + 1))) {
-        // 补全玩家名
-        for (const auto& n : names) {
-            if (n.starts_with(prefix)) {
-                matches.push_back(n);
+    // 对齐原版各命令的 getTabCompletions 行为
+    if (cmd == "gamemode" || cmd == "gm") {
+        // args[0] = 模式名, args[1] = 玩家名
+        if (arg_index == 0) {
+            for (const auto m : {"survival", "creative", "adventure", "spectator"}) {
+                if (std::string_view(m).starts_with(prefix)) {
+                    matches.push_back(m);
+                }
+            }
+        } else if (arg_index == 1) {
+            for (const auto& n : names) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
             }
         }
-        // kill / tp 命令额外补全实体选择器
-        if (cmd == "kill" || cmd == "tp" || cmd == "teleport") {
+    } else if (cmd == "defaultgamemode") {
+        // args[0] = 模式名
+        if (arg_index == 0) {
+            for (const auto m : {"survival", "creative", "adventure", "spectator"}) {
+                if (std::string_view(m).starts_with(prefix)) {
+                    matches.push_back(m);
+                }
+            }
+        }
+    } else if (cmd == "tp") {
+        // 原版：args.length == 1 || args.length == 2 → 补全玩家名
+        if (arg_index == 0 || arg_index == 1) {
+            for (const auto& n : names) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
+            }
+            // kill/tp 额外补全实体选择器
             static constexpr std::string_view kSelectors[] = {"@a", "@p", "@r", "@e", "@s"};
             for (const auto s : kSelectors) {
                 if (s.starts_with(prefix)) {
@@ -715,42 +748,145 @@ std::vector<std::string> CommandDispatcher::tab_complete(const CommandSender& se
                 }
             }
         }
-    } else if (cmd == "gamemode" || cmd == "defaultgamemode") {
-        for (const auto m : {"survival", "creative", "adventure", "spectator"}) {
-            if (std::string_view(m).starts_with(prefix)) {
-                matches.push_back(m);
+    } else if (cmd == "teleport") {
+        // 原版：args.length == 1 → 玩家名, args.length > 1 && <= 4 → 坐标（无补全）
+        if (arg_index == 0) {
+            for (const auto& n : names) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
+            }
+            static constexpr std::string_view kSelectors[] = {"@a", "@p", "@r", "@e", "@s"};
+            for (const auto s : kSelectors) {
+                if (s.starts_with(prefix)) {
+                    matches.push_back(std::string(s));
+                }
+            }
+        }
+    } else if (cmd == "kill") {
+        // 原版：args.length == 1 → 玩家名
+        if (arg_index == 0) {
+            for (const auto& n : names) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
+            }
+            static constexpr std::string_view kSelectors[] = {"@a", "@p", "@r", "@e", "@s"};
+            for (const auto s : kSelectors) {
+                if (s.starts_with(prefix)) {
+                    matches.push_back(std::string(s));
+                }
+            }
+        }
+    } else if (cmd == "give") {
+        // 原版：args[0] = 玩家名, args[1] = 物品名（Item.REGISTRY.getKeys()）
+        if (arg_index == 0) {
+            for (const auto& n : names) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
+            }
+        } else if (arg_index == 1) {
+            // 补全物品名（从 resolve_item_id 的映射表提取键）
+            static const std::vector<std::string> kItemNames = [] {
+                std::vector<std::string> v;
+                // 直接列出常用物品名（与 resolve_item_id 保持一致）
+                v = {"stone", "grass", "dirt", "cobblestone", "planks", "bedrock", "sand",
+                     "gold_ore", "iron_ore", "coal_ore", "log", "leaves", "glass", "sandstone",
+                     "wool", "gold_block", "iron_block", "tnt", "chest", "crafting_table",
+                     "furnace", "torch", "glowstone", "apple", "bow", "arrow", "coal", "diamond",
+                     "iron_ingot", "gold_ingot", "iron_sword", "diamond_sword", "stick", "wheat",
+                     "bread", "bucket", "water_bucket", "lava_bucket", "milk_bucket", "redstone",
+                     "egg", "compass", "clock", "bone", "sugar", "book", "shears", "melon",
+                     "beef", "cooked_beef", "chicken", "cooked_chicken", "ender_pearl",
+                     "emerald", "carrot", "potato", "quartz", "rabbit", "cooked_rabbit",
+                     "mutton", "cooked_mutton", "shield", "elytra", "totem_of_undying"};
+                return v;
+            }();
+            for (const auto& n : kItemNames) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
+            }
+        }
+    } else if (cmd == "clear") {
+        // 原版：args[0] = 玩家名, args[1] = 物品名
+        if (arg_index == 0) {
+            for (const auto& n : names) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
+            }
+        }
+    } else if (cmd == "op") {
+        // 原版：args[0] = 非OP玩家名（补全未拥有管理员权限的玩家）
+        if (arg_index == 0) {
+            for (const auto& n : names) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
+            }
+        }
+    } else if (cmd == "deop") {
+        // 原版：args[0] = OP玩家名（补全拥有管理员权限的玩家）
+        if (arg_index == 0) {
+            for (const auto& n : names) {
+                if (n.starts_with(prefix)) {
+                    matches.push_back(n);
+                }
             }
         }
     } else if (cmd == "time") {
-        // /time set <...> 或 /time <set|add|query>
-        const auto first_space = text.find(' ');
-        const std::string_view sub = text.substr(first_space + 1, last_space - first_space - 1);
-        if (sub == "set") {
-            for (const auto t : {"day", "noon", "night", "midnight"}) {
-                if (std::string_view(t).starts_with(prefix)) {
-                    matches.push_back(t);
-                }
-            }
-        } else {
+        // 原版：args[0] = set/add/query, args[1]（if set）= day/night
+        if (arg_index == 0) {
             for (const auto t : {"set", "add", "query"}) {
                 if (std::string_view(t).starts_with(prefix)) {
                     matches.push_back(t);
                 }
             }
+        } else if (arg_index == 1) {
+            // 检查 args[0] 是否为 "set"
+            const auto second_space = text.find(' ', first_space + 1);
+            const std::string_view sub = (second_space != std::string_view::npos && second_space < last_space)
+                ? text.substr(first_space + 1, second_space - first_space - 1)
+                : text.substr(first_space + 1, last_space - first_space - 1);
+            if (sub == "set") {
+                for (const auto t : {"day", "night"}) {
+                    if (std::string_view(t).starts_with(prefix)) {
+                        matches.push_back(t);
+                    }
+                }
+            }
         }
     } else if (cmd == "weather") {
-        for (const auto w : {"clear", "rain", "thunder"}) {
-            if (std::string_view(w).starts_with(prefix)) {
-                matches.push_back(w);
+        // 原版：args[0] = clear/rain/thunder
+        if (arg_index == 0) {
+            for (const auto w : {"clear", "rain", "thunder"}) {
+                if (std::string_view(w).starts_with(prefix)) {
+                    matches.push_back(w);
+                }
             }
         }
     } else if (cmd == "difficulty") {
-        for (const auto d : {"peaceful", "easy", "normal", "hard"}) {
-            if (std::string_view(d).starts_with(prefix)) {
-                matches.push_back(d);
+        // 原版：args[0] = peaceful/easy/normal/hard
+        if (arg_index == 0) {
+            for (const auto d : {"peaceful", "easy", "normal", "hard"}) {
+                if (std::string_view(d).starts_with(prefix)) {
+                    matches.push_back(d);
+                }
+            }
+        }
+    } else if (cmd == "save-all" || cmd == "save") {
+        // 原版：args[0] = flush
+        if (arg_index == 0) {
+            for (const auto s : {"flush"}) {
+                if (std::string_view(s).starts_with(prefix)) {
+                    matches.push_back(s);
+                }
             }
         }
     }
+    // seed, stop, list, tps, say, help: 无参数补全
     return matches;
 }
 
