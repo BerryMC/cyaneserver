@@ -284,6 +284,13 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
     std::lock_guard<std::mutex> lock{mutex_};
     std::vector<std::uint32_t> to_remove;
     for (auto& mob : mobs_) {
+        // 掉入虚空致死（vanilla Entity.onUpdate：posY < -64.0 → outOfWorld 伤害/kill）
+        if (mob.pos.y < -64.0) {
+            result.deaths.push_back(
+                MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, true});
+            to_remove.push_back(mob.entity_id);
+            continue;
+        }
         const auto species = world::mob_type(mob.type);
         if (!species) {
             continue;

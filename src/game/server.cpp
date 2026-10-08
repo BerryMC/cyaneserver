@@ -657,17 +657,17 @@ void Server::tick() {
                                      meta.data());
             }
         }
-        // 环境音（闲置哼声）与环境伤害音（火/岩浆/摔落）
+        // 环境音（闲置哼声）与环境伤害音（火/岩浆/摔落，传播范围 16 格使用 1 区块半径）
         for (const auto& snd : mob_events.sounds) {
             ByteWriter sound;
             net::writers::write_named_sound(sound, snd.sound_id, proto::sound_category::kBlocks,
                                             static_cast<std::int32_t>(snd.x),
                                             static_cast<std::int32_t>(snd.y),
                                             static_cast<std::int32_t>(snd.z), 1.0f, 1.0f);
-            const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(snd.x),
-                                                           static_cast<std::int32_t>(snd.z));
+            const auto cpos = world::ChunkPos::from_world(snd.x, snd.z);
             if (cpos) {
-                hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kSoundEffect,
+                constexpr std::int32_t kSoundRadius = 1;
+                hub_->broadcast_near(cpos->x, cpos->z, kSoundRadius, 0, proto::play_cb::kSoundEffect,
                                      sound.data());
             }
         }

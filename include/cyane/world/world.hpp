@@ -32,10 +32,22 @@ public:
             return kStateAir;
         }
         std::lock_guard<std::mutex> lock{mutex_};
-        const auto* sc = find_locked(*pos);
-        if (sc == nullptr) {
+        auto it = chunks_.find(chunk_key(*pos));
+        if (it == chunks_.end() && loader_) {
+            Chunk loaded{*pos};
+            Bytes source;
+            if (loader_(*pos, loaded, source)) {
+                auto sc = std::make_shared<StoredChunk>();
+                sc->chunk = std::move(loaded);
+                sc->source_nbt = std::move(source);
+                sc->dirty = false;
+                it = chunks_.emplace(chunk_key(*pos), std::move(sc)).first;
+            }
+        }
+        if (it == chunks_.end()) {
             return flat_baseline(wy);
         }
+        const auto& sc = it->second;
         const auto* section = sc->chunk.section(static_cast<std::size_t>(wy) / 16);
         if (section == nullptr || section->empty()) {
             return kStateAir;
