@@ -139,8 +139,9 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
 }
 
 void Connection::apply_damage(float amount, double from_x, double from_z) {
-    if (dead_ || context_.game_mode == proto::game_mode::kCreative) {
-        return;  // 创造模式无敌（vanilla 同）
+    if (dead_ || context_.game_mode == proto::game_mode::kCreative ||
+        context_.game_mode == proto::game_mode::kSpectator) {
+        return;  // 创造/旁观模式无敌（vanilla capabilities.disableDamage）
     }
     // 护甲减伤（ArmorUtil.getDamageAfterAbsorb，槽 5..8 = 头/胸/腿/脚）
     int armor = 0;

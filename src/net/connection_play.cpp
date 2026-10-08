@@ -143,7 +143,8 @@ bool Connection::handle_play_position(std::int32_t packet_id, ByteSpan payload) 
         context_.player_manager->update_position(player_id_, pos);
     }
     // 掉出世界底部（虚空）致死：y < -64 触发死亡界面
-    if (!dead_ && pos.y < -64.0) {
+    // 旁观者不会受到任何伤害（vanilla capabilities.disableDamage = true）
+    if (!dead_ && pos.y < -64.0 && context_.game_mode != proto::game_mode::kSpectator) {
         kill_player();
     }
     broadcast_movement(pos);

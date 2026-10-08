@@ -36,6 +36,10 @@ void Connection::collect_items(std::uint64_t now_ms) {
     if (context_.item_drops == nullptr || dead_) {
         return;
     }
+    // 旁观者不拾取物品（vanilla EntityPlayer.onLivingUpdate：isSpectator 跳过碰撞检测）
+    if (context_.game_mode == proto::game_mode::kSpectator) {
+        return;
+    }
     // EntityPlayer.onLivingUpdate：扫描盒 = 玩家包围盒 grow(1.0, 0.5, 1.0)，
     // 物品盒（0.25）相交且 pickupDelay <= 0 → onCollideWithPlayer
     const world::Aabb scan{player_pos_.x - 0.3 - 1.0, player_pos_.y - 0.5,
