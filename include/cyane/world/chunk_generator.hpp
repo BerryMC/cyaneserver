@@ -9,6 +9,7 @@
 #include "cyane/world/biome.hpp"
 #include "cyane/world/blocks.hpp"
 #include "cyane/world/chunk.hpp"
+#include "cyane/world/map_gen.hpp"
 #include "cyane/world/noise.hpp"
 
 namespace cyane::world::gen {
@@ -49,11 +50,14 @@ public:
         height_map_.assign(825, 0.0);
     }
 
-    // 生成一个 16×256×16 的区块（逐行转写 generateHeightmap + setBlocksInChunk）
+    // 生成一个 16×256×16 的区块（逐行转写 generateHeightmap + setBlocksInChunk + caves）
     [[nodiscard]] Chunk generate(int x, int z) {
         Chunk chunk{ChunkPos{x, z}};
         set_blocks_in_chunk(x, z, chunk);
         replace_biome_blocks(x, z, chunk);
+        if (settings_.use_caves) {
+            cave_generator_.generate(seed_, x, z, chunk);
+        }
         return chunk;
     }
 
@@ -66,6 +70,7 @@ private:
     std::unique_ptr<NoiseGeneratorOctaves> main_noise_;
     std::unique_ptr<NoiseGeneratorImproved> surface_noise_;
     std::unique_ptr<NoiseGeneratorOctaves> depth_noise_;
+    MapGenCaves cave_generator_;
     std::vector<double> height_map_{825, 0.0};
     std::vector<double> depth_region_;
     std::vector<double> main_noise_region_;

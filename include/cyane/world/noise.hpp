@@ -30,6 +30,11 @@ public:
         return static_cast<double>(l) * 1.1102230246251565e-16;
     }
 
+    // nextFloat() = next(24) / (2^24)（java.util.Random.nextFloat）
+    [[nodiscard]] float next_float() {
+        return static_cast<float>(static_cast<std::uint32_t>(next(24))) / static_cast<float>(1U << 24);
+    }
+
     [[nodiscard]] std::uint64_t next_long() {
         return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(next(32))) << 32) |
                static_cast<std::uint64_t>(static_cast<std::uint32_t>(next(32)));
