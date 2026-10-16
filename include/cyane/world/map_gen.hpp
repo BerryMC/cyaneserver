@@ -109,7 +109,7 @@ private:
         const bool flag = random.next_int(6) == 0;
 
         for (; p15 < p16; ++p15) {
-            const double d2 = 1.5 + std::sin(static_cast<float>(p15) * 3.1415927f / static_cast<float>(p16)) * static_cast<double>(radius);
+            const double d2 = 1.5 + static_cast<double>(std::sin(static_cast<float>(p15) * 3.1415927f / static_cast<float>(p16))) * static_cast<double>(radius);
             const double d3 = d2 * height_ratio;
             const float f2 = std::cos(pitch);
             const float f3 = std::sin(pitch);
