@@ -9,6 +9,8 @@
 #include "cyane/net/container_store.hpp"
 #include "cyane/net/furnace_store.hpp"
 #include "cyane/net/item_drop.hpp"
+#include "cyane/net/packet_writers.hpp"
+#include "cyane/item/item_tools.hpp"
 #include "cyane/proto/frame.hpp"
 #include "cyane/world/block_sounds.hpp"
 #include "cyane/world/level_dat.hpp"
@@ -678,12 +680,17 @@ CYANE_TEST(overworld_generator_produces_deterministic_terrain) {
     }
     CYANE_CHECK(max_y >= 50); // 自然陆地或水面高度通常在 50~100 之间
 
-    // 4. 地表连续性：相邻方块地表高度平缓过渡（消除 4x4 尖刺断层断崖）
+    // 4. 地表连续性：相邻方块地表基础高度平缓过渡（排除地表树木与花草遮挡）
+    auto is_terrain = [](std::uint16_t state) {
+        return state == world::kStateGrass || state == world::kStateDirt ||
+               state == world::kStateStone || state == world::kStateSand ||
+               state == world::kStateGravel || state == world::kStateWater;
+    };
     for (std::size_t x = 0; x < 15; ++x) {
         int h1 = 0, h2 = 0;
         for (int y = 255; y >= 0; --y) {
-            if (c1.block_at(x, y, 8) != world::kStateAir && h1 == 0) h1 = y;
-            if (c1.block_at(x + 1, y, 8) != world::kStateAir && h2 == 0) h2 = y;
+            if (is_terrain(c1.block_at(x, y, 8)) && h1 == 0) h1 = y;
+            if (is_terrain(c1.block_at(x + 1, y, 8)) && h2 == 0) h2 = y;
         }
         CYANE_CHECK(std::abs(h1 - h2) <= 3);
     }
@@ -697,4 +704,163 @@ CYANE_TEST(world_with_generator_materializes_terrain) {
     const auto chunk = world.chunk_at(world::ChunkPos{2, 2});
     CYANE_CHECK(chunk.has_blocks());
     CYANE_CHECK_EQ(chunk.block_at(0, 0, 0), world::kStateBedrock);
+}
+
+CYANE_TEST(overworld_generator_generates_ores_and_trees) {
+    // 1. 验证生成器产出原版矿石
+    world::gen::ChunkGeneratorOverworld gen{42ULL};
+    const auto chunk = gen.generate(0, 0);
+
+    bool has_coal = false;
+    bool has_iron = false;
+
+    for (std::size_t x = 0; x < 16; ++x) {
+        for (std::size_t z = 0; z < 16; ++z) {
+            for (int y = 0; y < 256; ++y) {
+                const auto state = chunk.block_at(x, y, z);
+                if (state == world::kStateCoalOre) has_coal = true;
+                if (state == world::kStateIronOre) has_iron = true;
+            }
+        }
+    }
+
+    CYANE_CHECK(has_coal);
+    CYANE_CHECK(has_iron);
+
+    // 2. 验证原版树木生成器放置原木与树叶，且草地变为泥土
+    world::Chunk tree_chunk{world::ChunkPos{0, 0}};
+    for (std::size_t x = 0; x < 16; ++x) {
+        for (std::size_t z = 0; z < 16; ++z) {
+            tree_chunk.set_block(x, 63, z, world::kStateGrass);
+        }
+    }
+    world::gen::JavaRandom rand{12345ULL};
+    world::gen::WorldGenTrees tree_gen{4, world::kStateOakLog, world::kStateOakLeaves};
+    const bool placed = tree_gen.generate(tree_chunk, rand, 8, 64, 8);
+    CYANE_CHECK(placed);
+    CYANE_CHECK_EQ(tree_chunk.block_at(8, 63, 8), world::kStateDirt);
+    CYANE_CHECK_EQ(tree_chunk.block_at(8, 64, 8), world::kStateOakLog);
+    CYANE_CHECK_EQ(tree_chunk.block_at(8, 67, 8), world::kStateOakLog);
+
+    bool has_leaves = false;
+    for (std::size_t x = 6; x <= 10; ++x) {
+        for (std::size_t z = 6; z <= 10; ++z) {
+            if (tree_chunk.block_at(x, 68, z) == world::kStateOakLeaves) {
+                has_leaves = true;
+            }
+        }
+    }
+    CYANE_CHECK(has_leaves);
+}
+
+CYANE_TEST(block_break_particles_and_dig_hardness) {
+    // 1. 验证 WorldEvent 2001 破坏粒子封包编码
+    ByteWriter out;
+    net::writers::write_world_event(out, 2001, 10, 64, -20, static_cast<std::int32_t>(world::kStateStone));
+    ByteReader reader{out.data()};
+    const auto effect_id = reader.i32();
+    const auto pos = reader.i64();
+    const auto data = reader.i32();
+    const auto server_wide = reader.boolean();
+
+    CYANE_CHECK(effect_id.has_value());
+    CYANE_CHECK_EQ(*effect_id, 2001);
+    CYANE_CHECK(pos.has_value());
+    CYANE_CHECK_EQ(position_x(*pos), 10);
+    CYANE_CHECK_EQ(position_y(*pos), 64);
+    CYANE_CHECK_EQ(position_z(*pos), -20);
+    CYANE_CHECK(data.has_value());
+    CYANE_CHECK_EQ(*data, static_cast<std::int32_t>(world::kStateStone));
+    CYANE_CHECK(server_wide.has_value());
+    CYANE_CHECK_EQ(*server_wide, false);
+
+    // 2. 挖掘耗时计算
+    CYANE_CHECK(world::block_hardness(world::block_id(world::kStateBedrock)) < 0.0f);
+    CYANE_CHECK(world::block_hardness(world::block_id(world::kStateDirt)) == 0.5f);
+    CYANE_CHECK(world::block_hardness(world::block_id(world::kStateStone)) == 1.5f);
+
+    // 钻石镐挖石头（速 8x，can_harvest）耗时显著短于木镐或徒手
+    const float diamond_pick_time = item::dig_duration_ms(world::block_id(world::kStateStone), 278, true);
+    const float wood_pick_time = item::dig_duration_ms(world::block_id(world::kStateStone), 270, true);
+    const float hand_time = item::dig_duration_ms(world::block_id(world::kStateStone), 0, false);
+    CYANE_CHECK(diamond_pick_time < wood_pick_time);
+    CYANE_CHECK(wood_pick_time < hand_time);
+}
+
+CYANE_TEST(vanilla_biomes_and_ore_abundance) {
+    // 1. 验证新群系属性与注册一致性
+    CYANE_CHECK_EQ(world::biome::kMushroomIsland.id, 14);
+    CYANE_CHECK_EQ(world::biome::kMushroomIsland.top_block, world::kStateMycelium);
+    CYANE_CHECK_EQ(world::biome::kHell.id, 8);
+    CYANE_CHECK_EQ(world::biome::kHell.top_block, world::kStateNetherrack);
+    CYANE_CHECK_EQ(world::biome::kSky.id, 9);
+    CYANE_CHECK_EQ(world::biome::kSky.top_block, world::kStateEndStone);
+    CYANE_CHECK_EQ(world::biome::kDeepOcean.id, 24);
+
+    // 2. 验证修复 +8 偏移后矿物丰富度（单区块生成矿石总数达 150 以上）
+    world::gen::ChunkGeneratorOverworld gen{9999ULL};
+    const auto chunk = gen.generate(1, 1);
+    int ore_count = 0;
+    for (std::size_t x = 0; x < 16; ++x) {
+        for (std::size_t z = 0; z < 16; ++z) {
+            for (int y = 0; y < 128; ++y) {
+                const auto s = chunk.block_at(x, y, z);
+                if (s == world::kStateCoalOre || s == world::kStateIronOre ||
+                    s == world::kStateGoldOre || s == world::kStateRedstoneOre ||
+                    s == world::kStateDiamondOre || s == world::kStateLapisOre ||
+                    s == world::kStateGranite || s == world::kStateDiorite ||
+                    s == world::kStateAndesite) {
+                    ++ore_count;
+                }
+            }
+        }
+    }
+    CYANE_CHECK(ore_count >= 150);
+}
+
+CYANE_TEST(world_gen_features_dungeon_and_plants) {
+    // 1. 验证地牢生成（实心石体内部空腔、苔石地表、刷怪笼与宝箱）
+    world::Chunk chunk{world::ChunkPos{0, 0}};
+    for (std::size_t x = 0; x < 16; ++x) {
+        for (std::size_t z = 0; z < 16; ++z) {
+            for (int y = 20; y <= 35; ++y) {
+                chunk.set_block(x, y, z, world::kStateStone);
+            }
+        }
+    }
+    chunk.set_block(4, 25, 8, world::kStateAir);
+    chunk.set_block(4, 26, 8, world::kStateAir);
+
+    world::gen::JavaRandom rand{54321ULL};
+    const bool dungeon_ok = world::gen::WorldGenDungeons::generate(chunk, rand, 8, 25, 8);
+    CYANE_CHECK(dungeon_ok);
+    CYANE_CHECK_EQ(chunk.block_at(8, 25, 8), world::kStateMobSpawner);
+
+    // 2. 验证沙漠水井生成
+    world::Chunk desert_chunk{world::ChunkPos{0, 0}};
+    const bool well_ok = world::gen::WorldGenDesertWells::generate(desert_chunk, 8, 65, 8);
+    CYANE_CHECK(well_ok);
+    CYANE_CHECK_EQ(desert_chunk.block_at(8, 65, 8), world::kStateWater);
+    CYANE_CHECK_EQ(desert_chunk.block_at(8, 64, 8), world::kStateSandstone);
+
+    // 3. 验证双层高植物生成（上下两半方块联动）
+    world::Chunk flower_chunk{world::ChunkPos{0, 0}};
+    for (std::size_t x = 0; x < 16; ++x) {
+        for (std::size_t z = 0; z < 16; ++z) {
+            flower_chunk.set_block(x, 63, z, world::kStateGrass);
+        }
+    }
+    const bool double_ok = world::gen::WorldGenDoublePlant::generate(flower_chunk, rand, 8, 64, 8, 0);
+    CYANE_CHECK(double_ok);
+
+    bool has_double_plant = false;
+    for (std::size_t x = 0; x < 16; ++x) {
+        for (std::size_t z = 0; z < 16; ++z) {
+            if (flower_chunk.block_at(x, 64, z) == static_cast<std::uint16_t>(world::kStateDoublePlant | 0)) {
+                has_double_plant = true;
+                CYANE_CHECK_EQ(flower_chunk.block_at(x, 65, z), static_cast<std::uint16_t>(world::kStateDoublePlant | 0x8));
+            }
+        }
+    }
+    CYANE_CHECK(has_double_plant);
 }

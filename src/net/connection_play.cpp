@@ -213,12 +213,26 @@ bool Connection::handle_play_entity_action(ByteSpan payload) {
     if (!entity_id || !action || !jump_boost) {
         return false;
     }
+    const bool was_sneaking = sneaking_;
     switch (*action) {
         case 0: sneaking_ = true; break;
         case 1: sneaking_ = false; break;
         case 3: sprinting_ = true; break;
         case 4: sprinting_ = false; break;
         default: break;  // 睡眠/骑乘跳/开背包/滑翔：暂不处理
+    }
+    // 潜行状态变化：广播 EntityMetadata index 0（bit 0x02 SNEAKING）给其他玩家
+    // （原版 DataWatcher SharedFlags 更新走 EntityTrackerEntry.sendMetadata 到所有 tracker）
+    if (was_sneaking != sneaking_ && context_.hub != nullptr) {
+        ByteWriter meta;
+        detail::write_shared_flags_meta(meta, player_id_, sneaking_, sprinting_);
+        const auto cpos = world::ChunkPos::from_world(static_cast<std::int32_t>(player_pos_.x),
+                                                       static_cast<std::int32_t>(player_pos_.z));
+        if (cpos) {
+            const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kEntityMetadata, meta.data());
+        }
     }
     return true;
 }
@@ -336,7 +350,8 @@ void Connection::set_game_mode(std::uint8_t mode) {
     gs.u8(3);
     gs.f32(static_cast<float>(mode));
     send_packet(proto::play_cb::kGameStateChange, gs.data());
-    // PlayerInfo (0x2E) 更新游戏模式（客户端据此显示旁观者/创造UI）
+    // PlayerInfo (0x2E) 更新游戏模式（客户端 AbstractClientPlayer.isSpectator() 查的就是这个）
+    // 必须广播给所有人包括自己（broadcast_all = broadcast(0)），否则自己的 isSpectator() 返回 false
     ByteWriter info;
     detail::write_player_info_game_mode(info, uuid_.bytes(), mode);
     if (context_.hub != nullptr) {

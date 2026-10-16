@@ -64,6 +64,24 @@ namespace {
     return value;
 }
 
+[[nodiscard]] std::int64_t parse_seed(std::string_view s) {
+    if (s.empty()) {
+        std::random_device rd;
+        return (static_cast<std::int64_t>(rd()) << 32) | static_cast<std::int64_t>(rd());
+    }
+    std::int64_t num = 0;
+    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), num);
+    if (ec == std::errc{} && ptr == s.data() + s.size() && num != 0) {
+        return num;
+    }
+    // 对齐原版 DedicatedServer: (long)s.hashCode()
+    std::int32_t h = 0;
+    for (char c : s) {
+        h = 31 * h + static_cast<unsigned char>(c);
+    }
+    return static_cast<std::int64_t>(h);
+}
+
 }
 
 Result<ServerConfig> ServerConfig::from(const Config& config) {
@@ -184,6 +202,12 @@ Result<ServerConfig> ServerConfig::from(const Config& config) {
     }
     out.autosave_interval = static_cast<int>(*autosave);
 
+    auto seed = string_value(config, "server.seed", out.seed);
+    if (!seed) {
+        return std::unexpected{std::move(seed.error())};
+    }
+    out.seed = std::move(*seed);
+
     return out;
 }
 
@@ -271,13 +295,16 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
                          : (server->config_.game_mode == "spectator" ? proto::game_mode::kSpectator
                                                                       : proto::game_mode::kCreative);
 
-    // 世界元数据：level.dat 出生点（首启缺失时建档最小集）
+    const std::int64_t parsed_seed = parse_seed(server->config_.seed);
+
+    // 世界元数据：level.dat 出生点与种子（首启缺失时建档最小集）
     if (auto created = world::ensure_level_dat(server->config_.world_dir,
-                                                static_cast<std::int32_t>(context.game_mode));
+                                                static_cast<std::int32_t>(context.game_mode),
+                                                parsed_seed);
         !created) {
         log::warn("cannot ensure level.dat: {}", created.error().message);
     } else if (*created) {
-        log::info("created {} with minimal level.dat", server->config_.world_dir);
+        log::info("created {} with minimal level.dat (seed: {})", server->config_.world_dir, parsed_seed);
     }
     if (auto level = world::load_level_dat(server->config_.world_dir); !level) {
         log::warn("cannot read level.dat: {}", level.error().message);
@@ -286,9 +313,15 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         context.spawn_y = level->spawn_y;
         context.spawn_z = level->spawn_z;
         log::info("world spawn at ({}, {}, {})", level->spawn_x, level->spawn_y, level->spawn_z);
+        // 如果 level.dat 中没有种子且配置了种子，优先使用配置种子；否则使用 level.dat 的种子
+        std::int64_t actual_seed = level->seed;
+        if (actual_seed == 0 && !server->config_.seed.empty()) {
+            actual_seed = parsed_seed;
+        }
+        server->seed_ = actual_seed;
         // 注入世界生成器（使用 level.dat 的 RandomSeed）
-        server->world_->set_generator(static_cast<std::uint64_t>(level->seed));
-        log::info("world generator initialized with seed {}", level->seed);
+        server->world_->set_generator(static_cast<std::uint64_t>(actual_seed));
+        log::info("world generator initialized with seed {}", actual_seed);
     }
 
     // 世界存档：载入 region/*.mca（方块编辑 + 方块实体 + 掉落物/生物实体），

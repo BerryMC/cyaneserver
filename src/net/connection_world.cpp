@@ -93,21 +93,38 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     const std::int32_t bx = position_x(*packed);
     const std::int32_t by = position_y(*packed);
     const std::int32_t bz = position_z(*packed);
-    // 生存模式：START(0) 出现裂纹、ABORT(1) 清除裂纹，让附近玩家看到挖掘过程
-    if (!creative && (*status == 0 || *status == 1) && context_.hub != nullptr) {
-        const auto cpos = world::ChunkPos::from_world(bx, bz);
-        if (cpos) {
-            ByteWriter out;
-            writers::write_block_break_animation(out, player_id_, bx, by, bz,
-                                                 *status == 0 ? 0 : 0xFF);
-            const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
-            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
-                                         proto::play_cb::kBlockBreakAnimation, out.data());
+    // 生存模式：START(0) 启动挖掘计时并下发裂纹阶段 0，ABORT(1) 放弃并清除裂纹
+    if (!creative && !spectator && *status == 0) {
+        is_digging_ = true;
+        dig_bx_ = bx;
+        dig_by_ = by;
+        dig_bz_ = bz;
+        dig_start_ms_ = now_ms_;
+        last_break_stage_ = 0;
+        const auto prev_state = context_.world != nullptr ? context_.world->block_at(bx, by, bz) : world::kStateAir;
+        const auto held_id = inventory_.hotbar_item(selected_slot_).id;
+        const auto rule = world::harvest_rule(world::block_id(prev_state));
+        const auto tool = item::tool_of(held_id);
+        const bool can_harvest = !rule.needs_pickaxe || (tool.kind == item::ToolKind::pickaxe && static_cast<std::uint8_t>(tool.tier) >= rule.min_tier);
+        dig_duration_ms_ = item::dig_duration_ms(world::block_id(prev_state), held_id, can_harvest);
+
+        if (context_.hub != nullptr) {
+            const auto cpos = world::ChunkPos::from_world(bx, bz);
+            if (cpos) {
+                ByteWriter out;
+                writers::write_block_break_animation(out, player_id_, bx, by, bz, 0);
+                const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+                context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                             proto::play_cb::kBlockBreakAnimation, out.data());
+            }
         }
+    } else if (*status == 1) {
+        stop_digging(true);
     }
     if (!destroy) {
         return true;
     }
+    stop_digging(false);
     // 破坏前记录原方块，用于生成掉落物（生存模式且非空气）
     const std::uint16_t prev = context_.world != nullptr ? context_.world->block_at(bx, by, bz)
                                                          : world::kStateAir;
@@ -184,6 +201,22 @@ bool Connection::handle_play_digging(ByteSpan payload) {
         }
     }
     set_block_and_broadcast(bx, by, bz, world::kStateAir);
+    // 破坏方块音效与粒子（WorldEvent 2001）广播给附近所有玩家（含自身与旁观者）
+    if (prev != world::kStateAir && context_.hub != nullptr) {
+        const auto cpos = world::ChunkPos::from_world(bx, bz);
+        if (cpos) {
+            ByteWriter event_pkt;
+            writers::write_world_event(event_pkt, 2001, bx, by, bz, static_cast<std::int32_t>(prev), false);
+            const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, 0,
+                                         proto::play_cb::kWorldEvent, event_pkt.data());
+
+            ByteWriter clear_crack;
+            writers::write_block_break_animation(clear_crack, player_id_, bx, by, bz, 0xFF);
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kBlockBreakAnimation, clear_crack.data());
+        }
+    }
     // 门双半块：破坏任一半同步清除另一半
     {
         const auto prev_id = world::block_id(prev);
@@ -593,6 +626,56 @@ void Connection::update_view(world::ChunkPos center) {
     }
     last_center_ = center;
     has_center_ = true;
+}
+
+void Connection::stop_digging(bool broadcast_cancel) {
+    if (!is_digging_) {
+        return;
+    }
+    const auto bx = dig_bx_;
+    const auto by = dig_by_;
+    const auto bz = dig_bz_;
+    is_digging_ = false;
+    last_break_stage_ = -1;
+    if (broadcast_cancel && context_.hub != nullptr) {
+        const auto cpos = world::ChunkPos::from_world(bx, bz);
+        if (cpos) {
+            ByteWriter out;
+            writers::write_block_break_animation(out, player_id_, bx, by, bz, 0xFF);
+            const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+            context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                         proto::play_cb::kBlockBreakAnimation, out.data());
+        }
+    }
+}
+
+void Connection::update_digging(std::uint64_t now_ms) {
+    if (!is_digging_ || context_.hub == nullptr) {
+        return;
+    }
+    const double ddx = player_pos_.x - (static_cast<double>(dig_bx_) + 0.5);
+    const double ddy = player_pos_.y - (static_cast<double>(dig_by_) + 0.5);
+    const double ddz = player_pos_.z - (static_cast<double>(dig_bz_) + 0.5);
+    if (ddx * ddx + ddy * ddy + ddz * ddz > 49.0) {
+        stop_digging(true);
+        return;
+    }
+    if (dig_duration_ms_ > 0.0f) {
+        const float elapsed = static_cast<float>(now_ms - dig_start_ms_);
+        const int stage = std::clamp(static_cast<int>(elapsed / dig_duration_ms_ * 10.0f), 0, 9);
+        if (stage != last_break_stage_) {
+            last_break_stage_ = stage;
+            const auto cpos = world::ChunkPos::from_world(dig_bx_, dig_bz_);
+            if (cpos) {
+                ByteWriter out;
+                writers::write_block_break_animation(out, player_id_, dig_bx_, dig_by_, dig_bz_,
+                                                     static_cast<std::uint8_t>(stage));
+                const std::int32_t radius = std::clamp(context_.view_distance, 2, 8);
+                context_.hub->broadcast_near(cpos->x, cpos->z, radius, player_id_,
+                                             proto::play_cb::kBlockBreakAnimation, out.data());
+            }
+        }
+    }
 }
 
 }

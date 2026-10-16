@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "cyane/core/bytes.hpp"
+#include "cyane/core/log.hpp"
 #include "cyane/game/server.hpp"
 #include "cyane/proto/packet_ids.hpp"
 
@@ -529,7 +530,7 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             return true;
         }
         // commands.seed.success = Seed: %s
-        sender.send_feedback("Seed: [0]");
+        sender.send_feedback(std::format("Seed: [{}]", server.seed()));
         return true;
     }
 

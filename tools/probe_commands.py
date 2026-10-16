@@ -76,7 +76,10 @@ def send_packet(sock, pid: int, body: bytes, threshold):
         sock.sendall(write_varint(len(payload)) + payload)
         return
     if len(payload) >= threshold:
-        frame = write_varint(len(payload)) + zlib.compress(payload)
+        compressed = zlib.compress(payload)
+        # Compressed frame: varint(uncompressed_len) + deflate_payload
+        # Outer length already added by caller (line 84).
+        frame = write_varint(len(payload)) + compressed
     else:
         frame = write_varint(0) + payload
     sock.sendall(write_varint(len(frame)) + frame)
@@ -99,15 +102,21 @@ class Client:
         self.sock.sendall(write_varint(len(hs)) + hs)
         ls = write_varint(0x00) + write_varint(len(name)) + name
         self.sock.sendall(write_varint(len(ls)) + ls)
+        # 登录阶段同步读取：0x03=SetCompression（仅 LOGIN 态），0x02=LoginSuccess。
+        # 不能放进 play 循环：PLAY 态的 0x03 是 SpawnMob，会污染 threshold。
+        for _ in range(16):
+            pid, body = read_packet(self.sock, self.threshold)
+            if pid == 0x03:
+                self.threshold, _ = parse_varint(body, 0)
+            elif pid == 0x02:
+                break
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
         try:
             while not self._stop:
                 pid, body = read_packet(self.sock, self.threshold)
-                if pid == 0x03:
-                    self.threshold, _ = parse_varint(body, 0)
-                elif pid == 0x2F:
+                if pid == 0x2F:
                     off = 8 * 3 + 4 * 2 + 1
                     tp, _ = parse_varint(body, off)
                     send_packet(self.sock, 0x00, write_varint(tp), self.threshold)
@@ -120,7 +129,7 @@ class Client:
                         self.chat.append(msg)
                 elif pid == 0x2E:  # PlayerInfo
                     action, off = parse_varint(body, 0)
-                    if action == 0x02:  # CHANGE_GAME_MODE (1.12.2 序数)
+                    if action == 0x01:  # UPDATE_GAME_MODE (1.12.2 序数: ADD=0, GAMEMODE=1, LATENCY=2, DISPLAY=3, REMOVE=4)
                         with self.lock:
                             self.game_modes.append(body.hex())
                 elif pid == 0x2C:  # PlayerAbilities

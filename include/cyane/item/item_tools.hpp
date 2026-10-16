@@ -1,7 +1,10 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+
+#include "cyane/world/blocks.hpp"
 
 namespace cyane::item {
 
@@ -79,6 +82,65 @@ struct ToolInfo {
         case ToolKind::sword: return 1.5f;
         default: return 1.0f;
     }
+}
+
+[[nodiscard]] constexpr bool is_pickaxe_block(std::uint16_t id) noexcept {
+    switch (id) {
+        case 1: case 4: case 14: case 15: case 16: case 21: case 24:
+        case 41: case 42: case 43: case 44: case 45: case 48: case 49:
+        case 56: case 57: case 61: case 62: case 70: case 73: case 74:
+        case 87: case 98: case 101: case 112: case 116: case 121: case 129:
+        case 133: case 138: case 139: case 145: case 153: case 155: case 172:
+        case 179: case 213:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] constexpr bool is_axe_block(std::uint16_t id) noexcept {
+    switch (id) {
+        case 5: case 17: case 47: case 53: case 54: case 58: case 64:
+        case 85: case 96: case 107: case 125: case 126: case 134: case 135:
+        case 136: case 146: case 162: case 163: case 164: case 183: case 184:
+        case 185: case 186: case 187: case 193: case 194: case 195: case 196:
+        case 197:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] constexpr bool is_shovel_block(std::uint16_t id) noexcept {
+    switch (id) {
+        case 2: case 3: case 12: case 13: case 60: case 78: case 80:
+        case 82: case 88: case 198: case 208:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] inline float tool_dig_speed(std::uint16_t block_id, std::int16_t item_id) noexcept {
+    const auto info = tool_of(item_id);
+    const float speed = dig_speed_multiplier(item_id);
+    if (is_pickaxe_block(block_id) && info.kind == ToolKind::pickaxe) return speed;
+    if (is_axe_block(block_id) && info.kind == ToolKind::axe) return speed;
+    if (is_shovel_block(block_id) && info.kind == ToolKind::shovel) return speed;
+    if (block_id == 30 && info.kind == ToolKind::sword) return 15.0f;
+    if (block_id == 18 && info.kind == ToolKind::shears) return 15.0f;
+    return 1.0f;
+}
+
+[[nodiscard]] inline float dig_duration_ms(std::uint16_t block_id, std::int16_t held_item, bool can_harvest) noexcept {
+    const float hardness = world::block_hardness(block_id);
+    if (hardness < 0.0f) return 1e9f;
+    if (hardness == 0.0f) return 50.0f;
+    const float speed = tool_dig_speed(block_id, held_item);
+    const float damage_per_tick = speed / hardness / (can_harvest ? 30.0f : 100.0f);
+    if (damage_per_tick >= 1.0f) return 50.0f;
+    const float total_ticks = std::ceil(1.0f / damage_per_tick);
+    return total_ticks * 50.0f;
 }
 
 } // namespace cyane::item

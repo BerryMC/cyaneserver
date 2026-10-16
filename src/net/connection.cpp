@@ -145,6 +145,8 @@ void Connection::tick(std::uint64_t now_ms) {
     now_ms_ = now_ms;
     // 先投递他人广播来的消息（进入 play 后 hub_entry_ 有效）
     drain_mailbox();
+    // 挖掘裂纹进度推进
+    update_digging(now_ms);
     // 熔炉窗口打开时同步燃烧/冶炼进度条
     sync_furnace_progress();
     // 限流发出待发表中的区块（先发区块与实体，再检测拾取）

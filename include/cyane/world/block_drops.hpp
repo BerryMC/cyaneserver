@@ -91,7 +91,33 @@ struct HarvestRule {
             return {{13, 0, 1}};
         }
         case 20: return {};                      // 玻璃 → 无
-        case 18: return {};                      // 树叶 → 无（树苗/苹果概率后补）
+        case 18: {                               // 树叶 → 5% 树苗，0.5% 苹果
+            static thread_local std::mt19937 engine{std::random_device{}()};
+            const int roll = std::uniform_int_distribution<int>(0, 999)(engine);
+            if (roll < 50) return {{6, static_cast<std::int16_t>(meta & 0x3), 1}}; // 树苗
+            if (roll < 55) return {{260, 0, 1}}; // 苹果
+            return {};
+        }
+        case 31: {                               // 杂草 → 12.5% 小麦种子
+            static thread_local std::mt19937 engine{std::random_device{}()};
+            if (std::uniform_int_distribution<int>(0, 7)(engine) == 0) {
+                return {{295, 0, 1}};
+            }
+            return {};
+        }
+        case 47: return {{340, 0, 3}};           // 书架 → 3 书
+        case 80: return {{332, 0, 4}};           // 雪块 → 4 雪球
+        case 83: return {{338, 0, 1}};           // 甘蔗 → 甘蔗物品 338
+        case 89: {                               // 荧石块 → 2..4 荧石粉
+            static thread_local std::mt19937 engine{std::random_device{}()};
+            const auto count = static_cast<std::uint8_t>(std::uniform_int_distribution<int>(2, 4)(engine));
+            return {{348, 0, count}};
+        }
+        case 103: {                              // 西瓜块 → 3..7 闪烁西瓜片
+            static thread_local std::mt19937 engine{std::random_device{}()};
+            const auto count = static_cast<std::uint8_t>(std::uniform_int_distribution<int>(3, 7)(engine));
+            return {{360, 0, count}};
+        }
         case 79: return {};                      // 冰 → 无
         case 59: return {};                      // 小麦作物 → 无（种子掉落后补）
         case 104: return {};                     // 西瓜茎

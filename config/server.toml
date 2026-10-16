@@ -18,6 +18,8 @@ autosave_interval = 300
 player_data_dir = "world/playerdata"
 op_file = "config/ops.json"
 recipe_file = "config/recipes.toml"
+# 世界种子（留空为随机，支持数字或文本；已存在的 level.dat 优先使用其内部的 RandomSeed）
+seed = ""
 
 [log]
 level = "debug"

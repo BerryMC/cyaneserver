@@ -34,6 +34,17 @@ inline void write_block_break_animation(ByteWriter& out, std::uint32_t entity_id
     out.u8(stage);
 }
 
+// WorldEvent / Effect (0x21)：i32 effectId | position | i32 data | bool disableRelativeVolume
+// effectId 2001 = BLOCK_BREAK：data = blockStateId，播破坏音效与粒子
+inline void write_world_event(ByteWriter& out, std::int32_t effect_id, std::int32_t x,
+                              std::int32_t y, std::int32_t z, std::int32_t data,
+                              bool disable_relative_volume = false) {
+    out.i32(effect_id);
+    out.position(x, y, z);
+    out.i32(data);
+    out.boolean(disable_relative_volume);
+}
+
 // HeldItemChange (0x3A)：仅 1 字节热区栏槽位（0..8）
 inline void write_held_item_change(ByteWriter& out, std::uint8_t slot) {
     out.u8(slot);

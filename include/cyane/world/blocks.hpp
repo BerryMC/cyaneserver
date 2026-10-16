@@ -9,18 +9,61 @@ namespace cyane::world {
 // 1.12.2 全局状态 id = blockId << 4 | meta（Block.REGISTRY_ID.getId）
 inline constexpr std::uint16_t kStateAir = 0;
 inline constexpr std::uint16_t kStateStone = 1 << 4;
+inline constexpr std::uint16_t kStateGranite = (1 << 4) | 1;
+inline constexpr std::uint16_t kStateDiorite = (1 << 4) | 3;
+inline constexpr std::uint16_t kStateAndesite = (1 << 4) | 5;
 inline constexpr std::uint16_t kStateGrass = 2 << 4;
 inline constexpr std::uint16_t kStateDirt = 3 << 4;
+inline constexpr std::uint16_t kStateCobblestone = 4 << 4;
 inline constexpr std::uint16_t kStateBedrock = 7 << 4;
 inline constexpr std::uint16_t kStateWater = 8 << 4;     // 水（静止水）
+inline constexpr std::uint16_t kStateLava = 10 << 4;      // 岩浆（静止岩浆）
 inline constexpr std::uint16_t kStateSand = 12 << 4;      // 沙
 inline constexpr std::uint16_t kStateGravel = 13 << 4;    // 砂砾
+inline constexpr std::uint16_t kStateGoldOre = 14 << 4;
+inline constexpr std::uint16_t kStateIronOre = 15 << 4;
+inline constexpr std::uint16_t kStateCoalOre = 16 << 4;
+inline constexpr std::uint16_t kStateOakLog = 17 << 4;
+inline constexpr std::uint16_t kStateSpruceLog = (17 << 4) | 1;
+inline constexpr std::uint16_t kStateBirchLog = (17 << 4) | 2;
+inline constexpr std::uint16_t kStateOakLeaves = 18 << 4;
+inline constexpr std::uint16_t kStateSpruceLeaves = (18 << 4) | 1;
+inline constexpr std::uint16_t kStateBirchLeaves = (18 << 4) | 2;
+inline constexpr std::uint16_t kStateLapisOre = 21 << 4;
+inline constexpr std::uint16_t kStateSandstone = 24 << 4;
+inline constexpr std::uint16_t kStateTallGrass = (31 << 4) | 1;
+inline constexpr std::uint16_t kStateDeadBush = 32 << 4;
+inline constexpr std::uint16_t kStateDandelion = 37 << 4;
+inline constexpr std::uint16_t kStatePoppy = 38 << 4;
+inline constexpr std::uint16_t kStateBrownMushroom = 39 << 4;
+inline constexpr std::uint16_t kStateRedMushroom = 40 << 4;
+inline constexpr std::uint16_t kStateMossyCobblestone = 48 << 4;
+inline constexpr std::uint16_t kStateMobSpawner = 52 << 4;
+inline constexpr std::uint16_t kStateDiamondOre = 56 << 4;
+inline constexpr std::uint16_t kStateRedstoneOre = 73 << 4;
 inline constexpr std::uint16_t kStateSnow = 78 << 4;      // 雪层
 inline constexpr std::uint16_t kStateIce = 79 << 4;       // 冰
+inline constexpr std::uint16_t kStateCactus = 81 << 4;    // 仙人掌
+inline constexpr std::uint16_t kStateClay = 82 << 4;      // 粘土块
+inline constexpr std::uint16_t kStateSugarCane = 83 << 4; // 甘蔗
+inline constexpr std::uint16_t kStatePumpkin = 86 << 4;   // 南瓜
+inline constexpr std::uint16_t kStateNetherrack = 87 << 4;
+inline constexpr std::uint16_t kStatePodzol = (3 << 4) | 2;
+inline constexpr std::uint16_t kStateMelon = 103 << 4;
+inline constexpr std::uint16_t kStateVine = 106 << 4;
+inline constexpr std::uint16_t kStateMycelium = 110 << 4;
+inline constexpr std::uint16_t kStateWaterlily = 111 << 4;
+inline constexpr std::uint16_t kStateEndStone = 121 << 4;
+inline constexpr std::uint16_t kStateAcaciaLeaves = 161 << 4;
+inline constexpr std::uint16_t kStateDarkOakLeaves = (161 << 4) | 1;
+inline constexpr std::uint16_t kStateAcaciaLog = 162 << 4;
+inline constexpr std::uint16_t kStateDarkOakLog = (162 << 4) | 1;
+inline constexpr std::uint16_t kStateDoublePlant = 175 << 4;
 inline constexpr std::uint16_t kStateDispenser = 23 << 4;      // 发射器
 inline constexpr std::uint16_t kStateChest = 54 << 4;          // 箱子方块 id=54
 inline constexpr std::uint16_t kStateCraftingTable = 58 << 4;  // 工作台方块 id=58
 inline constexpr std::uint16_t kStateFurnace = 61 << 4;        // 熔炉方块 id=61
+inline constexpr std::uint16_t kStateEmeraldOre = 129 << 4;
 inline constexpr std::uint16_t kStateHopper = 154 << 4;        // 漏斗
 inline constexpr std::uint16_t kStateDropper = 158 << 4;       // 投掷器
 
@@ -211,6 +254,33 @@ struct BlockKeyPos {
         case 2: return kStateDirt;
         case 3: return kStateGrass;
         default: return kStateAir;
+    }
+}
+
+// 1.12.2 方块硬度（Block.blockHardness）
+[[nodiscard]] constexpr float block_hardness(std::uint16_t id) noexcept {
+    switch (id) {
+        case 0: return 0.0f;                    // 空气
+        case 7: return -1.0f;                   // 基岩（不可破坏）
+        case 8: case 9: case 10: case 11: return 100.0f; // 水与岩浆
+        case 18: case 161: return 0.2f;         // 树叶
+        case 20: case 102: return 0.3f;         // 玻璃与玻璃板
+        case 2: case 3: case 60: return 0.5f;   // 草方块、泥土、耕地
+        case 12: case 13: case 88: return 0.6f; // 沙子、沙砾、灵魂沙
+        case 82: return 0.6f;                   // 粘土块
+        case 78: case 79: return 0.2f;          // 雪层、冰
+        case 35: case 171: return 0.8f;         // 羊毛、地毯
+        case 47: return 1.5f;                   // 书架
+        case 1: case 16: return 1.5f;           // 石头、煤矿
+        case 4: case 98: return 2.0f;           // 圆石、石砖
+        case 5: case 17: case 162: return 2.0f; // 木板、原木
+        case 54: case 58: case 61: return 2.5f; // 箱子、工作台、熔炉
+        case 14: case 15: case 21: case 56: case 73: case 74: case 129:
+            return 3.0f;                        // 金/铁/青金石/钻石/红石/绿宝石矿
+        case 41: case 42: case 57: case 133: return 5.0f; // 黄金块/铁块/钻石块/绿宝石块
+        case 49: return 50.0f;                  // 黑曜石
+        case 30: return 4.0f;                   // 蜘蛛网
+        default: return 1.5f;
     }
 }
 

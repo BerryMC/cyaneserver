@@ -79,4 +79,18 @@ inline void write_named_spawn(ByteWriter& out, std::uint32_t entity_id,
     out.u8(0xFF);
 }
 
+// EntityMetadata 更新玩家的 SharedFlags（index 0）：
+//   bit 0x01 = Sprinting, bit 0x02 = Sneaking
+// 用于告诉其他玩家当前玩家的潜行/疾跑状态（行军、潜行箭头等）
+inline void write_shared_flags_meta(ByteWriter& out, std::uint32_t entity_id,
+                                    bool sneaking, bool sprinting) {
+    out.varint(static_cast<std::int32_t>(entity_id));
+    out.varint(0);  // index = 0 = SharedFlags
+    out.varint(1);  // serializer = BYTE类型
+    std::uint8_t flags = 0;
+    if (sprinting) flags |= 0x01;
+    if (sneaking) flags |= 0x02;
+    out.u8(flags);
+}
+
 }

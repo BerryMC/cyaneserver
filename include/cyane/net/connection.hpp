@@ -290,6 +290,17 @@ private:
     bool sneaking_{false};
     bool sprinting_{false};
 
+    // 挖掘裂纹进度推进
+    bool is_digging_{false};
+    std::int32_t dig_bx_{0};
+    std::int32_t dig_by_{0};
+    std::int32_t dig_bz_{0};
+    std::uint64_t dig_start_ms_{0};
+    float dig_duration_ms_{1000.0f};
+    int last_break_stage_{-1};
+    void stop_digging(bool broadcast_cancel);
+    void update_digging(std::uint64_t now_ms);
+
     // 玩家经验（Bar、Level、TotalExperience）
     float experience_{0.0f};
     int experience_level_{0};

@@ -55,22 +55,24 @@ Result<LevelInfo> load_level_dat(const std::filesystem::path& world_dir) {
     return info;
 }
 
-Result<bool> ensure_level_dat(const std::filesystem::path& world_dir, std::int32_t game_type) {
+Result<bool> ensure_level_dat(const std::filesystem::path& world_dir, std::int32_t game_type,
+                              std::int64_t seed) {
     const auto path = world_dir / "level.dat";
     std::error_code ec;
     if (std::filesystem::exists(path, ec)) {
         return false;
     }
 
-    // 最小集：原版 1.12.2 level.dat 的 Data 字段（缺省值即超平坦世界默认态）
+    // 最小集：原版 1.12.2 level.dat 的 Data 字段
     Compound data;
+    data.emplace_back("RandomSeed", nbt::Value{nbt::Tag::i64, seed});
     data.emplace_back("Time", nbt::Value{nbt::Tag::i64, std::int64_t{0}});
     Compound version;
     version.emplace_back("Id", nbt::Value{nbt::Tag::i32, std::int32_t{1101}});
     version.emplace_back("Name", nbt::Value{nbt::Tag::string, std::string{"1.12.2"}});
     data.emplace_back("Version", nbt::Value{nbt::Tag::compound, std::move(version)});
     data.emplace_back("GameType", nbt::Value{nbt::Tag::i32, game_type});
-    data.emplace_back("generatorName", nbt::Value{nbt::Tag::string, std::string{"flat"}});
+    data.emplace_back("generatorName", nbt::Value{nbt::Tag::string, std::string{"default"}});
     data.emplace_back("SpawnX", nbt::Value{nbt::Tag::i32, std::int32_t{0}});
     data.emplace_back("SpawnY", nbt::Value{nbt::Tag::i32, std::int32_t{4}});
     data.emplace_back("SpawnZ", nbt::Value{nbt::Tag::i32, std::int32_t{0}});

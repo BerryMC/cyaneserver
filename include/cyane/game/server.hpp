@@ -49,6 +49,7 @@ struct ServerConfig {
     std::string recipe_file{"config/recipes.toml"};
     std::string player_data_dir{"world/playerdata"};  // 原版布局：<world>/playerdata/<uuid>.dat
     int autosave_interval{300};  // 秒；0 = 关闭
+    std::string seed{""};  // 种子：支持数字或文本；留空首启时随机，已存在则以 level.dat 为准
 
     [[nodiscard]] static Result<ServerConfig> from(const Config& config);
 };
@@ -68,6 +69,7 @@ public:
     [[nodiscard]] const TickStats& stats() const noexcept { return stats_; }
     [[nodiscard]] const net::NetService& network() const noexcept { return *network_; }
     [[nodiscard]] const game::ServerStatus& status() const noexcept { return *status_; }
+    [[nodiscard]] std::int64_t seed() const noexcept { return seed_; }
 
     // 控制台命令支持
     [[nodiscard]] double current_tps() const noexcept { return stats_.tps(); }
@@ -119,6 +121,7 @@ private:
 
     std::int64_t world_age_{0};
     std::int64_t time_of_day_{0};
+    std::int64_t seed_{0};
 
     void tick();
     // 苦力怕爆炸：范围伤害（玩家+生物）+ 破坏方块（含掉落）+ 音效/Explosion 包
