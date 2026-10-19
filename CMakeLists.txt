@@ -124,6 +124,7 @@ add_library(cyane::net ALIAS cyane_net)
 
 add_library(cyane_game
   src/game/command.cpp
+  src/game/command_tab.cpp
   src/game/server.cpp
   src/game/status.cpp
   src/game/op_manager.cpp

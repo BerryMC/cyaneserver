@@ -229,9 +229,94 @@ private:
         const auto state = chunk.block_at(x, y, z);
         if (can_replace_block(state)) {
             if (y - 1 < 10) {
-                chunk.set_block(x, y, z, kLava);
+                chunk.set_block(x, y, z, kStateLava);
             } else {
                 chunk.set_block(x, y, z, kStateAir);
+            }
+        }
+    }
+};
+
+// 1.12.2 原版下界洞穴雕刻器（MapGenCavesHell 逐行转写）
+class MapGenCavesHell : public MapGenBase {
+public:
+    MapGenCavesHell() { range = 10; }
+
+protected:
+    void recursive_generate(JavaRandom& rand, int chunk_x, int chunk_z,
+                            int origin_x, int origin_z, Chunk& chunk) override {
+        (void)origin_x;
+        (void)origin_z;
+        int i = rand.next_int(rand.next_int(rand.next_int(10) + 1) + 1);
+        if (rand.next_int(5) != 0) i = 0;
+
+        for (int j = 0; j < i; ++j) {
+            double d0 = static_cast<double>(chunk_x * 16 + rand.next_int(16));
+            double d1 = static_cast<double>(rand.next_int(128));
+            double d2 = static_cast<double>(chunk_z * 16 + rand.next_int(16));
+
+            int k = 1;
+            if (rand.next_int(4) == 0) {
+                add_room(static_cast<std::uint64_t>(rand.next_long()), chunk_x, chunk_z, chunk, d0, d1, d2);
+                k += rand.next_int(4);
+            }
+
+            for (int l = 0; l < k; ++l) {
+                float f = rand.next_float() * 3.14159265f * 2.0f;
+                float f1 = (rand.next_float() - 0.5f) * 2.0f / 8.0f;
+                float f2 = rand.next_float() * 2.0f + rand.next_float();
+                add_tunnel(static_cast<std::uint64_t>(rand.next_long()), chunk_x, chunk_z, chunk,
+                           d0, d1, d2, f2 * 2.0f, f, f1, 0, 0, 0.5);
+            }
+        }
+    }
+
+private:
+    void add_room(std::uint64_t seed, int cx, int cz, Chunk& chunk, double px, double py, double pz) {
+        JavaRandom rand(seed);
+        add_tunnel(seed, cx, cz, chunk, px, py, pz, 1.0f + rand.next_float() * 6.0f, 0.0f, 0.0f, -1, -1, 0.5);
+    }
+
+    void add_tunnel(std::uint64_t seed, int cx, int cz, Chunk& chunk,
+                    double px, double py, double pz, float radius, float yaw, float pitch,
+                    int p15, int p16, double height_ratio) {
+        JavaRandom random(seed);
+        if (p16 <= 0) {
+            const int i = range * 16 - 16;
+            p16 = i - random.next_int(i / 4);
+        }
+
+        if (p15 == -1) p15 = p16 / 2;
+
+        for (; p15 < p16; ++p15) {
+            const double d2 = 1.5 + static_cast<double>(std::sin(static_cast<float>(p15) * 3.1415927f / static_cast<float>(p16))) * static_cast<double>(radius);
+            const double d3 = d2 * height_ratio;
+            const float f2 = std::cos(pitch);
+            const float f3 = std::sin(pitch);
+            px += static_cast<double>(std::cos(yaw) * f2);
+            py += static_cast<double>(f3);
+            pz += static_cast<double>(std::sin(yaw) * f2);
+
+            pitch = static_cast<float>(static_cast<double>(pitch) * 0.7);
+            yaw += random.next_float() * 0.1f;
+
+            for (int lx = 0; lx < 16; ++lx) {
+                const double d10 = (static_cast<double>(lx + cx * 16) + 0.5 - px) / d2;
+                for (int lz = 0; lz < 16; ++lz) {
+                    const double d8 = (static_cast<double>(lz + cz * 16) + 0.5 - pz) / d2;
+                    if (d10 * d10 + d8 * d8 < 1.0) {
+                        for (int ly = 127; ly >= 1; --ly) {
+                            const double d9 = (static_cast<double>(ly) + 0.5 - py) / d3;
+                            if (d9 > -0.7 && d10 * d10 + d9 * d9 + d8 * d8 < 1.0) {
+                                const auto s = chunk.block_at(static_cast<std::size_t>(lx), ly, static_cast<std::size_t>(lz));
+                                if (s == kStateNetherrack || s == kStateDirt || s == kStateGravel) {
+                                    chunk.set_block(static_cast<std::size_t>(lx), ly, static_cast<std::size_t>(lz),
+                                                    ly <= 31 ? kStateLava : kStateAir);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

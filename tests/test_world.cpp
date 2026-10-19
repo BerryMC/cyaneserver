@@ -17,6 +17,9 @@
 #include "cyane/world/nbt.hpp"
 #include "cyane/world/anvil.hpp"
 #include "cyane/world/world.hpp"
+#include "cyane/world/structure.hpp"
+#include "cyane/world/flat_generator_info.hpp"
+#include "cyane/world/dim_generators.hpp"
 #include "test_framework.hpp"
 
 using namespace cyane;
@@ -863,4 +866,93 @@ CYANE_TEST(world_gen_features_dungeon_and_plants) {
         }
     }
     CYANE_CHECK(has_double_plant);
+
+    // 4. 验证巨型蘑菇（WorldGenBigMushroom：红菇与棕菇）
+    world::Chunk shroom_chunk{world::ChunkPos{0, 0}};
+    shroom_chunk.set_block(8, 63, 8, world::kStateMycelium);
+    const bool red_shroom_ok = world::gen::WorldGenBigMushroom::generate(shroom_chunk, rand, 8, 64, 8, true);
+    CYANE_CHECK(red_shroom_ok);
+    CYANE_CHECK_EQ(shroom_chunk.block_at(8, 64, 8), static_cast<std::uint16_t>(world::kStateHugeRedMushroom | 10)); // 菌柄
+
+    // 5. 验证浮冰刺（WorldGenIceSpike）
+    world::Chunk spike_chunk{world::ChunkPos{0, 0}};
+    const bool spike_ok = world::gen::WorldGenIceSpike::generate(spike_chunk, rand, 8, 60, 8);
+    CYANE_CHECK(spike_ok);
+    CYANE_CHECK_EQ(spike_chunk.block_at(8, 60, 8), world::kStatePackedIce);
+
+    // 6. 验证藤蔓墙面附着（WorldGenVines）
+    world::Chunk vine_chunk{world::ChunkPos{0, 0}};
+    vine_chunk.set_block(7, 64, 8, world::kStateStone); // 西侧实心墙
+    const bool vine_ok = world::gen::WorldGenVines::generate(vine_chunk, rand, 8, 64, 8);
+    CYANE_CHECK(vine_ok);
+
+    // 7. 验证末地黑曜石柱与折跃门（WorldGenSpikes / WorldGenEndGateway）
+    world::Chunk end_chunk{world::ChunkPos{0, 0}};
+    const bool spike_gen_ok = world::gen::WorldGenSpikes::generate(end_chunk, 8, 50, 8, 2, 10, true);
+    CYANE_CHECK(spike_gen_ok);
+    CYANE_CHECK_EQ(end_chunk.block_at(8, 55, 8), world::kStateObsidian);
+    CYANE_CHECK_EQ(end_chunk.block_at(6, 61, 8), world::kStateIronBars);
+
+    const bool gateway_ok = world::gen::WorldGenEndGateway::generate(end_chunk, 8, 75, 8);
+    CYANE_CHECK(gateway_ok);
+    CYANE_CHECK_EQ(end_chunk.block_at(8, 75, 8), world::kStateEndGateway);
+    CYANE_CHECK_EQ(end_chunk.block_at(8, 74, 8), world::kStateBedrock);
+
+    // 8. 验证下界火与荧石簇（WorldGenFire / WorldGenGlowStone1）
+    world::Chunk nether_chunk{world::ChunkPos{0, 0}};
+    nether_chunk.set_block(8, 50, 8, world::kStateNetherrack);
+    const bool fire_ok = world::gen::WorldGenFire::generate(nether_chunk, rand, 8, 51, 8);
+    CYANE_CHECK(fire_ok);
+
+    nether_chunk.set_block(8, 100, 8, world::kStateNetherrack);
+    const bool glow_ok = world::gen::WorldGenGlowStone1::generate(nether_chunk, rand, 8, 99, 8);
+    CYANE_CHECK(glow_ok);
+    CYANE_CHECK_EQ(nether_chunk.block_at(8, 99, 8), world::kStateGlowstone);
+
+    // 9. 验证超平坦预设解析器（FlatGeneratorInfo / FlatLayerInfo）
+    const auto flat_info = world::gen::FlatGeneratorInfo::create_flat_preset("3;minecraft:bedrock,2*minecraft:dirt,minecraft:grass;1");
+    CYANE_CHECK_EQ(flat_info.get_biome(), 1);
+    const auto& layers = flat_info.get_flat_layers();
+    CYANE_CHECK_EQ(layers.size(), 3ULL);
+    CYANE_CHECK_EQ(layers[0].get_layer_count(), 1);
+    CYANE_CHECK_EQ(layers[0].get_block_state(), world::kStateBedrock);
+    CYANE_CHECK_EQ(layers[1].get_layer_count(), 2);
+    CYANE_CHECK_EQ(layers[1].get_block_state(), world::kStateDirt);
+    CYANE_CHECK_EQ(layers[2].get_layer_count(), 1);
+    CYANE_CHECK_EQ(layers[2].get_block_state(), world::kStateGrass);
+    CYANE_CHECK_EQ(layers[2].get_min_y(), 3);
+
+    // 10. 验证结构组件三维包围盒相交检测（StructureBoundingBox）
+    using world::structure::StructureBoundingBox;
+    StructureBoundingBox box1(0, 0, 0, 10, 10, 10);
+    StructureBoundingBox box2(5, 5, 5, 15, 15, 15);
+    StructureBoundingBox box3(20, 20, 20, 30, 30, 30);
+    CYANE_CHECK(box1.intersects_with(box2));
+    CYANE_CHECK(!box1.intersects_with(box3));
+    CYANE_CHECK(box1.is_vec_inside(5, 5, 5));
+    CYANE_CHECK(!box1.is_vec_inside(11, 5, 5));
+    CYANE_CHECK_EQ(box1.get_x_size(), 11);
+
+    // 11. 验证下界与超平坦维度生成器（ChunkGeneratorFlat / ChunkGeneratorHell）
+    world::Chunk flat_chunk{world::ChunkPos{0, 0}};
+    world::gen::ChunkGeneratorFlat flat_gen(flat_info);
+    flat_gen.generate(0, 0, flat_chunk);
+    CYANE_CHECK_EQ(flat_chunk.block_at(0, 0, 0), world::kStateBedrock);
+    CYANE_CHECK_EQ(flat_chunk.block_at(0, 1, 0), world::kStateDirt);
+    CYANE_CHECK_EQ(flat_chunk.block_at(0, 3, 0), world::kStateGrass);
+    CYANE_CHECK_EQ(flat_chunk.block_at(0, 4, 0), world::kStateAir);
+
+    world::Chunk hell_chunk{world::ChunkPos{0, 0}};
+    world::gen::ChunkGeneratorHell hell_gen(12345ULL);
+    hell_gen.generate(0, 0, hell_chunk);
+    CYANE_CHECK_EQ(hell_chunk.block_at(0, 0, 0), world::kStateBedrock);
+    CYANE_CHECK_EQ(hell_chunk.block_at(0, 127, 0), world::kStateBedrock);
+
+    // 12. 验证大型分叉巨橡树（WorldGenBigTree）
+    world::Chunk big_tree_chunk{world::ChunkPos{0, 0}};
+    big_tree_chunk.set_block(8, 63, 8, world::kStateGrass);
+    world::gen::WorldGenBigTree big_tree;
+    const bool big_tree_ok = big_tree.generate(big_tree_chunk, rand, 8, 64, 8);
+    CYANE_CHECK(big_tree_ok);
+    CYANE_CHECK_EQ(big_tree_chunk.block_at(8, 64, 8), world::kStateOakLog);
 }

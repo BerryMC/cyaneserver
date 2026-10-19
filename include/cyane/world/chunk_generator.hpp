@@ -563,7 +563,34 @@ private:
             }
         }
 
-        // 6. 极地/寒带结冰与覆雪（Populate.ICE）
+        // 6. 巨型蘑菇（蘑菇岛必刷，深色橡树黑森林 1/12 几率）
+        if (b.id == 14 || (b.id == 29 && rand.next_int(12) == 0)) {
+            const int mx = rand.next_int(10) + 3;
+            const int mz = rand.next_int(10) + 3;
+            for (int y = 120; y >= 60; --y) {
+                const auto s = chunk.block_at(static_cast<std::size_t>(mx), y, static_cast<std::size_t>(mz));
+                if (s == kStateGrass || s == kStateDirt || s == kStateMycelium) {
+                    WorldGenBigMushroom::generate(chunk, rand, mx, y + 1, mz, rand.next_int(2) == 0);
+                    break;
+                }
+            }
+        }
+
+        // 7. 极地/寒带冰刺与冰道
+        if (b.id == 12 || b.id == 30) {
+            if (rand.next_int(60) == 0) {
+                const int sx = rand.next_int(8) + 4;
+                const int sz = rand.next_int(8) + 4;
+                for (int y = 120; y >= 60; --y) {
+                    if (chunk.block_at(static_cast<std::size_t>(sx), y, static_cast<std::size_t>(sz)) != kStateAir) {
+                        WorldGenIceSpike::generate(chunk, rand, sx, y + 1, sz);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 8. 极地/寒带结冰与覆雪（Populate.ICE）
         if (b.id == 12 || b.id == 30 || b.id == 26) {
             for (std::size_t ix = 0; ix < 16; ++ix) {
                 for (std::size_t iz = 0; iz < 16; ++iz) {
