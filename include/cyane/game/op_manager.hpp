@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -27,7 +29,10 @@ public:
     // 查询玩家 OP 等级（0 表示非 OP）
     [[nodiscard]] std::uint8_t op_level(std::string_view uuid) const noexcept {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (const auto it = levels_.find(std::string{uuid}); it != levels_.end()) {
+        std::string key{uuid};
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (const auto it = levels_.find(key); it != levels_.end()) {
             return it->second;
         }
         return 0;
@@ -53,6 +58,7 @@ private:
     std::string path_;
     std::unordered_map<std::string, std::uint8_t> levels_;   // uuid -> level
     std::unordered_map<std::string, std::string> uuids_;    // name_lower -> uuid
+    std::unordered_map<std::string, std::string> display_names_;  // uuid -> 原始大小写名称
     mutable std::mutex mutex_;
 };
 

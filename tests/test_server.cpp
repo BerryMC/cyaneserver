@@ -1,10 +1,15 @@
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <utility>
 
 #include "cyane/core/config.hpp"
 #include "cyane/game/command.hpp"
+#include "cyane/game/op_manager.hpp"
 #include "cyane/game/server.hpp"
 #include "test_framework.hpp"
 
@@ -146,4 +151,57 @@ CYANE_TEST(command_dispatcher_executes_unified_commands) {
     // 9. Tab 补全：/weather + 空格 → 补全天气类型
     const auto weather_matches = cyane::game::CommandDispatcher::tab_complete(console, *srv, "/weather ");
     CYANE_CHECK_EQ(weather_matches.size(), std::size_t{3});
+}
+
+CYANE_TEST(op_manager_loads_vanilla_array_and_legacy_map) {
+    const auto path = std::filesystem::temp_directory_path() / "cyane_ops_test.json";
+
+    // 1) 原版数组格式（含 bypassesPlayerLimit 布尔字段）
+    {
+        std::ofstream out{path};
+        out << R"([{"uuid":"75bcdcde-9c24-35db-ba26-4913e8151672","name":"CmdTester",)"
+               R"("level":4,"bypassesPlayerLimit":false}])";
+    }
+    cyane::game::OpManager ops;
+    CYANE_CHECK(ops.load(path.string()).has_value());
+    CYANE_CHECK_EQ(static_cast<int>(ops.op_level("75bcdcde-9c24-35db-ba26-4913e8151672")), 4);
+    // 大小写不敏感
+    CYANE_CHECK_EQ(static_cast<int>(ops.op_level("75BCDCDE-9C24-35DB-BA26-4913E8151672")), 4);
+    CYANE_CHECK_EQ(static_cast<int>(ops.op_level("00000000-0000-0000-0000-000000000000")), 0);
+
+    // 2) 旧版映射格式（名字/等级在前，后面跟布尔字段）
+    {
+        std::ofstream out{path};
+        out << R"({"75bcdcde-9c24-35db-ba26-4913e8151672":{"name":"LegacyOp","level":2,)"
+               R"("bypassesPlayerLimit":false}})";
+    }
+    cyane::game::OpManager legacy;
+    CYANE_CHECK(legacy.load(path.string()).has_value());
+    CYANE_CHECK_EQ(static_cast<int>(legacy.op_level("75bcdcde-9c24-35db-ba26-4913e8151672")), 2);
+
+    // 3) save() 写回原版数组格式，且保留名称原始大小写
+    legacy.save();
+    const auto saved = [&] {
+        std::ifstream in{path};
+        std::stringstream buffer;
+        buffer << in.rdbuf();
+        return buffer.str();
+    }();
+    CYANE_CHECK(saved.find("\"uuid\"") != std::string::npos);
+    CYANE_CHECK(saved.find("LegacyOp") != std::string::npos);
+    CYANE_CHECK(saved.find("\"level\": 2") != std::string::npos);
+
+    // 4) 重新加载自己写出的文件仍可用
+    cyane::game::OpManager reopened;
+    CYANE_CHECK(reopened.load(path.string()).has_value());
+    CYANE_CHECK_EQ(static_cast<int>(reopened.op_level("75bcdcde-9c24-35db-ba26-4913e8151672")), 2);
+
+    // 5) 缺文件时创建空数组而不是报错
+    const auto missing = std::filesystem::temp_directory_path() / "cyane_ops_missing.json";
+    std::filesystem::remove(missing);
+    cyane::game::OpManager fresh;
+    CYANE_CHECK(fresh.load(missing.string()).has_value());
+    CYANE_CHECK_EQ(static_cast<int>(fresh.op_level("75bcdcde-9c24-35db-ba26-4913e8151672")), 0);
+    std::filesystem::remove(missing);
+    std::filesystem::remove(path);
 }
