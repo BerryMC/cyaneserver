@@ -22,12 +22,15 @@ endif()
 
 set(CYANE_DEFINES)
 
+# 开发/测试期临时关闭 -O3，显著缩短编译时间；恢复发布构建时把下面注释掉的 -O3 打开即可
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   list(APPEND CYANE_OPT_FLAGS -O1 -g3 -fno-omit-frame-pointer)
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-  list(APPEND CYANE_OPT_FLAGS -O3 -g -fno-omit-frame-pointer)
+  # list(APPEND CYANE_OPT_FLAGS -O3 -g -fno-omit-frame-pointer)
+  list(APPEND CYANE_OPT_FLAGS -O0 -g)
 elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-  list(APPEND CYANE_OPT_FLAGS -O3)
+  # list(APPEND CYANE_OPT_FLAGS -O3)
+  list(APPEND CYANE_OPT_FLAGS -O0)
 endif()
 
 list(APPEND CYANE_DEFINES

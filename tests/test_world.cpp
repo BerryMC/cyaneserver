@@ -20,6 +20,13 @@
 #include "cyane/world/structure.hpp"
 #include "cyane/world/flat_generator_info.hpp"
 #include "cyane/world/dim_generators.hpp"
+#include "cyane/world/difficulty.hpp"
+#include "cyane/world/game_rules.hpp"
+#include "cyane/world/world_border.hpp"
+#include "cyane/world/explosion.hpp"
+#include "cyane/world/world_types.hpp"
+#include "cyane/world/tick_list.hpp"
+#include "cyane/world/boss_info.hpp"
 #include "test_framework.hpp"
 
 using namespace cyane;
@@ -955,4 +962,98 @@ CYANE_TEST(world_gen_features_dungeon_and_plants) {
     const bool big_tree_ok = big_tree.generate(big_tree_chunk, rand, 8, 64, 8);
     CYANE_CHECK(big_tree_ok);
     CYANE_CHECK_EQ(big_tree_chunk.block_at(8, 64, 8), world::kStateOakLog);
+
+    // 13. 验证世界难度与区域难度实例（EnumDifficulty / DifficultyInstance）
+    world::DifficultyInstance diff_inst(world::EnumDifficulty::Hard, 1000000L, 5000000L, 1.0f);
+    CYANE_CHECK(diff_inst.get_additional_difficulty() > 0.0f);
+    CYANE_CHECK_EQ(diff_inst.get_difficulty(), world::EnumDifficulty::Hard);
+    CYANE_CHECK_EQ(world::get_difficulty_name(world::EnumDifficulty::Peaceful), "peaceful");
+
+    // 14. 验证原版游戏规则（GameRules）
+    world::GameRules rules;
+    CYANE_CHECK(rules.get_bool("doDaylightCycle"));
+    CYANE_CHECK(!rules.get_bool("keepInventory"));
+    CYANE_CHECK_EQ(rules.get_int("randomTickSpeed"), 3);
+    rules.set_or_create("keepInventory", "true");
+    CYANE_CHECK(rules.get_bool("keepInventory"));
+
+    // 15. 验证世界边界体系（WorldBorder）
+    world::WorldBorder border;
+    border.set_center(0.0, 0.0);
+    border.set_diameter(1000.0);
+    CYANE_CHECK(border.contains(0.0, 0.0));
+    CYANE_CHECK(border.contains(499.0, 499.0));
+    CYANE_CHECK(!border.contains(501.0, 0.0));
+    CYANE_CHECK_EQ(border.min_x(), -500.0);
+    CYANE_CHECK_EQ(border.max_x(), 500.0);
+
+    // 16. 验证爆炸动力学（Explosion）
+    world::Chunk exp_chunk{world::ChunkPos{0, 0}};
+    for (std::size_t x = 0; x < 16; ++x) {
+        for (std::size_t z = 0; z < 16; ++z) {
+            exp_chunk.set_block(x, 10, z, world::kStateStone);
+        }
+    }
+    world::Explosion exp(8.0, 10.0, 8.0, 4.0f, false, true);
+    exp.do_explosion_a(exp_chunk, rand);
+    CYANE_CHECK(!exp.get_affected_blocks().empty());
+    exp.do_explosion_b(exp_chunk, rand);
+    CYANE_CHECK_EQ(exp_chunk.block_at(8, 10, 8), world::kStateAir);
+
+    // 17. 光照通道与维度类型（EnumSkyBlock / DimensionType）
+    CYANE_CHECK_EQ(world::default_light_value(world::EnumSkyBlock::Sky), 15);
+    CYANE_CHECK_EQ(world::default_light_value(world::EnumSkyBlock::Block), 0);
+    CYANE_CHECK_EQ(world::dimension_id(world::DimensionType::Nether), -1);
+    CYANE_CHECK_EQ(world::dimension_name(world::DimensionType::TheEnd), "the_end");
+    CYANE_CHECK_EQ(world::dimension_suffix(world::DimensionType::Overworld), "");
+    CYANE_CHECK(world::dimension_loads_spawn(world::DimensionType::Overworld));
+    CYANE_CHECK(!world::dimension_loads_spawn(world::DimensionType::Nether));
+    CYANE_CHECK(world::dimension_by_id(1) == world::DimensionType::TheEnd);
+    CYANE_CHECK(!world::dimension_by_id(7).has_value());
+
+    // 18. 容器锁码（LockCode）
+    const world::LockCode empty_lock;
+    CYANE_CHECK(empty_lock.is_empty());
+    const world::LockCode keyed_lock{"secret"};
+    CYANE_CHECK(!keyed_lock.is_empty());
+    CYANE_CHECK_EQ(keyed_lock.get_lock(), "secret");
+
+    // 19. 延迟方块更新队列（TickList / NextTickListEntry）
+    world::TickList ticks;
+    ticks.schedule(1, 64, 2, world::kStateWater, 100);
+    ticks.schedule(3, 64, 2, world::kStateWater, 90);
+    CYANE_CHECK_EQ(ticks.size(), 2ULL);
+    CYANE_CHECK(ticks.is_scheduled(1, 64, 2, world::kStateWater));
+
+    // 重复调度同目标只替换到期时间，不新增条目
+    ticks.schedule(1, 64, 2, world::kStateWater, 50);
+    CYANE_CHECK_EQ(ticks.size(), 2ULL);
+
+    // 按到期时间顺序执行，执行后队列清空
+    std::vector<int> tick_order;
+    ticks.tick(95, [&](const world::NextTickListEntry& entry) { tick_order.push_back(entry.x); });
+    CYANE_CHECK_EQ(tick_order.size(), 2ULL);
+    CYANE_CHECK_EQ(tick_order[0], 1);
+    CYANE_CHECK_EQ(tick_order[1], 3);
+    CYANE_CHECK(ticks.empty());
+
+    // 未到期条目不执行
+    ticks.schedule(5, 64, 5, world::kStateWater, 500);
+    int fired = 0;
+    ticks.tick(499, [&](const world::NextTickListEntry&) { ++fired; });
+    CYANE_CHECK_EQ(fired, 0);
+    CYANE_CHECK_EQ(ticks.size(), 1ULL);
+
+    // 20. Boss 血条（BossInfo / BossInfoServer）
+    world::BossInfoServer boss{42, "Ender Dragon", world::BossColor::Pink, world::BossOverlay::Progress};
+    CYANE_CHECK_EQ(boss.percent(), 1.0f);
+    boss.set_percent(0.35f);
+    CYANE_CHECK_EQ(boss.percent(), 0.35f);
+    boss.set_percent(2.5f); // 钳制到 1.0
+    CYANE_CHECK_EQ(boss.percent(), 1.0f);
+    boss.add_player(7);
+    CYANE_CHECK(boss.should_notify(7));
+    CYANE_CHECK(!boss.should_notify(8));
+    boss.remove_player(7);
+    CYANE_CHECK(!boss.should_notify(7));
 }

@@ -20,7 +20,8 @@ include(CompilerFlags)
 include(Dependencies)
 
 option(CYANE_BUILD_TESTS "Build unit tests" ON)
-option(CYANE_LTO "Enable thin LTO" ON)
+# 开发/测试期临时关闭 LTO（-flto 会显著拖慢编译与链接）；发布构建时改回 ON
+option(CYANE_LTO "Enable thin LTO" OFF)
 option(CYANE_SANITIZE "Enable ASan+UBSan" OFF)
 option(CYANE_WERROR "Treat warnings as errors" OFF)
 
