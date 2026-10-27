@@ -325,3 +325,117 @@ CYANE_TEST(persistence_world_round_trip) {
 
     std::filesystem::remove_all(dir);
 }
+
+CYANE_TEST(chunk_nbt_carries_vanilla_heightmap_and_biomes) {
+    // Spigot/vanilla 读档依赖 Level.HeightMap / Biomes，缺失时会报
+    // "Could not set level chunk heightmap, array length is 0 instead of 256"
+    const world::ChunkPos pos{3, -2};
+    world::Chunk chunk{pos};
+    chunk.set_block(0, 4, 0, world::kStateStone);
+    chunk.set_block(5, 4, 9, world::kStateStone);
+    chunk.set_block(5, 40, 9, world::kStateStone); // 高一列
+    chunk.set_block(15, 200, 15, world::kStateGrass);
+    chunk.set_block(7, 12, 7, world::kStateAir);   // 空气列 → 高度 0
+
+    // 群系：默认平原，可逐列覆盖
+    CYANE_CHECK_EQ(static_cast<int>(chunk.biome_at(0, 0)), 1);
+    chunk.set_biome(0, 0, 21);   // jungle
+    chunk.set_biome(15, 15, 2);  // desert
+    CYANE_CHECK_EQ(static_cast<int>(chunk.biome_at(0, 0)), 21);
+    CYANE_CHECK_EQ(static_cast<int>(chunk.biome_at(15, 15)), 2);
+
+    const auto encoded = world::encode_chunk(pos, chunk, world::ChunkEntities{});
+    CYANE_CHECK(encoded.has_value());
+    const auto root = world::nbt::parse(ByteSpan{*encoded});
+    CYANE_CHECK(root.has_value());
+    const auto* level = root->find("Level");
+    CYANE_CHECK(level != nullptr);
+
+    // HeightMap：256 个 int，最高不透光方块 +1
+    const auto* height_map = level->find("HeightMap");
+    CYANE_CHECK(height_map != nullptr);
+    CYANE_CHECK(height_map->is(world::nbt::Tag::i32_array));
+    const auto* heights = height_map->get_if<std::vector<std::int32_t>>();
+    CYANE_CHECK(heights != nullptr);
+    CYANE_CHECK_EQ(heights->size(), 256ULL);
+    CYANE_CHECK_EQ((*heights)[0 * 16 + 0], 5);     // y=4 石头 → 5
+    CYANE_CHECK_EQ((*heights)[9 * 16 + 5], 41);    // y=40 石头 → 41
+    CYANE_CHECK_EQ((*heights)[15 * 16 + 15], 201); // y=200 草方块 → 201
+    CYANE_CHECK_EQ((*heights)[7 * 16 + 7], 0);     // 全空气 → 0
+
+    // Biomes：256 字节
+    const auto* biomes = level->find("Biomes");
+    CYANE_CHECK(biomes != nullptr);
+    CYANE_CHECK(biomes->is(world::nbt::Tag::byte_array));
+    const auto* biome_bytes = biomes->get_if<Bytes>();
+    CYANE_CHECK(biome_bytes != nullptr);
+    CYANE_CHECK_EQ(biome_bytes->size(), 256ULL);
+    CYANE_CHECK_EQ(static_cast<int>(std::to_integer<int>((*biome_bytes)[0])), 21);
+    CYANE_CHECK_EQ(static_cast<int>(std::to_integer<int>((*biome_bytes)[255])), 2);
+
+    // 其余原版必需字段
+    CYANE_CHECK(level->find("TerrainPopulated") != nullptr);
+    CYANE_CHECK(level->find("LightPopulated") != nullptr);
+    CYANE_CHECK(level->find("InhabitedTime") != nullptr);
+    CYANE_CHECK(level->find("TileTicks") != nullptr);
+    CYANE_CHECK(level->find("Structures") != nullptr);
+
+    // 解码回读：群系逐列还原
+    const auto decoded = world::decode_chunk(ByteSpan{*encoded});
+    CYANE_CHECK(decoded.has_value());
+    CYANE_CHECK_EQ(static_cast<int>(decoded->chunk.biome_at(0, 0)), 21);
+    CYANE_CHECK_EQ(static_cast<int>(decoded->chunk.biome_at(15, 15)), 2);
+}
+
+CYANE_TEST(merged_save_backfills_missing_vanilla_fields) {
+    // 旧版 cyane 存档里的区块没有 HeightMap/Biomes：打补丁时必须补上，否则 Spigot 读档告警
+    const world::ChunkPos pos{0, 0};
+    world::Chunk chunk{pos};
+    chunk.set_block(1, 2, 3, world::kStateStone);
+
+    // 构造一个"旧格式"源 NBT：只有 xPos/zPos/Sections，无 HeightMap/Biomes
+    world::nbt::Compound level;
+    level.emplace_back("xPos", world::nbt::make_i32(0));
+    level.emplace_back("zPos", world::nbt::make_i32(0));
+    level.emplace_back("Sections", world::nbt::make_list({}));
+    world::nbt::Compound root;
+    root.emplace_back("Level", world::nbt::make_compound(std::move(level)));
+    const auto old_nbt = world::nbt::serialize("", world::nbt::make_compound(std::move(root)));
+    CYANE_CHECK(old_nbt.has_value());
+
+    const auto patched = world::encode_chunk_merged(pos, chunk, world::ChunkEntities{},
+                                                    ByteSpan{*old_nbt});
+    CYANE_CHECK(patched.has_value());
+    const auto parsed = world::nbt::parse(ByteSpan{*patched});
+    CYANE_CHECK(parsed.has_value());
+    const auto* patched_level = parsed->find("Level");
+    CYANE_CHECK(patched_level != nullptr);
+    CYANE_CHECK(patched_level->find("HeightMap") != nullptr);
+    CYANE_CHECK(patched_level->find("Biomes") != nullptr);
+    CYANE_CHECK(patched_level->find("TerrainPopulated") != nullptr);
+    CYANE_CHECK(patched_level->find("LightPopulated") != nullptr);
+    CYANE_CHECK(patched_level->find("InhabitedTime") != nullptr);
+    CYANE_CHECK(patched_level->find("TileTicks") != nullptr);
+    CYANE_CHECK(patched_level->find("Structures") != nullptr);
+
+    // 已存在的 HeightMap 不覆盖（保留原值）
+    world::nbt::Compound level2;
+    level2.emplace_back("xPos", world::nbt::make_i32(0));
+    level2.emplace_back("zPos", world::nbt::make_i32(0));
+    level2.emplace_back("HeightMap", world::nbt::make_int_array(std::vector<std::int32_t>(256, 7)));
+    level2.emplace_back("Sections", world::nbt::make_list({}));
+    world::nbt::Compound root2;
+    root2.emplace_back("Level", world::nbt::make_compound(std::move(level2)));
+    const auto src2 = world::nbt::serialize("", world::nbt::make_compound(std::move(root2)));
+    CYANE_CHECK(src2.has_value());
+    const auto patched2 = world::encode_chunk_merged(pos, chunk, world::ChunkEntities{},
+                                                     ByteSpan{*src2});
+    CYANE_CHECK(patched2.has_value());
+    const auto parsed2 = world::nbt::parse(ByteSpan{*patched2});
+    CYANE_CHECK(parsed2.has_value());
+    const auto* hm = parsed2->find("Level")->find("HeightMap");
+    CYANE_CHECK(hm != nullptr);
+    const auto* v = hm->get_if<std::vector<std::int32_t>>();
+    CYANE_CHECK(v != nullptr);
+    CYANE_CHECK_EQ((*v)[0], 7);
+}

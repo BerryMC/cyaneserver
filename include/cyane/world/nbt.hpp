@@ -117,6 +117,8 @@ public:
 [[nodiscard]] inline Value make_f64(double v) noexcept { return {Tag::f64, v}; }
 [[nodiscard]] inline Value make_string(std::string v) { return {Tag::string, std::move(v)}; }
 [[nodiscard]] inline Value make_byte_array(Bytes v) { return {Tag::byte_array, std::move(v)}; }
+[[nodiscard]] inline Value make_int_array(std::vector<std::int32_t> v) { return {Tag::i32_array, std::move(v)}; }
+[[nodiscard]] inline Value make_long_array(std::vector<std::int64_t> v) { return {Tag::i64_array, std::move(v)}; }
 [[nodiscard]] inline Value make_list(List v) { return {Tag::list, std::move(v)}; }
 [[nodiscard]] inline Value make_compound(Compound v) { return {Tag::compound, std::move(v)}; }
 

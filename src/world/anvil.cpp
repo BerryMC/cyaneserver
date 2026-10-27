@@ -310,6 +310,56 @@ struct SectionArrays {
     return true;
 }
 
+// 原版方块光照不透明度（Block.getLightOpacity）：只用于还原 HeightMap。
+// 空气/玻璃/火把/花草为 0，树叶 1，水 3，其余按 15 处理（与原版默认 255 截断到 15 等价）。
+[[nodiscard]] int light_opacity(std::uint16_t state) noexcept {
+    const auto id = block_id(state);
+    switch (id) {
+        case 0:    // air
+        case 20:   // glass
+        case 50:   // torch
+        case 51:   // fire
+        case 37:   // dandelion
+        case 38:   // poppy
+        case 31:   // tall grass
+        case 32:   // dead bush
+        case 39:   // brown mushroom
+        case 40:   // red mushroom
+        case 78:   // snow layer
+        case 111:  // water lily
+        case 175:  // double plant
+        case 106:  // vine
+            return 0;
+        case 18:   // leaves
+            return 1;
+        case 8:    // flowing water
+        case 9:    // water
+        case 10:   // flowing lava
+        case 11:   // lava
+            return 3;
+        default:
+            return 15;
+    }
+}
+
+// 原版 Chunk.generateSkylightMap 的 HeightMap：每列最高的不透光方块 y+1
+[[nodiscard]] std::vector<std::int32_t> build_height_map(const Chunk& chunk) {
+    std::vector<std::int32_t> height_map(256, 0);
+    for (std::size_t x = 0; x < kChunkSizeX; ++x) {
+        for (std::size_t z = 0; z < kChunkSizeZ; ++z) {
+            std::int32_t height = 0;
+            for (int y = kChunkSizeY - 1; y >= 0; --y) {
+                if (light_opacity(chunk.block_at(x, y, z)) > 0) {
+                    height = y + 1;
+                    break;
+                }
+            }
+            height_map[z * kChunkSizeX + x] = height;
+        }
+    }
+    return height_map;
+}
+
 [[nodiscard]] List build_tile_entities(const ChunkEntities& entities) {
     List out;
     for (const auto& [key, chest] : entities.chests) {
@@ -406,6 +456,18 @@ Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities
     compound_set(level, "xPos", nbt::make_i32(pos.x));
     compound_set(level, "zPos", nbt::make_i32(pos.z));
     compound_set(level, "LastUpdate", nbt::make_i64(0));
+    compound_set(level, "InhabitedTime", nbt::make_i64(0));
+    compound_set(level, "TerrainPopulated", nbt::make_i8(1));
+    compound_set(level, "LightPopulated", nbt::make_i8(1));
+    // HeightMap / Biomes：Spigot 与 vanilla 读档都依赖（缺失时服务端报
+    // "Could not set level chunk heightmap, array length is 0 instead of 256"）
+    compound_set(level, "HeightMap", nbt::make_int_array(build_height_map(chunk)));
+    Bytes biome_bytes;
+    biome_bytes.reserve(chunk.biomes().size());
+    for (const auto biome : chunk.biomes()) biome_bytes.push_back(static_cast<std::byte>(biome));
+    compound_set(level, "Biomes", nbt::make_byte_array(std::move(biome_bytes)));
+    compound_set(level, "TileTicks", nbt::make_list({}));
+    compound_set(level, "Structures", nbt::make_compound({}));
     compound_set(level, "Sections", nbt::make_list(std::move(section_list)));
     compound_set(level, "TileEntities", nbt::make_list(std::move(tile_entities)));
     compound_set(level, "Entities", nbt::make_list(std::move(entity_list)));
@@ -485,6 +547,23 @@ Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkE
     if (level == nullptr) {
         return encode_chunk(pos, chunk, entities);
     }
+
+    // 旧档（cyane 早期版本或对旧档打补丁）补齐原版必需的 Level 字段，
+    // 否则 Spigot/vanilla 读档会报 "Could not set level chunk heightmap, array length is 0 instead of 256"
+    if (level->find("HeightMap") == nullptr) {
+        level->set("HeightMap", nbt::make_int_array(build_height_map(chunk)));
+    }
+    if (level->find("Biomes") == nullptr) {
+        Bytes biome_bytes;
+        biome_bytes.reserve(chunk.biomes().size());
+        for (const auto biome : chunk.biomes()) biome_bytes.push_back(static_cast<std::byte>(biome));
+        level->set("Biomes", nbt::make_byte_array(std::move(biome_bytes)));
+    }
+    if (level->find("TerrainPopulated") == nullptr) level->set("TerrainPopulated", nbt::make_i8(1));
+    if (level->find("LightPopulated") == nullptr) level->set("LightPopulated", nbt::make_i8(1));
+    if (level->find("InhabitedTime") == nullptr) level->set("InhabitedTime", nbt::make_i64(0));
+    if (level->find("TileTicks") == nullptr) level->set("TileTicks", nbt::make_list({}));
+    if (level->find("Structures") == nullptr) level->set("Structures", nbt::make_compound({}));
 
     // 逐 section 覆盖 Blocks/Data/Add，保留光照等字段
     if (auto* sections = level->find_mut("Sections"); sections != nullptr) {
@@ -574,6 +653,18 @@ Result<DecodedChunk> decode_chunk(ByteSpan nbt_bytes) {
     }
     DecodedChunk out;
     out.chunk = Chunk{ChunkPos{static_cast<std::int32_t>(*pos_x), static_cast<std::int32_t>(*pos_z)}};
+
+    // 群系（原版 Level.Biomes，256 字节）
+    if (const Value* biomes = level->find("Biomes"); biomes != nullptr) {
+        if (const auto* biome_bytes = biomes->get_if<Bytes>(); biome_bytes != nullptr) {
+            std::array<std::uint8_t, 256> values{};
+            const auto count = biome_bytes->size() < values.size() ? biome_bytes->size() : values.size();
+            for (std::size_t i = 0; i < count; ++i) {
+                values[i] = std::to_integer<std::uint8_t>((*biome_bytes)[i]);
+            }
+            out.chunk.set_biome_array(values);
+        }
+    }
 
     if (const Value* sections = level->find("Sections"); sections != nullptr) {
         if (const auto* list = sections->get_if<List>(); list != nullptr) {

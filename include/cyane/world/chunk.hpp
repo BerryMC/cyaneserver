@@ -66,8 +66,8 @@ struct [[nodiscard]] Section {
 
 class [[nodiscard]] Chunk {
 public:
-    Chunk() = default;
-    explicit Chunk(ChunkPos pos) : pos_{std::move(pos)} {}
+    Chunk() { biomes_.fill(1); }
+    explicit Chunk(ChunkPos pos) : pos_{std::move(pos)} { biomes_.fill(1); }
 
     [[nodiscard]] const ChunkPos& pos() const noexcept { return pos_; }
 
@@ -88,6 +88,25 @@ public:
     }
 
     [[nodiscard]] std::span<const Section> sections() const noexcept { return {sections_}; }
+
+    // 生物群系：256 字节（原版 Level.Biomes / 区块数据包末尾的 biome 数组）
+    // 默认平原（1），生成器在 replaceBiomeBlocks 阶段按列写入
+    [[nodiscard]] const std::array<std::uint8_t, 256>& biomes() const noexcept { return biomes_; }
+
+    [[nodiscard]] std::uint8_t biome_at(std::size_t x, std::size_t z) const noexcept {
+        return biomes_[z * kChunkSizeX + x];
+    }
+
+    void set_biome(std::size_t x, std::size_t z, std::uint8_t biome) noexcept {
+        biomes_[z * kChunkSizeX + x] = biome;
+    }
+
+    void set_biome_array(std::span<const std::uint8_t> values) noexcept {
+        const std::size_t count = values.size() < biomes_.size() ? values.size() : biomes_.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            biomes_[i] = values[i];
+        }
+    }
 
     // 是否有任何 section 携带方块数据（原 sections() 非空判断的等价语义）
     [[nodiscard]] bool has_blocks() const noexcept {
@@ -149,6 +168,7 @@ public:
 private:
     ChunkPos pos_;
     std::array<Section, kSectionCount> sections_{};
+    std::array<std::uint8_t, 256> biomes_{};
 };
 
 }

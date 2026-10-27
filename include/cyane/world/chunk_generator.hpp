@@ -274,6 +274,7 @@ private:
                 const double biome_noise = surface_noise_->populate_noise_array_bilinear(
                     static_cast<double>(wx) * kBiomeNoiseScale, static_cast<double>(wz) * kBiomeNoiseScale);
                 const auto b = biome::biome_at(wx, wz, biome_noise);
+                chunk.set_biome(i, j, static_cast<std::uint8_t>(b.id));
 
                 const double noise_val = surface_noise_->populate_noise_array_bilinear(
                     static_cast<double>(wx) * 0.0625, static_cast<double>(wz) * 0.0625);

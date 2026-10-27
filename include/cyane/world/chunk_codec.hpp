@@ -117,7 +117,10 @@ inline void write_full_chunk(ByteWriter& out, const Chunk& chunk) {
         detail::write_section(data, *chunk.section(static_cast<std::size_t>(y)), overworld);
     }
     std::array<std::byte, detail::kBiomeBytes> biomes{};
-    biomes.fill(static_cast<std::byte>(detail::kBiomePlains));
+    const auto& chunk_biomes = chunk.biomes();
+    for (std::size_t i = 0; i < biomes.size(); ++i) {
+        biomes[i] = static_cast<std::byte>(chunk_biomes[i]);
+    }
     data.bytes(ByteSpan{biomes.data(), biomes.size()});
 
     out.i32(chunk.pos().x);
