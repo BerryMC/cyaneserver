@@ -279,4 +279,53 @@ private:
     std::int32_t id_counts_{0};
 };
 
+// 1.12.2 原版内存存档存储（SaveDataMemoryStorage）
+// 与 MapStorage 同角色但不落盘：仅按名保存数据对象，供读取/迁移场景使用。
+class SaveDataMemoryStorage {
+public:
+    [[nodiscard]] MapData* get_or_create_map_data(std::string_view name) {
+        const auto key = std::string{name};
+        if (const auto it = maps_.find(key); it != maps_.end()) return it->second.get();
+        auto data = std::make_unique<MapData>(key);
+        auto* raw = data.get();
+        maps_.emplace(key, std::move(data));
+        return raw;
+    }
+
+    [[nodiscard]] MapData* find_map_data(std::string_view name) noexcept {
+        const auto it = maps_.find(std::string{name});
+        return it == maps_.end() ? nullptr : it->second.get();
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept { return maps_.size(); }
+
+    // 内存存储没有"待落盘"概念，但保持与原版一致的调用面
+    [[nodiscard]] std::vector<std::string> pending_saves() const { return {}; }
+    void clear_dirty() {}
+
+    // 与 MapStorage 同名接口：供调用方在两种实现间切换
+    [[nodiscard]] std::int32_t next_map_id() noexcept { return id_counts_++; }
+    [[nodiscard]] MapData* get_map(std::int32_t id) { return get_or_create_map_data("map_" + std::to_string(id)); }
+    [[nodiscard]] nbt::Value write_id_counts() const {
+        nbt::Compound root;
+        root.emplace_back("map", nbt::make_i32(id_counts_));
+        return nbt::make_compound(std::move(root));
+    }
+    void read_id_counts(const nbt::Value& value) {
+        if (const auto* field = value.find("map"); field != nullptr) {
+            id_counts_ = static_cast<std::int32_t>(field->scalar().value_or(0));
+        }
+    }
+    MapData* load_map(std::string_view name, const nbt::Value& value) {
+        auto* data = get_or_create_map_data(name);
+        data->read_from_nbt(value);
+        data->set_dirty(false);
+        return data;
+    }
+
+private:
+    std::map<std::string, std::unique_ptr<MapData>> maps_;
+    std::int32_t id_counts_{0};
+};
+
 }  // namespace cyane::world::storage

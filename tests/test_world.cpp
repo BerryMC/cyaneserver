@@ -280,7 +280,8 @@ CYANE_TEST(level_dat_ensure_creates_minimal_set) {
     auto info = world::load_level_dat(tmp);
     CYANE_CHECK(info.has_value());
     CYANE_CHECK_EQ(info->spawn_x, 0);
-    CYANE_CHECK_EQ(info->spawn_y, 4);
+    // 原版新建 level.dat 的 SpawnY 默认 64（登入时仍会按实际地表再落一次）
+    CYANE_CHECK_EQ(info->spawn_y, 64);
     CYANE_CHECK_EQ(info->spawn_z, 0);
 
     // 已存在时不覆盖
@@ -1274,4 +1275,66 @@ CYANE_TEST(map_data_round_trips_through_nbt) {
     cyane::world::storage::MapStorage other;
     other.read_id_counts(id_counts);
     CYANE_CHECK_EQ(other.next_map_id(), 2);
+}
+
+CYANE_TEST(world_info_round_trips_full_vanilla_fields) {
+    const auto dir = std::filesystem::temp_directory_path() / "cyane_test_world_info";
+    std::filesystem::remove_all(dir);
+
+    CYANE_CHECK(world::ensure_level_dat(dir, /*game_type=*/2, /*seed=*/1234567890123LL).has_value());
+
+    // 读回后用 WorldInfo 覆盖一批字段再写盘，验证原版键名/类型往返
+    auto loaded = world::load_world_info(dir);
+    CYANE_CHECK(loaded.has_value());
+    CYANE_CHECK_EQ(loaded->random_seed, 1234567890123LL);
+    CYANE_CHECK_EQ(static_cast<int>(loaded->game_type), 2);
+    CYANE_CHECK_EQ(loaded->level_name, std::string{"cyane_test_world_info"});
+
+    loaded->level_name = "测试世界";
+    loaded->hardcore = true;
+    loaded->difficulty = world::EnumDifficulty::Hard;
+    loaded->world_time = 987654321;
+    loaded->day_time = 6000;
+    loaded->raining = true;
+    loaded->rain_time = 1200;
+    loaded->thundering = true;
+    loaded->thunder_time = 600;
+    loaded->spawn_x = 100;
+    loaded->spawn_y = 70;
+    loaded->spawn_z = -200;
+    loaded->game_rules.set_or_create("keepInventory", "true");
+    loaded->game_rules.set_or_create("randomTickSpeed", "7");
+    loaded->border_diameter = 29999984.0;
+    loaded->border_warning_distance = 12;
+
+    const auto nbt_bytes = world::nbt::serialize("", loaded->write_to_nbt());
+    CYANE_CHECK(nbt_bytes.has_value());
+    const auto reparsed = world::nbt::parse(cyane::ByteSpan{nbt_bytes->data(), nbt_bytes->size()});
+    CYANE_CHECK(reparsed.has_value());
+
+    world::storage::WorldInfo restored;
+    restored.read_root(*reparsed);
+    CYANE_CHECK_EQ(restored.level_name, std::string{"测试世界"});
+    CYANE_CHECK(restored.hardcore);
+    CYANE_CHECK_EQ(static_cast<int>(restored.difficulty), 3);
+    CYANE_CHECK_EQ(restored.world_time, 987654321);
+    CYANE_CHECK_EQ(restored.day_time, 6000);
+    CYANE_CHECK(restored.raining);
+    CYANE_CHECK_EQ(restored.rain_time, 1200);
+    CYANE_CHECK(restored.thundering);
+    CYANE_CHECK_EQ(restored.spawn_x, 100);
+    CYANE_CHECK_EQ(restored.spawn_y, 70);
+    CYANE_CHECK_EQ(restored.spawn_z, -200);
+    CYANE_CHECK(restored.game_rules.get_bool("keepInventory"));
+    CYANE_CHECK_EQ(restored.game_rules.get_int("randomTickSpeed"), 7);
+    CYANE_CHECK_EQ(restored.border_warning_distance, 12);
+
+    // 存档摘要（WorldSummary）
+    const auto summary = world::storage::WorldSummary::from_root(*reparsed);
+    CYANE_CHECK_EQ(summary.level_name, std::string{"测试世界"});
+    CYANE_CHECK_EQ(summary.random_seed, 1234567890123LL);
+    CYANE_CHECK_EQ(summary.version_name, std::string{"1.12.2"});
+    CYANE_CHECK(!summary.requires_conversion);
+
+    std::filesystem::remove_all(dir);
 }

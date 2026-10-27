@@ -1,10 +1,12 @@
 #include "cyane/world/level_dat.hpp"
 
 #include <fstream>
+#include <ctime>
 #include <istream>
 
 #include "cyane/proto/frame.hpp"
 #include "cyane/world/nbt.hpp"
+#include "cyane/world/world_info.hpp"
 
 namespace cyane::world {
 
@@ -32,26 +34,34 @@ Result<LevelInfo> load_level_dat(const std::filesystem::path& world_dir) {
     if (data == nullptr) {
         return make_error(ErrorCode::world, "level.dat missing Data compound");
     }
-    if (const auto* v = data->find("SpawnX"); v != nullptr) {
-        if (const auto s = v->scalar()) {
-            info.spawn_x = static_cast<std::int32_t>(*s);
-        }
+    // 用 WorldInfo 解析（字段集与写入端一致），再投影到 LevelInfo
+    storage::WorldInfo world_info;
+    world_info.read_root(*root);
+    info.spawn_x = world_info.spawn_x;
+    info.spawn_y = world_info.spawn_y;
+    info.spawn_z = world_info.spawn_z;
+    info.seed = world_info.random_seed;
+    return info;
+}
+
+Result<storage::WorldInfo> load_world_info(const std::filesystem::path& world_dir) {
+    storage::WorldInfo info;
+    const auto path = world_dir / "level.dat";
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        return info;
     }
-    if (const auto* v = data->find("SpawnY"); v != nullptr) {
-        if (const auto s = v->scalar()) {
-            info.spawn_y = static_cast<std::int32_t>(*s);
-        }
+    std::ifstream in{path, std::ios::binary};
+    if (!in) {
+        return make_error(ErrorCode::io, "cannot open level.dat: " + path.string());
     }
-    if (const auto* v = data->find("SpawnZ"); v != nullptr) {
-        if (const auto s = v->scalar()) {
-            info.spawn_z = static_cast<std::int32_t>(*s);
-        }
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    auto root = nbt::parse_compressed(
+        ByteSpan{reinterpret_cast<const std::byte*>(raw.data()), raw.size()});
+    if (!root) {
+        return std::unexpected{std::move(root.error())};
     }
-    if (const auto* v = data->find("RandomSeed"); v != nullptr) {
-        if (const auto s = v->scalar()) {
-            info.seed = *s;
-        }
-    }
+    info.read_root(*root);
     return info;
 }
 
@@ -63,22 +73,23 @@ Result<bool> ensure_level_dat(const std::filesystem::path& world_dir, std::int32
         return false;
     }
 
-    // 最小集：原版 1.12.2 level.dat 的 Data 字段
-    Compound data;
-    data.emplace_back("RandomSeed", nbt::Value{nbt::Tag::i64, seed});
-    data.emplace_back("Time", nbt::Value{nbt::Tag::i64, std::int64_t{0}});
-    Compound version;
-    version.emplace_back("Id", nbt::Value{nbt::Tag::i32, std::int32_t{1101}});
-    version.emplace_back("Name", nbt::Value{nbt::Tag::string, std::string{"1.12.2"}});
-    data.emplace_back("Version", nbt::Value{nbt::Tag::compound, std::move(version)});
-    data.emplace_back("GameType", nbt::Value{nbt::Tag::i32, game_type});
-    data.emplace_back("generatorName", nbt::Value{nbt::Tag::string, std::string{"default"}});
-    data.emplace_back("SpawnX", nbt::Value{nbt::Tag::i32, std::int32_t{0}});
-    data.emplace_back("SpawnY", nbt::Value{nbt::Tag::i32, std::int32_t{4}});
-    data.emplace_back("SpawnZ", nbt::Value{nbt::Tag::i32, std::int32_t{0}});
-    Compound root;
-    root.emplace_back("Data", nbt::Value{nbt::Tag::compound, std::move(data)});
-    const auto nbt_bytes = nbt::serialize("", nbt::make_compound(std::move(root)));
+    // 原版 level.dat 的完整常用字段集（WorldInfo 逐字段转写）。
+    // 只写最小集时 Spigot/vanilla 会用默认值补，但 LevelName/Hardcore/Difficulty/
+    // GameRules/Weather/LastPlayed 等会丢失，故按原版结构一次写全。
+    storage::WorldInfo info;
+    info.random_seed = seed;
+    info.game_type = static_cast<std::uint8_t>(game_type);
+    info.level_name = world_dir.filename().string();
+    if (info.level_name.empty()) info.level_name = "world";
+    info.spawn_x = 0;
+    info.spawn_y = 64;
+    info.spawn_z = 0;
+    info.initialized = true;
+    info.last_played = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+    info.rain_time = 0;
+    info.thunder_time = 0;
+    const auto root = info.write_to_nbt();
+    const auto nbt_bytes = nbt::serialize("", root);
     if (!nbt_bytes) {
         return std::unexpected{std::move(nbt_bytes.error())};
     }
