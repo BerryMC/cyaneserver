@@ -27,6 +27,7 @@
 #include "cyane/world/world_types.hpp"
 #include "cyane/world/tick_list.hpp"
 #include "cyane/world/boss_info.hpp"
+#include "cyane/world/loot/loot_table.hpp"
 #include "test_framework.hpp"
 
 using namespace cyane;
@@ -1056,4 +1057,98 @@ CYANE_TEST(world_gen_features_dungeon_and_plants) {
     CYANE_CHECK(!boss.should_notify(8));
     boss.remove_player(7);
     CYANE_CHECK(!boss.should_notify(7));
+}
+
+CYANE_TEST(loot_table_loads_and_generates_like_vanilla) {
+    // 物品名解析器由调用方提供（服务端注册表）；测试用最小桩
+    const auto resolver = [](std::string_view name) -> std::optional<std::int16_t> {
+        if (name == "minecraft:iron_ingot") return 265;
+        if (name == "minecraft:bread") return 297;
+        if (name == "minecraft:golden_apple") return 322;
+        return std::nullopt;
+    };
+    world::loot::LootTableManager manager{resolver};
+
+    // 对齐 vanilla chests/simple_dungeon 的结构：两池、加权条目、set_data、空条目
+    constexpr std::string_view kJson = R"({
+        "pools": [
+            {
+                "rolls": {"min": 2, "max": 2},
+                "entries": [
+                    {"type": "item", "name": "minecraft:iron_ingot", "weight": 10,
+                     "functions": [{"function": "set_count", "count": {"min": 1, "max": 4}}]},
+                    {"type": "item", "name": "minecraft:golden_apple", "weight": 1,
+                     "functions": [{"function": "set_data", "data": 1}]},
+                    {"type": "empty", "weight": 5}
+                ]
+            },
+            {
+                "rolls": 1,
+                "entries": [
+                    {"type": "item", "name": "minecraft:bread", "weight": 1,
+                     "functions": [{"function": "looting_enchant", "count": {"min": 0, "max": 1}, "limit": 5}]}
+                ]
+            }
+        ]
+    })";
+
+    CYANE_CHECK(manager.add_table_json("minecraft:chests/simple_dungeon", kJson));
+    CYANE_CHECK_EQ(manager.size(), 1ULL);
+    const auto* table = manager.find("minecraft:chests/simple_dungeon");
+    CYANE_CHECK(table != nullptr);
+    CYANE_CHECK_EQ(table->pools.size(), 2ULL);
+
+    world::gen::JavaRandom rand{987654321ULL};
+    world::loot::LootContext ctx{};
+
+    // 每轮必出 2 个主池条目（empty 条目不加物品）+ 1 个面包
+    for (int round = 0; round < 64; ++round) {
+        const auto items = manager.generate("minecraft:chests/simple_dungeon", rand, ctx);
+        CYANE_CHECK(!items.empty());
+        int bread = 0;
+        for (const auto& stack : items) {
+            CYANE_CHECK(!stack.empty());
+            if (stack.id == 265) {
+                CYANE_CHECK(stack.count >= 1 && stack.count <= 4);
+            }
+            if (stack.id == 322) {
+                CYANE_CHECK_EQ(stack.damage, 1); // set_data 生效
+            }
+            if (stack.id == 297) ++bread;
+        }
+        CYANE_CHECK_EQ(bread, 1);
+    }
+
+    // random_chance = 0 的池条件：整池不产出
+    world::loot::LootTableManager gated{resolver};
+    CYANE_CHECK(gated.add_table_json("minecraft:test/gated", R"({
+        "pools": [{
+            "rolls": 3,
+            "conditions": [{"condition": "random_chance", "chance": 0.0}],
+            "entries": [{"type": "item", "name": "minecraft:iron_ingot"}]
+        }]
+    })"));
+    CYANE_CHECK(gated.generate("minecraft:test/gated", rand, ctx).empty());
+
+    // killed_by_player 条件：未由玩家击杀时不产出
+    world::loot::LootTableManager killer_only{resolver};
+    CYANE_CHECK(killer_only.add_table_json("minecraft:test/killer", R"({
+        "pools": [{
+            "rolls": 1,
+            "entries": [{"type": "item", "name": "minecraft:bread",
+                         "conditions": [{"condition": "killed_by_player"}]}]
+        }]
+    })"));
+    world::loot::LootContext not_player{};
+    CYANE_CHECK(killer_only.generate("minecraft:test/killer", rand, not_player).empty());
+    world::loot::LootContext by_player{};
+    by_player.killer_is_player = true;
+    CYANE_CHECK(!killer_only.generate("minecraft:test/killer", rand, by_player).empty());
+
+    // 自引用 loot_table 条目必须被 active 集合拦住（不会无限递归）
+    world::loot::LootTableManager recursive{resolver};
+    CYANE_CHECK(recursive.add_table_json("minecraft:test/loop", R"({
+        "pools": [{"rolls": 1, "entries": [{"type": "loot_table", "name": "minecraft:test/loop"}]}]
+    })"));
+    CYANE_CHECK(recursive.generate("minecraft:test/loop", rand, ctx).empty());
 }
