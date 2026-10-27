@@ -28,6 +28,8 @@
 #include "cyane/world/tick_list.hpp"
 #include "cyane/world/boss_info.hpp"
 #include "cyane/world/loot/loot_table.hpp"
+#include "cyane/world/map_data.hpp"
+#include "cyane/world/world_settings.hpp"
 #include "test_framework.hpp"
 
 using namespace cyane;
@@ -1151,4 +1153,125 @@ CYANE_TEST(loot_table_loads_and_generates_like_vanilla) {
         "pools": [{"rolls": 1, "entries": [{"type": "loot_table", "name": "minecraft:test/loop"}]}]
     })"));
     CYANE_CHECK(recursive.generate("minecraft:test/loop", rand, ctx).empty());
+}
+
+CYANE_TEST(loot_chest_fills_once_with_marked_table) {
+    const auto resolver = [](std::string_view name) -> std::optional<std::int16_t> {
+        if (name == "minecraft:iron_ingot") return 265;
+        return std::nullopt;
+    };
+    auto manager = std::make_shared<world::loot::LootTableManager>(resolver);
+    CYANE_CHECK(manager->add_table_json("minecraft:chests/simple_dungeon", R"({
+        "pools": [{"rolls": {"min": 2, "max": 2}, "entries": [
+            {"type": "item", "name": "minecraft:iron_ingot",
+             "functions": [{"function": "set_count", "count": {"min": 1, "max": 3}}]}
+        ]}]
+    })"));
+
+    net::ContainerStore store;
+    store.set_loot_manager(manager);
+    constexpr std::int64_t key = 12345;
+    store.mark_loot(key, std::string{world::loot::table_names::kChestsSimpleDungeon}, 424242);
+    CYANE_CHECK(store.has_loot(key));
+
+    // 首次打开：按掉落表填入，标记随即清除
+    const auto first = store.snapshot(key);
+    CYANE_CHECK(!store.has_loot(key));
+
+    int filled = 0;
+    int ingots = 0;
+    for (const auto& slot : first) {
+        if (slot.empty()) continue;
+        ++filled;
+        CYANE_CHECK_EQ(slot.id, 265);
+        CYANE_CHECK(slot.count >= 1 && slot.count <= 3);
+        ingots += slot.count;
+    }
+    CYANE_CHECK_EQ(filled, 2);
+
+    // 第二次打开内容稳定（不会再生成一遍）
+    const auto second = store.snapshot(key);
+    int second_filled = 0;
+    for (const auto& slot : second) {
+        if (!slot.empty()) ++second_filled;
+    }
+    CYANE_CHECK_EQ(second_filled, filled);
+    CYANE_CHECK(ingots >= 2);
+}
+
+CYANE_TEST(world_settings_and_world_types_match_vanilla) {
+    using cyane::world::WorldType;
+    CYANE_CHECK_EQ(cyane::world::world_type_name(WorldType::Flat), "flat");
+    CYANE_CHECK_EQ(cyane::world::world_type_name(WorldType::LargeBiomes), "largeBiomes");
+    CYANE_CHECK_EQ(cyane::world::world_type_version(WorldType::Default1_1), 0);
+    CYANE_CHECK_EQ(cyane::world::world_type_version(WorldType::Default), 1);
+    CYANE_CHECK(!cyane::world::world_type_can_be_created(WorldType::Default1_1));
+    CYANE_CHECK(cyane::world::world_type_has_info_notice(WorldType::Amplified));
+    CYANE_CHECK(cyane::world::world_type_by_name("flat") == WorldType::Flat);
+    CYANE_CHECK(!cyane::world::world_type_by_name("nope").has_value());
+
+    cyane::world::WorldSettings settings{123456789LL, 1, true, false, WorldType::Default};
+    CYANE_CHECK_EQ(settings.seed(), 123456789LL);
+    CYANE_CHECK_EQ(settings.game_type(), 1);
+    CYANE_CHECK(settings.map_features_enabled());
+    CYANE_CHECK(!settings.is_hardcore_mode_enabled());
+    settings.enable_bonus_chest().enable_commands().set_generator_options("2;0");
+    CYANE_CHECK(settings.bonus_chest_enabled());
+    CYANE_CHECK(settings.commands_allowed());
+    CYANE_CHECK_EQ(settings.generator_options(), "2;0");
+
+    // 困难核心只在生存模式生效
+    const cyane::world::WorldSettings hardcore_survival{1LL, 0, true, true, WorldType::Default};
+    CYANE_CHECK(hardcore_survival.is_hardcore_mode_enabled());
+    const cyane::world::WorldSettings hardcore_creative{1LL, 1, true, true, WorldType::Default};
+    CYANE_CHECK(!hardcore_creative.is_hardcore_mode_enabled());
+}
+
+CYANE_TEST(map_data_round_trips_through_nbt) {
+    using cyane::world::storage::MapData;
+    using cyane::world::storage::MapDecoration;
+    using cyane::world::storage::MapDecorationType;
+
+    MapData map{"map_3"};
+    map.calculate_map_center(1000.0, -4000.0, 0);
+    CYANE_CHECK_EQ(map.x_center(), 1024);
+    CYANE_CHECK_EQ(map.z_center(), -3968);
+    map.set_dimension(-1);
+    map.set_scale(2);
+    map.set_color_at(5, 7, 0x2A);
+    map.add_decoration("player_1", MapDecoration{MapDecorationType::Player, 12, -9, 3});
+    CYANE_CHECK(map.is_dirty());
+
+    const auto encoded = map.write_to_nbt();
+    // 用 NBT 序列化/解析走一遍真实字节，确保键与类型正确
+    const auto bytes = cyane::world::nbt::serialize("map_3", encoded);
+    CYANE_CHECK(bytes.has_value());
+    const auto decoded = cyane::world::nbt::parse(cyane::ByteSpan{bytes->data(), bytes->size()});
+    CYANE_CHECK(decoded.has_value());
+
+    MapData restored{"map_3"};
+    restored.read_from_nbt(*decoded);
+    CYANE_CHECK_EQ(restored.x_center(), 1024);
+    CYANE_CHECK_EQ(restored.z_center(), -3968);
+    CYANE_CHECK_EQ(restored.dimension(), -1);
+    CYANE_CHECK_EQ(restored.scale(), 2);
+    CYANE_CHECK_EQ(restored.color_at(5, 7), 0x2A);
+    CYANE_CHECK_EQ(restored.decorations().size(), 1ULL);
+    const auto& decoration = restored.decorations().at("player_1");
+    CYANE_CHECK_EQ(static_cast<int>(decoration.x), 12);
+    CYANE_CHECK_EQ(static_cast<int>(decoration.y), -9);
+    CYANE_CHECK_EQ(static_cast<int>(decoration.rotation), 3);
+
+    // MapStorage：idCounts 自增 + 地图按名索引
+    cyane::world::storage::MapStorage storage;
+    CYANE_CHECK_EQ(storage.next_map_id(), 0);
+    CYANE_CHECK_EQ(storage.next_map_id(), 1);
+    auto* created = storage.get_map(1);
+    CYANE_CHECK(created != nullptr);
+    CYANE_CHECK_EQ(created->map_name(), "map_1");
+    CYANE_CHECK_EQ(storage.size(), 1ULL);
+    const auto id_counts = storage.write_id_counts();
+    cyane::world::storage::MapStorage other;
+    other.read_id_counts(id_counts);
+    CYANE_CHECK_EQ(other.next_map_id(), 2);
 }

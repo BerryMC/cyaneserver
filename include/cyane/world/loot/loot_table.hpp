@@ -1,7 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <sstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,6 +20,38 @@ namespace cyane::world::loot {
 
 // 物品名 → 物品 id 的解析器由调用方提供（服务端接入自己的注册表；不在此处内置任何名表）
 using ItemResolver = std::function<std::optional<std::int16_t>(std::string_view name)>;
+
+// 熔炉配方解析器（furnace_smelt 用）：输入物品 id → 产物物品 id
+using SmeltResolver = std::function<std::optional<std::int16_t>(std::int16_t input_item_id)>;
+
+// 条件/函数名注册表（对齐 vanilla LootConditionManager / LootFunctionManager 的 name→serializer 表）
+class LootRegistries {
+public:
+    using ConditionFactory = std::function<std::optional<LootCondition>(const core::JsonValue&)>;
+    using FunctionFactory = std::function<std::optional<LootFunction>(const core::JsonValue&)>;
+
+    bool add_condition(std::string name, ConditionFactory factory) {
+        return conditions_.emplace(std::move(name), std::move(factory)).second;
+    }
+
+    bool add_function(std::string name, FunctionFactory factory) {
+        return functions_.emplace(std::move(name), std::move(factory)).second;
+    }
+
+    [[nodiscard]] const ConditionFactory* find_condition(std::string_view name) const noexcept {
+        const auto it = conditions_.find(std::string{name});
+        return it == conditions_.end() ? nullptr : &it->second;
+    }
+
+    [[nodiscard]] const FunctionFactory* find_function(std::string_view name) const noexcept {
+        const auto it = functions_.find(std::string{name});
+        return it == functions_.end() ? nullptr : &it->second;
+    }
+
+private:
+    std::unordered_map<std::string, ConditionFactory> conditions_;
+    std::unordered_map<std::string, FunctionFactory> functions_;
+};
 
 // 1.12.2 原版掉落条目（LootEntry / LootEntryItem / LootEntryTable / LootEntryEmpty）
 class LootEntry {
@@ -70,19 +105,24 @@ public:
                                  const LootContext& ctx, class LootTableManager& manager) const;
 
     // 从 loot table JSON 加载；解析失败返回 false（对齐 LootTable.Serializer）
-    bool load(const core::JsonValue& json, const ItemResolver& resolver);
+    bool load(const core::JsonValue& json, const ItemResolver& resolver,
+              const class LootRegistries& registries, const SmeltResolver& smelt);
 };
+
+namespace detail {
+[[nodiscard]] inline LootRegistries make_default_registries(const SmeltResolver& smelt);
+}  // namespace detail
 
 // 1.12.2 原版掉落表管理器（LootTableManager）
 class LootTableManager {
 public:
-    explicit LootTableManager(ItemResolver resolver) : resolver_(std::move(resolver)) {}
+    explicit LootTableManager(ItemResolver resolver, SmeltResolver smelt = {});
 
     // 注册一张表；name 形如 "minecraft:chests/simple_dungeon"
     bool add_table(std::string name, const core::JsonValue& json) {
         LootTable table;
         table.name = name;
-        if (!table.load(json, resolver_)) return false;
+        if (!table.load(json, resolver_, registries_, smelt_)) return false;
         tables_[std::move(name)] = std::move(table);
         return true;
     }
@@ -111,12 +151,36 @@ public:
 
     [[nodiscard]] std::size_t size() const noexcept { return tables_.size(); }
 
+    // 载入一个 loot_tables 目录（vanilla LootTableManager.loadLootTables）：
+    // 表名 = prefix + 相对路径（去掉 .json），如 prefix="minecraft:" → "minecraft:chests/simple_dungeon"
+    [[nodiscard]] std::size_t load_directory(const std::filesystem::path& root, std::string_view prefix = "minecraft:") {
+        std::error_code ec;
+        if (!std::filesystem::exists(root, ec)) return 0;
+        std::size_t loaded = 0;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec)) {
+            if (ec) break;
+            if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
+            std::ifstream stream{entry.path()};
+            if (!stream) continue;
+            std::stringstream buffer;
+            buffer << stream.rdbuf();
+            auto relative = std::filesystem::relative(entry.path(), root, ec);
+            if (ec) continue;
+            auto name = std::string{prefix};
+            name += relative.replace_extension().generic_string();
+            if (add_table_json(std::move(name), buffer.str())) ++loaded;
+        }
+        return loaded;
+    }
+
     // 递归保护（vanilla LootContext.addLootTable / removeLootTable）
     [[nodiscard]] bool add_active_table(const std::string& name) { return active_tables_.insert(name).second; }
     void remove_active_table(const std::string& name) { active_tables_.erase(name); }
 
 private:
     ItemResolver resolver_;
+    SmeltResolver smelt_;
+    LootRegistries registries_;
     std::unordered_map<std::string, LootTable> tables_;
     std::unordered_set<std::string> active_tables_;
 };
@@ -180,6 +244,13 @@ inline void LootPool::generate_loot(std::vector<item::ItemStack>& out, gen::Java
     }
 }
 
+// ---- LootTableManager 构造（需 registries 工厂已定义）----
+
+inline LootTableManager::LootTableManager(ItemResolver resolver, SmeltResolver smelt)
+    : resolver_(std::move(resolver)),
+      smelt_(std::move(smelt)),
+      registries_(detail::make_default_registries(smelt_)) {}
+
 // ---- LootTable 实现 ----
 
 inline void LootTable::generate_loot(std::vector<item::ItemStack>& out, gen::JavaRandom& rand,
@@ -203,78 +274,120 @@ namespace detail {
 // RandomValueRange：对象 {min,max} 或裸数字
 [[nodiscard]] inline RandomValueRange read_range(const core::JsonValue& value) {
     if (value.is_number()) {
-        const auto single = static_cast<float>(value.as_number());
-        return RandomValueRange{single};
+        return RandomValueRange{static_cast<float>(value.as_number())};
     }
-    const float lo = static_cast<float>(value.get_number("min", 0.0));
-    const float hi = static_cast<float>(value.get_number("max", 0.0));
-    return RandomValueRange{lo, hi};
+    return RandomValueRange{static_cast<float>(value.get_number("min", 0.0)),
+                            static_cast<float>(value.get_number("max", 0.0))};
 }
 
-[[nodiscard]] inline std::vector<LootCondition> read_conditions(const core::JsonValue& owner) {
+[[nodiscard]] inline std::vector<LootCondition> read_conditions(const core::JsonValue& owner,
+                                                               const LootRegistries& registries) {
     std::vector<LootCondition> out;
     const auto* array = owner.get_array("conditions");
     if (array == nullptr) return out;
 
     for (const auto& item : *array) {
         const auto tag = item.get_string("condition");
-        LootCondition condition;
-        if (tag == "random_chance") {
-            condition.kind = LootCondition::Kind::RandomChance;
-            condition.chance = static_cast<float>(item.get_number("chance", 0.0));
-        } else if (tag == "random_chance_with_looting") {
-            condition.kind = LootCondition::Kind::RandomChanceWithLooting;
-            condition.chance = static_cast<float>(item.get_number("chance", 0.0));
-            condition.looting_multiplier = static_cast<float>(item.get_number("looting_multiplier", 0.0));
-        } else if (tag == "killed_by_player") {
-            condition.kind = LootCondition::Kind::KilledByPlayer;
-        } else {
-            continue; // 未实现的条件下整个条目跳过（与原版“只解析已注册条件”一致）
-        }
-        out.push_back(condition);
+        const auto* factory = registries.find_condition(tag);
+        if (factory == nullptr) continue; // 未注册条件：跳过（原版对未知条件同样忽略）
+        if (auto condition = (*factory)(item)) out.push_back(std::move(*condition));
     }
     return out;
 }
 
-[[nodiscard]] inline std::vector<LootFunction> read_functions(const core::JsonValue& owner) {
+[[nodiscard]] inline std::vector<LootFunction> read_functions(const core::JsonValue& owner,
+                                                             const LootRegistries& registries) {
     std::vector<LootFunction> out;
     const auto* array = owner.get_array("functions");
     if (array == nullptr) return out;
 
     for (const auto& item : *array) {
         const auto tag = item.get_string("function");
-        LootFunction function;
-        function.conditions = read_conditions(item);
-        if (tag == "set_count") {
-            function.kind = LootFunction::Kind::SetCount;
-            const auto* count = item.find("count");
-            if (count == nullptr) continue;
-            function.count = read_range(*count);
-        } else if (tag == "set_data" || tag == "set_damage") {
-            function.kind = LootFunction::Kind::SetData;
-            const auto* data = item.find("data");
-            if (data != nullptr) {
-                function.count = RandomValueRange{static_cast<float>(data->as_number())};
-            } else if (const auto* damage = item.find("damage"); damage != nullptr) {
-                function.count = read_range(*damage);
-            }
-        } else if (tag == "looting_enchant") {
-            function.kind = LootFunction::Kind::LootingEnchant;
-            if (const auto* count = item.find("count"); count != nullptr) {
-                function.count = read_range(*count);
-            }
-            function.limit = static_cast<int>(item.get_int("limit", 0));
-        } else {
-            continue;
-        }
-        out.push_back(function);
+        const auto* factory = registries.find_function(tag);
+        if (factory == nullptr) continue;
+        auto function = (*factory)(item);
+        if (!function) continue;
+        function->conditions = read_conditions(item, registries);
+        out.push_back(std::move(*function));
     }
     return out;
 }
 
+// 内置条件/函数注册（对齐 vanilla 静态初始化里的 registerCondition/registerFunction）
+[[nodiscard]] inline LootRegistries make_default_registries(const SmeltResolver& smelt) {
+    LootRegistries registries;
+
+    registries.add_condition("random_chance", [](const core::JsonValue& json) -> std::optional<LootCondition> {
+        LootCondition condition;
+        condition.kind = LootCondition::Kind::RandomChance;
+        condition.chance = static_cast<float>(json.get_number("chance", 0.0));
+        return condition;
+    });
+
+    registries.add_condition("random_chance_with_looting", [](const core::JsonValue& json) -> std::optional<LootCondition> {
+        LootCondition condition;
+        condition.kind = LootCondition::Kind::RandomChanceWithLooting;
+        condition.chance = static_cast<float>(json.get_number("chance", 0.0));
+        condition.looting_multiplier = static_cast<float>(json.get_number("looting_multiplier", 0.0));
+        return condition;
+    });
+
+    registries.add_condition("killed_by_player", [](const core::JsonValue&) -> std::optional<LootCondition> {
+        LootCondition condition;
+        condition.kind = LootCondition::Kind::KilledByPlayer;
+        return condition;
+    });
+
+    registries.add_function("set_count", [](const core::JsonValue& json) -> std::optional<LootFunction> {
+        const auto* count = json.find("count");
+        if (count == nullptr) return std::nullopt;
+        LootFunction function;
+        function.kind = LootFunction::Kind::SetCount;
+        function.count = read_range(*count);
+        return function;
+    });
+
+    registries.add_function("set_data", [](const core::JsonValue& json) -> std::optional<LootFunction> {
+        const auto* data = json.find("data");
+        if (data == nullptr) return std::nullopt;
+        LootFunction function;
+        function.kind = LootFunction::Kind::SetData;
+        function.count = RandomValueRange{static_cast<float>(data->as_number())};
+        return function;
+    });
+
+    registries.add_function("set_damage", [](const core::JsonValue& json) -> std::optional<LootFunction> {
+        const auto* damage = json.find("damage");
+        if (damage == nullptr) return std::nullopt;
+        LootFunction function;
+        function.kind = LootFunction::Kind::SetData;
+        function.count = read_range(*damage);
+        return function;
+    });
+
+    registries.add_function("looting_enchant", [](const core::JsonValue& json) -> std::optional<LootFunction> {
+        LootFunction function;
+        function.kind = LootFunction::Kind::LootingEnchant;
+        if (const auto* count = json.find("count"); count != nullptr) function.count = read_range(*count);
+        function.limit = static_cast<int>(json.get_int("limit", 0));
+        return function;
+    });
+
+    // furnace_smelt：加载期把配方解析成产物 id（熔炉配方静态，等价于 apply 期查询）
+    registries.add_function("furnace_smelt", [smelt](const core::JsonValue&) -> std::optional<LootFunction> {
+        LootFunction function;
+        function.kind = LootFunction::Kind::Smelt;
+        (void)smelt; // 产物 id 在条目解析时按物品逐个解析（见 load）
+        return function;
+    });
+
+    return registries;
+}
+
 }  // namespace detail
 
-inline bool LootTable::load(const core::JsonValue& json, const ItemResolver& resolver) {
+inline bool LootTable::load(const core::JsonValue& json, const ItemResolver& resolver,
+                            const LootRegistries& registries, const SmeltResolver& smelt) {
     pools.clear();
     const auto* pool_array = json.get_array("pools");
     if (pool_array == nullptr) return false;
@@ -282,7 +395,7 @@ inline bool LootTable::load(const core::JsonValue& json, const ItemResolver& res
     for (const auto& pool_json : *pool_array) {
         LootPool pool;
         pool.name = std::string{pool_json.get_string("name", "")};
-        pool.conditions = detail::read_conditions(pool_json);
+        pool.conditions = detail::read_conditions(pool_json, registries);
 
         if (const auto* rolls = pool_json.find("rolls"); rolls != nullptr) {
             pool.rolls = detail::read_range(*rolls);
@@ -298,7 +411,7 @@ inline bool LootTable::load(const core::JsonValue& json, const ItemResolver& res
             LootEntry entry;
             entry.weight = static_cast<int>(entry_json.get_int("weight", 1));
             entry.quality = static_cast<int>(entry_json.get_int("quality", 0));
-            entry.conditions = detail::read_conditions(entry_json);
+            entry.conditions = detail::read_conditions(entry_json, registries);
 
             const auto type_tag = entry_json.get_string("type", "item");
             if (type_tag == "empty") {
@@ -313,7 +426,17 @@ inline bool LootTable::load(const core::JsonValue& json, const ItemResolver& res
                 const auto id = resolver ? resolver(item_name) : std::nullopt;
                 if (!id) continue; // 未注册物品：跳过（原版会抛异常，服务端更稳妥是跳过）
                 entry.item_id = *id;
-                entry.functions = detail::read_functions(entry_json);
+                entry.functions = detail::read_functions(entry_json, registries);
+
+                // furnace_smelt 的产物在此按具体物品解析
+                if (smelt) {
+                    for (auto& function : entry.functions) {
+                        if (function.kind != LootFunction::Kind::Smelt) continue;
+                        if (const auto result = smelt(entry.item_id); result.has_value()) {
+                            function.smelt_result = *result;
+                        }
+                    }
+                }
             } else {
                 continue;
             }

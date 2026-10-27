@@ -77,11 +77,13 @@ public:
         SetCount,
         SetData,        // set_data / set_damage 同语义：写 damage
         LootingEnchant, // looting_enchant
+        Smelt,          // furnace_smelt：掉落物替换为熔炼产物
     };
 
     Kind kind{Kind::SetCount};
     RandomValueRange count{1.0f};
     int limit{0};
+    std::int16_t smelt_result{-1};  // Smelt 用：加载期由熔炉配方解析出的产物 id
     std::vector<LootCondition> conditions;
 
     // apply：对齐 vanilla 各 LootFunction.apply
@@ -95,6 +97,14 @@ public:
             case Kind::SetData:
                 stack.damage = static_cast<std::int16_t>(count.generate_int(rand));
                 break;
+            case Kind::Smelt: {
+                // vanilla Smelt.apply：换成熔炼产物并保留数量；无配方则原样返回
+                if (smelt_result >= 0) {
+                    stack.id = smelt_result;
+                    stack.damage = 0;
+                }
+                break;
+            }
             case Kind::LootingEnchant: {
                 if (!ctx.has_living_killer) break;
                 if (ctx.looting_modifier == 0) break;
