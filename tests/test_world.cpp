@@ -21,6 +21,7 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_layer_biome.hpp"
 #include "cyane/world/gen_layer_voronoi.hpp"
 #include "cyane/world/gen_layer_river.hpp"
 #include "cyane/world/gen_layer_smooth.hpp"
@@ -1825,4 +1826,99 @@ CYANE_TEST(biome_table_ids_match_vanilla_registration) {
     CYANE_CHECK_EQ(cyane::world::biome::kSavanna.id, 35);
     CYANE_CHECK_EQ(cyane::world::biome::kSavannaPlateau.id, 36);
     CYANE_CHECK_EQ(cyane::world::biome::kSavannaPlateau.base_height, 1.5f);
+}
+
+CYANE_TEST(gen_layer_biome_bands_match_spigot_arrays) {
+    // 数组内容取自 Spigot 反编译（v1_12_R1.GenLayerBiome）。
+    using namespace cyane::world::layer;
+
+    class Fixed final : public GenLayer {
+    public:
+        Fixed(std::vector<std::int32_t> values) : GenLayer(0), values_(std::move(values)) {}
+        [[nodiscard]] std::vector<std::int32_t> get_ints(std::int32_t, std::int32_t,
+                                                         std::int32_t width,
+                                                         std::int32_t height) override {
+            return std::vector<std::int32_t>(values_.begin(),
+                                             values_.begin() +
+                                                 static_cast<std::ptrdiff_t>(width) * height);
+        }
+    private:
+        std::vector<std::int32_t> values_;
+    };
+
+    const auto contains = [](std::initializer_list<std::int32_t> set, std::int32_t value) {
+        for (const auto candidate : set) {
+            if (candidate == value) return true;
+        }
+        return false;
+    };
+
+    // 逐个温度带跑多次，断言输出落在该带的候选集合里
+    for (int round = 0; round < 40; ++round) {
+        // 带 1（无标记）
+        {
+            auto parent = std::make_shared<Fixed>(std::vector<std::int32_t>(64, 1));
+            GenLayerBiome layer{200, parent, false};
+            layer.init_world_gen_seed(12345);
+            const auto out = layer.get_ints(0, 0, 8, 8);
+            CYANE_CHECK(contains({biome_ids::kDesert, biome_ids::kSavanna, biome_ids::kPlains},
+                                 out[0]));
+        }
+        // 带 1 + 标记 → mesa_rock / mesa_clear_rock
+        {
+            auto parent = std::make_shared<Fixed>(std::vector<std::int32_t>(64, 1 | (3 << 8)));
+            GenLayerBiome layer{200, parent, false};
+            layer.init_world_gen_seed(12345);
+            const auto out = layer.get_ints(0, 0, 8, 8);
+            CYANE_CHECK(contains({biome_ids::kMesaRock, biome_ids::kMesaClearRock}, out[0]));
+        }
+        // 带 2 + 标记 → jungle
+        {
+            auto parent = std::make_shared<Fixed>(std::vector<std::int32_t>(64, 2 | (1 << 8)));
+            GenLayerBiome layer{200, parent, false};
+            layer.init_world_gen_seed(12345);
+            CYANE_CHECK_EQ(layer.get_ints(0, 0, 8, 8)[0], biome_ids::kJungle);
+        }
+        // 带 2 无标记 → warm 集合
+        {
+            auto parent = std::make_shared<Fixed>(std::vector<std::int32_t>(64, 2));
+            GenLayerBiome layer{200, parent, false};
+            layer.init_world_gen_seed(12345);
+            const auto out = layer.get_ints(0, 0, 8, 8);
+            CYANE_CHECK(contains({biome_ids::kForest, biome_ids::kRoofedForest,
+                                  biome_ids::kExtremeHills, biome_ids::kPlains,
+                                  biome_ids::kBirchForest, biome_ids::kSwampland},
+                                 out[0]));
+        }
+        // 带 3 + 标记 → redwood_taiga
+        {
+            auto parent = std::make_shared<Fixed>(std::vector<std::int32_t>(64, 3 | (1 << 8)));
+            GenLayerBiome layer{200, parent, false};
+            layer.init_world_gen_seed(12345);
+            CYANE_CHECK_EQ(layer.get_ints(0, 0, 8, 8)[0], biome_ids::kRedwoodTaiga);
+        }
+        // 带 4 → icy 集合
+        {
+            auto parent = std::make_shared<Fixed>(std::vector<std::int32_t>(64, 4));
+            GenLayerBiome layer{200, parent, false};
+            layer.init_world_gen_seed(12345);
+            const auto out = layer.get_ints(0, 0, 8, 8);
+            CYANE_CHECK(contains({biome_ids::kIceFlats, biome_ids::kTaigaCold}, out[0]));
+        }
+    }
+
+    // 海洋与蘑菇岛原样透传
+    {
+        auto parent = std::make_shared<Fixed>(std::vector<std::int32_t>{
+            biome_ids::kOcean, biome_ids::kDeepOcean, biome_ids::kFrozenOcean,
+            biome_ids::kMushroomIsland, 99});
+        GenLayerBiome layer{200, parent, false};
+        layer.init_world_gen_seed(12345);
+        const auto out = layer.get_ints(0, 0, 5, 1);
+        CYANE_CHECK_EQ(out[0], biome_ids::kOcean);
+        CYANE_CHECK_EQ(out[1], biome_ids::kDeepOcean);
+        CYANE_CHECK_EQ(out[2], biome_ids::kFrozenOcean);
+        CYANE_CHECK_EQ(out[3], biome_ids::kMushroomIsland);
+        CYANE_CHECK_EQ(out[4], biome_ids::kMushroomIsland);  // 其它值落到蘑菇岛
+    }
 }
