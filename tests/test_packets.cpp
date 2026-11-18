@@ -3,6 +3,7 @@
 
 #include "cyane/item/item_stack.hpp"
 #include "cyane/net/packet_writers.hpp"
+#include "cyane/proto/play_fields.hpp"
 #include "cyane/world/blocks.hpp"
 #include "test_framework.hpp"
 
@@ -140,4 +141,33 @@ CYANE_TEST(packet_named_sound_encodes_registry_id_and_block_center) {
     ByteWriter big;
     net::writers::write_named_sound(big, 300, 4, 0, 0, 0, 1.0f, 1.0f);
     CYANE_CHECK(payload_is(big, "ac 02 04 00 00 00 04 00 00 00 04 00 00 00 04 3f 80 00 00 3f 80 00 00"));
+}
+
+CYANE_TEST(entity_shared_flags_bits_match_vanilla_setFlag) {
+    // Entity.setFlag 的位序：0=着火、1=潜行、3=疾跑。
+    // 曾经把疾跑写成 0x01，客户端会把疾跑玩家渲染成着火。
+    using namespace cyane::proto::entity_flags;
+    CYANE_CHECK_EQ(static_cast<int>(kOnFire), 0x01);
+    CYANE_CHECK_EQ(static_cast<int>(kSneaking), 0x02);
+    CYANE_CHECK_EQ(static_cast<int>(kSprinting), 0x08);
+    CYANE_CHECK_EQ(static_cast<int>(kInvisible), 0x20);
+    CYANE_CHECK_EQ(static_cast<int>(kGlowing), 0x40);
+    // 疾跑与着火必须互不重叠
+    CYANE_CHECK_EQ(static_cast<int>(kSprinting & kOnFire), 0);
+    CYANE_CHECK_EQ(static_cast<int>(kSprinting & kSneaking), 0);
+}
+
+CYANE_TEST(game_mode_parses_names_shortnames_and_ids) {
+    using namespace cyane::proto::game_mode;
+    CYANE_CHECK_EQ(static_cast<int>(*parse("survival")), 0);
+    CYANE_CHECK_EQ(static_cast<int>(*parse("s")), 0);
+    CYANE_CHECK_EQ(static_cast<int>(*parse("c")), 1);
+    CYANE_CHECK_EQ(static_cast<int>(*parse("a")), 2);
+    CYANE_CHECK_EQ(static_cast<int>(*parse("sp")), 3);
+    CYANE_CHECK(!parse("nope").has_value());
+    for (std::int32_t id = 0; id <= 3; ++id) {
+        CYANE_CHECK_EQ(static_cast<int>(*from_id(id)), id);
+    }
+    CYANE_CHECK(!from_id(-1).has_value());
+    CYANE_CHECK(!from_id(4).has_value());
 }

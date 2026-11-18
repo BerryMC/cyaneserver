@@ -1012,9 +1012,14 @@ void Server::apply_explosion(double x, double y, double z, float power) {
                 hub_->broadcast_near(cpos->x, cpos->z, radius, 0, proto::play_cb::kBlockChange,
                                      change.data());
             }
-            records.push_back({static_cast<std::int8_t>(pos.x - static_cast<std::int32_t>(std::floor(x))),
-                               static_cast<std::int8_t>(pos.y - static_cast<std::int32_t>(std::floor(y))),
-                               static_cast<std::int8_t>(pos.z - static_cast<std::int32_t>(std::floor(z)))});
+            // 原版 SPacketExplosion.writePacketData 用 (int)posX 向零截断；
+            // 客户端解码同样用 (int)posX。用 floor 会在爆心坐标为负非整数时整体偏移 1 格。
+            const auto base_x = static_cast<std::int32_t>(x);
+            const auto base_y = static_cast<std::int32_t>(y);
+            const auto base_z = static_cast<std::int32_t>(z);
+            records.push_back({static_cast<std::int8_t>(pos.x - base_x),
+                               static_cast<std::int8_t>(pos.y - base_y),
+                               static_cast<std::int8_t>(pos.z - base_z)});
         }
     }
 
@@ -1242,16 +1247,15 @@ std::vector<net::Mob> Server::all_mobs() const {
 }
 
 bool Server::set_player_gamemode(std::string_view name, std::string_view mode) {
+    const auto parsed = proto::game_mode::parse(mode);
+    if (!parsed.has_value()) {
+        return false;
+    }
     const std::uint32_t target_id = hub_->player_id_by_name(name);
     if (target_id == 0) {
         return false;
     }
-    std::uint8_t gm;
-    if (mode == "survival") gm = proto::game_mode::kSurvival;
-    else if (mode == "creative") gm = proto::game_mode::kCreative;
-    else if (mode == "adventure") gm = proto::game_mode::kAdventure;
-    else if (mode == "spectator") gm = proto::game_mode::kSpectator;
-    else return false;
+    const std::uint8_t gm = *parsed;
     // 1.12.2 用 PlayerInfo(0x2E) action=2 (CHANGE_GAME_MODE 序数) 更新游戏模式；
     // 同时把切换指令投递给目标连接，使其行为判定与 PlayerAbilities 一并更新
     ByteWriter info;

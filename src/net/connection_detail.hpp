@@ -6,6 +6,7 @@
 
 #include "cyane/core/bytes.hpp"
 #include "cyane/proto/packet_ids.hpp"
+#include "cyane/proto/play_fields.hpp"
 #include "cyane/world/chunk.hpp"
 
 // Connection 各翻译单元共享的编码 helper。仅供 src/net/connection*.cpp 内部使用。
@@ -79,17 +80,17 @@ inline void write_named_spawn(ByteWriter& out, std::uint32_t entity_id,
     out.u8(0xFF);
 }
 
-// EntityMetadata 更新玩家的 SharedFlags（index 0）：
-//   bit 0x01 = Sprinting, bit 0x02 = Sneaking
-// 用于告诉其他玩家当前玩家的潜行/疾跑状态（行军、潜行箭头等）
+// EntityMetadata 更新玩家的 SharedFlags（index 0）。
+// 位定义来自 Entity.setFlag：bit0=着火、bit1=潜行、bit3=疾跑，
+// 即 setSneaking→setFlag(1)=0x02、setSprinting→setFlag(3)=0x08。
 inline void write_shared_flags_meta(ByteWriter& out, std::uint32_t entity_id,
                                     bool sneaking, bool sprinting) {
     out.varint(static_cast<std::int32_t>(entity_id));
     out.varint(0);  // index = 0 = SharedFlags
     out.varint(1);  // serializer = BYTE类型
     std::uint8_t flags = 0;
-    if (sprinting) flags |= 0x01;
-    if (sneaking) flags |= 0x02;
+    if (sprinting) flags |= proto::entity_flags::kSprinting;
+    if (sneaking) flags |= proto::entity_flags::kSneaking;
     out.u8(flags);
 }
 

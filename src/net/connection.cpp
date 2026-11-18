@@ -143,6 +143,10 @@ void Connection::tick(std::uint64_t now_ms) {
         return;
     }
     now_ms_ = now_ms;
+    // 受伤无敌帧衰减（EntityLivingBase.onUpdate：hurtResistantTime 每 tick -1）
+    if (hurt_resistant_ticks_ > 0) {
+        --hurt_resistant_ticks_;
+    }
     // 先投递他人广播来的消息（进入 play 后 hub_entry_ 有效）
     drain_mailbox();
     // 挖掘裂纹进度推进

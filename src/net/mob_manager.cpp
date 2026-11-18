@@ -14,9 +14,10 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// 1.12.2 被动生物类型 id
-constexpr std::array<std::int32_t, 4> kPassiveTypes = {90, 91, 92, 93};  // 猪 羊 牛 鸡
-constexpr std::array<std::int32_t, 3> kHostileTypes = {39, 40, 51};     // 僵尸 骷髅 苦力怕
+// 1.12.2 被动生物类型 id（EntityList：90 猪 / 91 羊 / 92 牛 / 93 鸡）
+constexpr std::array<std::int32_t, 4> kPassiveTypes = {90, 91, 92, 93};
+// 敌对生物类型 id（EntityList：50 苦力怕 / 51 骷髅 / 54 僵尸）
+constexpr std::array<std::int32_t, 3> kHostileTypes = {54, 51, 50};     // 僵尸 骷髅 苦力怕
 constexpr std::int32_t kHostileScanInterval = 10;  // 目标扫描节流：每 0.5s
 constexpr std::int32_t kSpawnMinDistance = 24;       // 刷怪最小距离（格）
 constexpr std::int32_t kSpawnMaxDistance = 128;      // 刷怪最大距离（格）

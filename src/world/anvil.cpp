@@ -458,7 +458,10 @@ Result<Bytes> encode_chunk(ChunkPos pos, const Chunk& chunk, const ChunkEntities
     compound_set(level, "LastUpdate", nbt::make_i64(0));
     compound_set(level, "InhabitedTime", nbt::make_i64(0));
     compound_set(level, "TerrainPopulated", nbt::make_i8(1));
-    compound_set(level, "LightPopulated", nbt::make_i8(1));
+    // LightPopulated 必须为 false：cyane 不实现光照引擎，SkyLight 只能写全 0，
+    // 而原版 Chunk.onTick 只在 `!isLightPopulated && isTerrainPopulated` 时才
+    // checkLight()。写成 true 会让 Spigot/vanilla 把整区块当成已照亮且永不重算 → 全黑。
+    compound_set(level, "LightPopulated", nbt::make_i8(0));
     // HeightMap / Biomes：Spigot 与 vanilla 读档都依赖（缺失时服务端报
     // "Could not set level chunk heightmap, array length is 0 instead of 256"）
     compound_set(level, "HeightMap", nbt::make_int_array(build_height_map(chunk)));
@@ -560,7 +563,9 @@ Result<Bytes> encode_chunk_merged(ChunkPos pos, const Chunk& chunk, const ChunkE
         level->set("Biomes", nbt::make_byte_array(std::move(biome_bytes)));
     }
     if (level->find("TerrainPopulated") == nullptr) level->set("TerrainPopulated", nbt::make_i8(1));
-    if (level->find("LightPopulated") == nullptr) level->set("LightPopulated", nbt::make_i8(1));
+    // 本函数会覆写方块数据，光源需重算：强制 LightPopulated=false 让原版 checkLight()
+    // （原版 Chunk.setBlockState 会 relightBlock，cyane 无光照引擎，只能交回原版）
+    level->set("LightPopulated", nbt::make_i8(0));
     if (level->find("InhabitedTime") == nullptr) level->set("InhabitedTime", nbt::make_i64(0));
     if (level->find("TileTicks") == nullptr) level->set("TileTicks", nbt::make_list({}));
     if (level->find("Structures") == nullptr) level->set("Structures", nbt::make_compound({}));

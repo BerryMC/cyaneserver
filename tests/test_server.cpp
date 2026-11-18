@@ -124,7 +124,7 @@ CYANE_TEST(command_dispatcher_executes_unified_commands) {
     CYANE_CHECK_EQ(console.messages.at(0), std::string{"Time is 1000"});
     console.messages.clear();
     CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "time query day"));
-    CYANE_CHECK_EQ(console.messages.at(0), std::string{"Day is 1"});
+    CYANE_CHECK_EQ(console.messages.at(0), std::string{"Time is 1"});
     console.messages.clear();
     // 1.12.2 没有 noon / midnight 关键字
     CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "time set noon"));
@@ -221,4 +221,72 @@ CYANE_TEST(op_manager_loads_vanilla_array_and_legacy_map) {
     CYANE_CHECK_EQ(static_cast<int>(fresh.op_level("75bcdcde-9c24-35db-ba26-4913e8151672")), 0);
     std::filesystem::remove(missing);
     std::filesystem::remove(path);
+}
+
+CYANE_TEST(command_permission_levels_match_vanilla) {
+    auto settings = fast_config();
+    CYANE_CHECK(settings.has_value());
+    if (!settings) return;
+    auto server = cyane::Server::create(std::move(*settings));
+    CYANE_CHECK(server.has_value());
+    if (!server) return;
+    auto* srv = server->get();
+
+    // CommandBroadcast = 1：0 级被拒，1 级可发言
+    TestSender zero{0, true, "Zero"};
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(zero, *srv, "say hello"));
+    CYANE_CHECK(!zero.errors.empty());
+    TestSender one{1, true, "One"};
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(one, *srv, "say hello"));
+    CYANE_CHECK(one.errors.empty());
+
+    // CommandKill = 2：0 级即使无参也不能自杀
+    TestSender noop{0, true, "Noop"};
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(noop, *srv, "kill"));
+    CYANE_CHECK(!noop.errors.empty());
+
+    // CommandOp / CommandDeOp = 3：3 级足够，2 级不足
+    TestSender level2{2, true, "Two"};
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(level2, *srv, "op Nobody"));
+    CYANE_CHECK(!level2.errors.empty());
+    TestSender level3{3, true, "Three"};
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(level3, *srv, "deop Nobody"));
+    // 3 级通过权限检查（具体结果取决于玩家是否存在，不能是权限错误）
+    bool permission_denied = false;
+    for (const auto& message : level3.errors) {
+        if (message.find("permission") != std::string::npos) permission_denied = true;
+    }
+    CYANE_CHECK(!permission_denied);
+}
+
+CYANE_TEST(gamemode_accepts_vanilla_short_names_and_ids) {
+    auto settings = fast_config();
+    CYANE_CHECK(settings.has_value());
+    if (!settings) return;
+    auto server = cyane::Server::create(std::move(*settings));
+    CYANE_CHECK(server.has_value());
+    if (!server) return;
+    auto* srv = server->get();
+
+    // GameType.byName：全名与 shortName 都要被接受（此前执行层只认全名，简写静默失败）
+    for (const auto name : {"survival", "s", "creative", "c", "adventure", "a", "spectator", "sp"}) {
+        const auto mode = cyane::proto::game_mode::parse(name);
+        CYANE_CHECK(mode.has_value());
+    }
+    CYANE_CHECK(!cyane::proto::game_mode::parse("nonsense").has_value());
+    CYANE_CHECK_EQ(static_cast<int>(*cyane::proto::game_mode::parse("sp")), 3);
+    CYANE_CHECK_EQ(static_cast<int>(*cyane::proto::game_mode::from_id(2)), 2);
+    CYANE_CHECK(!cyane::proto::game_mode::from_id(4).has_value());
+
+    // 命令层：简写不再报 "Unknown game mode"
+    TestSender console{4, false, "Server"};
+    for (const auto name : {"c", "s", "sp", "a", "creative"}) {
+        console.messages.clear();
+        console.errors.clear();
+        CYANE_CHECK(cyane::game::CommandDispatcher::execute(
+            console, *srv, std::string{"gamemode "} + name));
+        for (const auto& message : console.errors) {
+            CYANE_CHECK(message.find("Unknown game mode") == std::string::npos);
+        }
+    }
 }

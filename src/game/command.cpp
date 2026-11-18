@@ -49,11 +49,12 @@ namespace {
     return {cmd, args};
 }
 
+// GameType.byName 的名称/shortName 与数字 id 都接受（CommandGameMode 的两次解析）
 [[nodiscard]] std::optional<std::uint8_t> parse_mode(std::string_view s) noexcept {
-    if (s == "survival" || s == "s" || s == "0") return proto::game_mode::kSurvival;
-    if (s == "creative" || s == "c" || s == "1") return proto::game_mode::kCreative;
-    if (s == "adventure" || s == "a" || s == "2") return proto::game_mode::kAdventure;
-    if (s == "spectator" || s == "sp" || s == "3") return proto::game_mode::kSpectator;
+    if (const auto named = proto::game_mode::parse(s); named.has_value()) return named;
+    if (s.size() == 1 && s[0] >= '0' && s[0] <= '3') {
+        return proto::game_mode::from_id(s[0] - '0');
+    }
     return std::nullopt;
 }
 
@@ -200,8 +201,12 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         return true;
     }
 
-    // 4. say
+    // 4. say（CommandBroadcast.getRequiredPermissionLevel = 1）
     if (cmd == "say") {
+        if (op < 1) {
+            sender.send_feedback("You do not have permission to use this command.", true);
+            return true;
+        }
         if (args.empty()) {
             sender.send_feedback("/say <message ...>", true);
             return true;
@@ -362,8 +367,12 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         return true;
     }
 
-    // 8. kill（支持原版实体选择器 @a @p @r @e @s）
+    // 8. kill（支持原版实体选择器 @a @p @r @e @s；CommandKill 要求 level 2，无参自杀同样受限）
     if (cmd == "kill") {
+        if (op < 2) {
+            sender.send_feedback("You do not have permission to use this command.", true);
+            return true;
+        }
         if (args.empty()) {
             if (!sender.is_player()) {
                 sender.send_feedback("/kill [player|entity]", true);
@@ -447,7 +456,14 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             // 1.12.2 只有 day / night 两个关键字（CommandTime#execute）
             if (args[1] == "day") target_time = 1000;
             else if (args[1] == "night") target_time = 13000;
-            else if (auto parsed = parse_int64(args[1])) target_time = *parsed;
+            else if (auto parsed = parse_int64(args[1])) {
+                // CommandTime 用 parseInt(args[1], 0)：负数按 tooSmall 拒绝
+                if (*parsed < 0) {
+                    sender.send_feedback(std::format("Integer must not be less than 0, found {}", *parsed), true);
+                    return true;
+                }
+                target_time = *parsed;
+            }
             else {
                 sender.send_feedback(std::format("Unknown time: '{}'", args[1]), true);
                 return true;
@@ -476,7 +492,7 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             } else if (args[1] == "gametime") {
                 sender.send_feedback(std::format("Time is {}", server.world_age() % 2147483647LL));
             } else if (args[1] == "day") {
-                sender.send_feedback(std::format("Day is {}", server.time_of_day() / 24000 % 2147483647LL));
+                sender.send_feedback(std::format("Time is {}", server.time_of_day() / 24000 % 2147483647LL));
             }
             return true;
         }
@@ -531,7 +547,7 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             return true;
         }
         // commands.seed.success = Seed: %s
-        sender.send_feedback(std::format("Seed: [{}]", server.seed()));
+        sender.send_feedback(std::format("Seed: {}", server.seed()));
         return true;
     }
 
@@ -597,9 +613,9 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         return true;
     }
 
-    // 15. op (等级 4)
+    // 15. op（CommandOp.getRequiredPermissionLevel = 3）
     if (cmd == "op") {
-        if (op < 4) {
+        if (op < 3) {
             sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
@@ -617,9 +633,9 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         return true;
     }
 
-    // 16. deop
+    // 16. deop（CommandDeOp.getRequiredPermissionLevel = 3）
     if (cmd == "deop") {
-        if (op < 4) {
+        if (op < 3) {
             sender.send_feedback("You do not have permission to use this command.", true);
             return true;
         }
@@ -631,8 +647,8 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             // commands.deop.success = De-opped %s
             sender.send_feedback(std::format("De-opped {}", args[0]));
         } else {
-            // commands.deop.failed = Could not deop %s
-            sender.send_feedback(std::format("Could not deop {}", args[0]), true);
+            // commands.deop.failed = Could not de-op %s
+            sender.send_feedback(std::format("Could not de-op {}", args[0]), true);
         }
         return true;
     }

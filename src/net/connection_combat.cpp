@@ -149,6 +149,20 @@ void Connection::apply_damage(float amount, double from_x, double from_z) {
         armor += item::armor_points(inventory_.slot(i).id);
     }
     amount = item::damage_after_armor(amount, armor, 0.0f);
+    // EntityLivingBase.attackEntityFrom 的受伤冷却：
+    // hurtResistantTime > max/2（=10）时，伤害不高于上次则完全免疫，否则只补差值；
+    // 否则重置冷却并按全额结算。
+    if (hurt_resistant_ticks_ > kMaxHurtResistantTicks / 2) {
+        if (amount <= last_damage_) {
+            return;
+        }
+        const float extra = amount - last_damage_;
+        last_damage_ = amount;
+        amount = extra;
+    } else {
+        last_damage_ = amount;
+        hurt_resistant_ticks_ = kMaxHurtResistantTicks;
+    }
     health_ = std::max(0.0f, health_ - amount);
     ByteWriter health;
     health.f32(health_);
@@ -254,6 +268,8 @@ void Connection::kill_player() {
 void Connection::respawn_player() {
     dead_ = false;
     health_ = 20.0f;
+    hurt_resistant_ticks_ = 0;
+    last_damage_ = 0.0f;
     player_pos_ = spawn_point();
 
     // Respawn (0x35)：int dimension | byte difficulty | byte gameMode | string levelType

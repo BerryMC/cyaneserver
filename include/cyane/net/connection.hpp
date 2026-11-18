@@ -341,6 +341,10 @@ private:
     // 生命与死亡状态（伤害/重生）
     float health_{20.0f};
     bool dead_{false};
+    // EntityLivingBase 的受伤冷却：maxHurtResistantTime = 20；>10 时本次只结算超出上次的部分
+    std::int32_t hurt_resistant_ticks_{0};
+    float last_damage_{0.0f};
+    static constexpr std::int32_t kMaxHurtResistantTicks = 20;
 
     // 已发送给客户端的区块集合，与玩家所在区块 + 视距一同维护
     std::unordered_set<std::int64_t> loaded_chunks_;
