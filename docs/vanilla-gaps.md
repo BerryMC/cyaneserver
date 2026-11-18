@@ -6,7 +6,7 @@
 - 严重度：**P0** = 数据丢失/玩家可见的破缺；**P1** = 机制与原版不同；**P2** = 数值/文本差异
 - 状态：`待修` / `进行中` / `已修`
 
-统计：P0 12 条、P1 22 条、P2 18 条，已修 23 条，阻塞 1 条。
+统计：P0 10 条、P1 22 条、P2 18 条，已修 25 条，阻塞 1 条。
 
 ---
 
@@ -37,6 +37,8 @@
 | LOOT-04 | 空池保留（仍消耗 rolls 随机数） | `21d956b` |
 | LOOT-05 | `set_count` 不截断，按堆叠上限拆堆 | `21d956b` |
 | LOOT-06 | `killed_by_player` 支持 `inverse` | `21d956b` |
+| SYS-01 | 天气状态 + `updateWeatherBody` 周期 + ChangeGameState 1/2/7/8；`/weather` 实装 | `d54bb8d` |
+| SYS-02 | `/difficulty` 实装 + ServerDifficulty 广播 + 和平清除敌对生物 | `d54bb8d` |
 
 ---
 
@@ -49,8 +51,6 @@
 | AI-03 | 经验球 | `xp_orb.cpp:100-121` | `EntityXPOrb.java:114-146,168-173` | 无 8 格吸附、无 6000 tick 寿命、无 `xpCooldown` | 待修 |
 | AI-04 | 苦力怕 | `mob_manager.cpp:762` | `EntityAICreeperSwell.java:24-25` | 引信在 7 格就触发（原版 3 格起爆、7 格维持）；且永不近战 | 待修 |
 | COMBAT-02 | 战斗 | `connection_combat.cpp:60` | `EntityPlayer.java:1387-1390` | 无攻击冷却缩放，连点满额伤害 → DPS 约 5 倍；无暴击/横扫/附魔 | 待修 |
-| SYS-01 | 天气 | `command.cpp:497-508` | `CommandWeather.java:180-220` | 无任何天气状态与 `ChangeGameState(1/2/7/8)` 发包；`/weather` 只回显 | 待修 |
-| SYS-02 | 难度 | `command.cpp:521-524` | `CommandDifficulty.java:280-294` | 不校验不回写；和平不清敌对生物、不阻刷怪；困难无骷髅加速 | 待修 |
 | SYS-03 | 规则 | `server.cpp:548` | `GameRules.java` | 24 条规则只有 `doDaylightCycle` 被读取；`keepInventory` 无效导致死亡必掉物品 | 待修 |
 | LOOT-03 | 战利品 | `loot_table.hpp` 注册表 | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 4 个函数已注册为 Noop + 加载告警；真正生效依赖缺失的附魔表 / ItemStack NBT / 属性修饰符 | 部分（阻塞） |
 | GEN-01 | 群系 | `biome.hpp:57-109` | `GenLayer.java:22-88` | 自创 sin/cos 气候函数取代 20+ 层 GenLayer 链；无河流/海岛/丘陵/Voronoi，尺度差 1~2 个数量级 | 待修 |
