@@ -325,6 +325,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
             actual_seed = parsed_seed;
         }
         server->seed_ = actual_seed;
+        server->weather_rand_ = world::gen::JavaRandom{static_cast<std::uint64_t>(actual_seed)};
         // 注入世界生成器（使用 level.dat 的 RandomSeed）
         server->world_->set_generator(static_cast<std::uint64_t>(actual_seed));
         log::info("world generator initialized with seed {}", actual_seed);
@@ -417,6 +418,116 @@ void Server::save_world_now() {
             return;
         }
         log::info("saved {} chunks to {}", *saved, config_.world_dir);
+    }
+}
+
+void Server::update_weather() {
+    const bool was_raining = world_info_.raining;
+    auto& rand = weather_rand_;
+
+    if (world_info_.game_rules.get_bool("doWeatherCycle")) {
+        // clearWeatherTime：倒计时期间把 rain/thunder 钉在 1 或 2
+        if (world_info_.clear_weather_time > 0) {
+            --world_info_.clear_weather_time;
+            world_info_.thunder_time = world_info_.thundering ? 1 : 2;
+            world_info_.rain_time = world_info_.raining ? 1 : 2;
+        }
+        if (world_info_.thunder_time <= 0) {
+            world_info_.thunder_time = world_info_.thundering ? rand.next_int(12000) + 3600
+                                                              : rand.next_int(168000) + 12000;
+        } else {
+            --world_info_.thunder_time;
+            if (world_info_.thunder_time <= 0) {
+                world_info_.thundering = !world_info_.thundering;
+            }
+        }
+        if (world_info_.rain_time <= 0) {
+            world_info_.rain_time = world_info_.raining ? rand.next_int(12000) + 12000
+                                                        : rand.next_int(168000) + 12000;
+        } else {
+            --world_info_.rain_time;
+            if (world_info_.rain_time <= 0) {
+                world_info_.raining = !world_info_.raining;
+            }
+        }
+    }
+
+    // 强度渐变：原版用 double 中间量累加 0.01D
+    prev_thundering_strength_ = thundering_strength_;
+    thundering_strength_ = static_cast<float>(
+        std::clamp(static_cast<double>(thundering_strength_) + (world_info_.thundering ? 0.01 : -0.01),
+                   0.0, 1.0));
+    prev_raining_strength_ = raining_strength_;
+    raining_strength_ = static_cast<float>(
+        std::clamp(static_cast<double>(raining_strength_) + (world_info_.raining ? 0.01 : -0.01),
+                   0.0, 1.0));
+
+    if (hub_ == nullptr) return;
+    const auto send_state = [this](std::uint8_t state, float value) {
+        ByteWriter packet;
+        packet.u8(state);
+        packet.f32(value);
+        hub_->broadcast_all(proto::play_cb::kGameStateChange, packet.data());
+    };
+    // WorldServer.updateWeather：强度变化发 7/8，降雨状态翻转再补 1/2 + 7/8
+    if (prev_raining_strength_ != raining_strength_) send_state(7, raining_strength_);
+    if (prev_thundering_strength_ != thundering_strength_) send_state(8, thundering_strength_);
+    if (was_raining != world_info_.raining) {
+        send_state(was_raining ? 2 : 1, 0.0f);
+        send_state(7, raining_strength_);
+        send_state(8, thundering_strength_);
+    }
+}
+
+void Server::set_weather(std::string_view mode, std::int32_t duration_seconds) {
+    // CommandWeather.execute：默认 (300 + new Random().nextInt(600)) * 20 tick；
+    // 显式时长 1..1000000 秒。原版用的是临时 Random 而非 world.rand，故不按世界种子。
+    static thread_local std::mt19937 default_rng{std::random_device{}()};
+    std::int32_t ticks =
+        (300 + static_cast<std::int32_t>(default_rng() % 600)) * 20;
+    if (duration_seconds >= 0) {
+        ticks = std::clamp(duration_seconds, 1, 1000000) * 20;
+    }
+    if (mode == "clear") {
+        world_info_.clear_weather_time = ticks;
+        world_info_.rain_time = 0;
+        world_info_.thunder_time = 0;
+        world_info_.raining = false;
+        world_info_.thundering = false;
+    } else if (mode == "rain") {
+        world_info_.clear_weather_time = 0;
+        world_info_.rain_time = ticks;
+        world_info_.thunder_time = ticks;
+        world_info_.raining = true;
+        world_info_.thundering = false;
+    } else if (mode == "thunder") {
+        world_info_.clear_weather_time = 0;
+        world_info_.rain_time = ticks;
+        world_info_.thunder_time = ticks;
+        world_info_.raining = true;
+        world_info_.thundering = true;
+    }
+    // 不在此处发包：原版 updateWeather() 在 tick 循环里先于世界 tick 执行，
+    // 下一个 tick 就会按 was_raining 的差异发出 1/2 + 7/8。
+}
+
+void Server::set_difficulty(world::EnumDifficulty difficulty) {
+    world_info_.difficulty = difficulty;
+    if (hub_ != nullptr) {
+        ByteWriter packet;
+        packet.u8(static_cast<std::uint8_t>(static_cast<int>(difficulty)));
+        packet.boolean(world_info_.difficulty_locked);
+        hub_->broadcast_all(proto::play_cb::kServerDifficulty, packet.data());
+    }
+    // EntityMob.onUpdate：和平难度下敌对生物立即消失
+    if (difficulty == world::EnumDifficulty::Peaceful && mobs_ != nullptr) {
+        const auto removed = mobs_->despawn_hostile();
+        if (!removed.empty() && hub_ != nullptr) {
+            ByteWriter packet;
+            packet.varint(static_cast<std::int32_t>(removed.size()));
+            for (const auto id : removed) packet.varint(static_cast<std::int32_t>(id));
+            hub_->broadcast_all(proto::play_cb::kDestroyEntities, packet.data());
+        }
     }
 }
 
@@ -553,6 +664,7 @@ void Server::tick() {
             hub_->broadcast_all(proto::play_cb::kTimeUpdate, time_pkt.data());
         }
         // 原版 World.getWorldTime 存绝对值；昼夜相位按 % 24000 判定（负值视为冻结的夜晚）
+        update_weather();
         const auto day_phase = time_of_day_ >= 0 ? time_of_day_ % 24000 : 24000;
         const bool daytime = day_phase < 12000;
         const auto mob_events = mobs_->tick(*world_, players, daytime);

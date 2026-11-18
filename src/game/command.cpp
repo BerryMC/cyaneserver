@@ -1,7 +1,9 @@
 #include "cyane/game/command.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
+#include <optional>
 #include <cmath>
 #include <format>
 #include <string>
@@ -17,6 +19,45 @@
 namespace cyane::game {
 
 namespace {
+
+[[nodiscard]] bool equals_ignore_case(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// CommandDifficulty.getDifficultyFromCommand
+[[nodiscard]] std::optional<world::EnumDifficulty> parse_difficulty(std::string_view arg) {
+    if (equals_ignore_case(arg, "peaceful") || equals_ignore_case(arg, "p")) {
+        return world::EnumDifficulty::Peaceful;
+    }
+    if (equals_ignore_case(arg, "easy") || equals_ignore_case(arg, "e")) {
+        return world::EnumDifficulty::Easy;
+    }
+    if (equals_ignore_case(arg, "normal") || equals_ignore_case(arg, "n")) {
+        return world::EnumDifficulty::Normal;
+    }
+    if (equals_ignore_case(arg, "hard") || equals_ignore_case(arg, "h")) {
+        return world::EnumDifficulty::Hard;
+    }
+    return std::nullopt;
+}
+
+// options.difficulty.<name>
+[[nodiscard]] std::string_view difficulty_name(world::EnumDifficulty difficulty) noexcept {
+    switch (difficulty) {
+        case world::EnumDifficulty::Peaceful: return "Peaceful";
+        case world::EnumDifficulty::Easy: return "Easy";
+        case world::EnumDifficulty::Normal: return "Normal";
+        case world::EnumDifficulty::Hard: return "Hard";
+    }
+    return "Normal";
+}
 
 [[nodiscard]] std::string_view trim_ws(std::string_view s) noexcept {
     const auto first = s.find_first_not_of(" \t\r\n");
@@ -510,17 +551,38 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             sender.send_feedback("/weather <clear|rain|thunder> [duration in seconds]", true);
             return true;
         }
-        if (args[0] == "clear") {
-            // commands.weather.clear = Changing to clear weather
+        // CommandWeather：时长 1..1000000 秒，缺省 (300 + rand(600)) * 20 tick
+        std::int32_t duration = -1;
+        if (args.size() >= 2) {
+            const auto parsed = parse_int64(args[1]);
+            if (!parsed) {
+                sender.send_feedback(std::format("Unknown weather: '{}'", args[1]), true);
+                return true;
+            }
+            if (*parsed < 1) {
+                sender.send_feedback(
+                    std::format("Integer must not be less than 1, found {}", *parsed), true);
+                return true;
+            }
+            if (*parsed > 1000000) {
+                sender.send_feedback(
+                    std::format("Integer must not be more than 1000000, found {}", *parsed), true);
+                return true;
+            }
+            duration = static_cast<std::int32_t>(*parsed);
+        }
+        // 原版用 equalsIgnoreCase
+        if (equals_ignore_case(args[0], "clear")) {
             sender.send_feedback("Changing to clear weather");
-        } else if (args[0] == "rain") {
-            // commands.weather.rain = Changing to rainy weather
+            server.set_weather("clear", duration);
+        } else if (equals_ignore_case(args[0], "rain")) {
             sender.send_feedback("Changing to rainy weather");
-        } else if (args[0] == "thunder") {
-            // commands.weather.thunder = Changing to rain and thunder
+            server.set_weather("rain", duration);
+        } else if (equals_ignore_case(args[0], "thunder")) {
             sender.send_feedback("Changing to rain and thunder");
+            server.set_weather("thunder", duration);
         } else {
-            sender.send_feedback(std::format("Unknown weather: '{}'", args[0]), true);
+            sender.send_feedback("/weather <clear|rain|thunder> [duration in seconds]", true);
         }
         return true;
     }
@@ -535,8 +597,16 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             sender.send_feedback("/difficulty <new difficulty>", true);
             return true;
         }
-        // commands.difficulty.success = Set game difficulty to %s
-        sender.send_feedback(std::format("Set game difficulty to {}", args[0]));
+        // CommandDifficulty.getDifficultyFromCommand：名称/首字母，均大小写不敏感
+        const auto difficulty = parse_difficulty(args[0]);
+        if (!difficulty) {
+            // commands.difficulty.failure = Difficulty does not exist: %s
+            sender.send_feedback(std::format("Difficulty does not exist: {}", args[0]), true);
+            return true;
+        }
+        server.set_difficulty(*difficulty);
+        // commands.difficulty.success = The difficulty has been set to %s
+        sender.send_feedback(std::format("The difficulty has been set to {}", difficulty_name(*difficulty)));
         return true;
     }
 

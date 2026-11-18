@@ -290,6 +290,22 @@ public:
         return mobs_.size();
     }
 
+    // EntityMob.onUpdate：难度切到和平后敌对生物立即消失。返回移除的实体 id。
+    std::vector<std::uint32_t> despawn_hostile() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::uint32_t> removed;
+        for (auto it = mobs_.begin(); it != mobs_.end();) {
+            const auto species = world::mob_type(it->type);
+            if (species && species->hostile) {
+                removed.push_back(it->entity_id);
+                it = mobs_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return removed;
+    }
+
 
 private:
     [[nodiscard]] bool remove_locked(std::uint32_t id);

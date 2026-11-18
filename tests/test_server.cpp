@@ -290,3 +290,68 @@ CYANE_TEST(gamemode_accepts_vanilla_short_names_and_ids) {
         }
     }
 }
+
+CYANE_TEST(weather_command_drives_rain_and_thunder_state) {
+    auto settings = fast_config();
+    CYANE_CHECK(settings.has_value());
+    auto server = cyane::Server::create(std::move(*settings));
+    CYANE_CHECK(server.has_value());
+    auto* srv = server->get();
+    TestSender console{4, false, "Server"};
+
+    // 初始晴天
+    CYANE_CHECK(!srv->is_raining());
+    CYANE_CHECK(!srv->is_thundering());
+
+    // /weather rain 600：rain_time/thunder_time = 600*20，只有雨没有雷
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "weather rain 600"));
+    CYANE_CHECK(srv->is_raining());
+    CYANE_CHECK(!srv->is_thundering());
+
+    // /weather thunder 100
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "weather THUNDER 100"));
+    CYANE_CHECK(srv->is_raining());
+    CYANE_CHECK(srv->is_thundering());
+
+    // /weather clear：清天气并把 rain/thunder 时间归零
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "weather clear"));
+    CYANE_CHECK(!srv->is_raining());
+    CYANE_CHECK(!srv->is_thundering());
+    CYANE_CHECK_EQ(console.messages.size(), std::size_t{1});
+
+    // 时长越界被拒（parseInt(min=1, max=1000000)）
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "weather rain 0"));
+    CYANE_CHECK(!srv->is_raining());
+    CYANE_CHECK_EQ(console.messages.size(), std::size_t{1});
+    CYANE_CHECK(console.messages[0].find("less than 1") != std::string::npos);
+}
+
+CYANE_TEST(difficulty_command_sets_state_and_names) {
+    auto settings = fast_config();
+    CYANE_CHECK(settings.has_value());
+    auto server = cyane::Server::create(std::move(*settings));
+    CYANE_CHECK(server.has_value());
+    auto* srv = server->get();
+    TestSender console{4, false, "Server"};
+
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "difficulty hard"));
+    CYANE_CHECK(srv->difficulty() == cyane::world::EnumDifficulty::Hard);
+    CYANE_CHECK(console.messages.size() == 1);
+    CYANE_CHECK(console.messages[0] == "The difficulty has been set to Hard");
+
+    // 首字母简写 + 大小写不敏感
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "difficulty P"));
+    CYANE_CHECK(srv->difficulty() == cyane::world::EnumDifficulty::Peaceful);
+    CYANE_CHECK(console.messages[0] == "The difficulty has been set to Peaceful");
+
+    // 非法值：commands.difficulty.failure
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "difficulty nope"));
+    CYANE_CHECK(console.messages.size() == 1);
+    CYANE_CHECK(console.messages[0].find("Difficulty does not exist") != std::string::npos);
+    CYANE_CHECK(srv->difficulty() == cyane::world::EnumDifficulty::Peaceful);
+}

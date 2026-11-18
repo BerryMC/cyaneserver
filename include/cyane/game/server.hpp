@@ -105,6 +105,15 @@ public:
     [[nodiscard]] bool teleport_player(std::string_view name, double x, double y, double z, float yaw = 0.0f, float pitch = 0.0f);
     [[nodiscard]] bool give_player_item(std::string_view name, std::int16_t item_id, std::uint8_t count = 1, std::int16_t damage = 0);
     [[nodiscard]] bool clear_player_inventory(std::string_view name);
+    // 天气（对齐 WorldInfo 的 raining/thunderTime 等 + World.rainingStrength）
+    [[nodiscard]] bool is_raining() const noexcept { return world_info_.raining; }
+    [[nodiscard]] bool is_thundering() const noexcept { return world_info_.thundering; }
+    [[nodiscard]] float raining_strength() const noexcept { return raining_strength_; }
+    // CommandWeather：clear/rain/thunder + 可选时长（秒），内部按原版写入 5 个字段
+    void set_weather(std::string_view mode, std::int32_t duration_seconds = -1);
+    // 难度
+    [[nodiscard]] world::EnumDifficulty difficulty() const noexcept { return world_info_.difficulty; }
+    void set_difficulty(world::EnumDifficulty difficulty);
     // 时间管理
     [[nodiscard]] std::int64_t world_age() const noexcept { return world_age_; }
     [[nodiscard]] std::int64_t time_of_day() const noexcept { return time_of_day_; }
@@ -123,8 +132,17 @@ private:
     std::int64_t world_age_{0};
     std::int64_t time_of_day_{0};
     std::int64_t seed_{0};
+    // 天气强度渐变（World.rainingStrength / thunderingStrength，0.01/tick）
+    float raining_strength_{0.0f};
+    float thundering_strength_{0.0f};
+    float prev_raining_strength_{0.0f};
+    float prev_thundering_strength_{0.0f};
+    // World.updateWeatherBody 用的世界随机（原版 world.rand）
+    world::gen::JavaRandom weather_rand_{0};
 
     void tick();
+    // World.updateWeatherBody + WorldServer.updateWeather
+    void update_weather();
     // 苦力怕爆炸：范围伤害（玩家+生物）+ 破坏方块（含掉落）+ 音效/Explosion 包
     void apply_explosion(double x, double y, double z, float power);
     // 骷髅射箭：生成箭实体并广播 SpawnObject + 射击音效
