@@ -44,8 +44,11 @@ inline constexpr BiomeInfo kColdTaiga     {30,  "taiga_cold",            0.2f,  
 inline constexpr BiomeInfo kRedwoodTaiga  {32,  "redwood_taiga",         0.2f,   0.2f,   kStatePodzol, kStateDirt};
 inline constexpr BiomeInfo kSavanna       {35,  "savanna",               0.125f, 0.05f,  kStateGrass,  kStateDirt};
 inline constexpr BiomeInfo kSavannaPlateau{36,  "savanna_rock",          1.5f,   0.025f, kStateGrass,  kStateDirt};
-inline constexpr BiomeInfo kMesaPlateau   {38,  "mesa_clear_rock",       1.5f,   0.025f, static_cast<std::uint16_t>(179 << 4), static_cast<std::uint16_t>(179 << 4)};
-inline constexpr BiomeInfo kMesa          {39,  "mesa",                  0.125f, 0.05f,  static_cast<std::uint16_t>(179 << 4), static_cast<std::uint16_t>(179 << 4)};
+// 原版 Biome.java:582-585 的注册：37 mesa(0.1/0.2)、38 mesa_rock(1.5/0.025)、
+// 39 mesa_clear_rock(1.5/0.025)。此前把 mesa 记成 39、mesa_clear_rock 记成 38。
+inline constexpr BiomeInfo kMesa          {37,  "mesa",                  0.1f,   0.2f,   static_cast<std::uint16_t>(179 << 4), static_cast<std::uint16_t>(179 << 4)};
+inline constexpr BiomeInfo kMesaPlateau   {38,  "mesa_rock",             1.5f,   0.025f, static_cast<std::uint16_t>(179 << 4), static_cast<std::uint16_t>(179 << 4)};
+inline constexpr BiomeInfo kMesaClearRock {39,  "mesa_clear_rock",       1.5f,   0.025f, static_cast<std::uint16_t>(179 << 4), static_cast<std::uint16_t>(179 << 4)};
 inline constexpr BiomeInfo kVoid          {127, "void",                  0.1f,   0.2f,   kStateAir,    kStateAir};
 inline constexpr BiomeInfo kMutatedForest {132, "mutated_forest",        0.1f,   0.4f,   kStateGrass,  kStateDirt};
 inline constexpr BiomeInfo kMutatedSavanna{163, "mutated_savanna",       0.36f,  1.225f, kStateGrass,  kStateDirt};

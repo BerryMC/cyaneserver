@@ -1803,3 +1803,26 @@ CYANE_TEST(gen_layer_river_mix_applies_biome_overrides) {
     CYANE_CHECK_EQ(got[4], biome_ids::kMushroomIslandShore);
     CYANE_CHECK_EQ(got[5], 1);                          // 非河流保持不变
 }
+
+CYANE_TEST(biome_table_ids_match_vanilla_registration) {
+    // 原版 Biome.java 的 registerBiome 顺序：37 mesa、38 mesa_rock、39 mesa_clear_rock。
+    // 此前项目把 mesa 记成 39、mesa_clear_rock 记成 38，高度也串了。
+    CYANE_CHECK_EQ(cyane::world::biome::kMesa.id, 37);
+    CYANE_CHECK_EQ(std::string_view(cyane::world::biome::kMesa.name), std::string_view("mesa"));
+    CYANE_CHECK_EQ(cyane::world::biome::kMesa.base_height, 0.1f);
+    CYANE_CHECK_EQ(cyane::world::biome::kMesa.height_variation, 0.2f);
+
+    CYANE_CHECK_EQ(cyane::world::biome::kMesaPlateau.id, 38);
+    CYANE_CHECK_EQ(std::string_view(cyane::world::biome::kMesaPlateau.name), std::string_view("mesa_rock"));
+    CYANE_CHECK_EQ(cyane::world::biome::kMesaPlateau.base_height, 1.5f);
+
+    CYANE_CHECK_EQ(cyane::world::biome::kMesaClearRock.id, 39);
+    CYANE_CHECK_EQ(std::string_view(cyane::world::biome::kMesaClearRock.name),
+                   std::string_view("mesa_clear_rock"));
+    CYANE_CHECK_EQ(cyane::world::biome::kMesaClearRock.height_variation, 0.025f);
+
+    // savanna 35(0.125/0.05) 与 savanna_rock 36(1.5/0.025) 本就正确，一并锁定
+    CYANE_CHECK_EQ(cyane::world::biome::kSavanna.id, 35);
+    CYANE_CHECK_EQ(cyane::world::biome::kSavannaPlateau.id, 36);
+    CYANE_CHECK_EQ(cyane::world::biome::kSavannaPlateau.base_height, 1.5f);
+}
