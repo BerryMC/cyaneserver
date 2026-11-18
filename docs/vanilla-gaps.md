@@ -6,7 +6,7 @@
 - 严重度：**P0** = 数据丢失/玩家可见的破缺；**P1** = 机制与原版不同；**P2** = 数值/文本差异
 - 状态：`待修` / `进行中` / `已修`
 
-统计：P0 10 条、P1 23 条、P2 18 条，已修 29 条，阻塞 1 条。
+统计：P0 10 条、P1 24 条、P2 18 条，已修 33 条，阻塞 1 条。
 
 ---
 
@@ -43,6 +43,10 @@
 | SYS-03b | `/gamerule` 实装（列表/查询/设置/布尔校验/未知规则） | `e87b27a` |
 | SYS-03c | `keepInventory` 接入死亡掉落；`doMobSpawning` 接入自然刷怪 | `e87b27a` |
 | SYS-03d | `reducedDebugInfo` 变化广播 EntityStatus 22/23 | `e87b27a` |
+| CONTAINER-09 | 盔甲自动装备 + 盾牌进副手（`item::equipment_slot`，分支顺序同原版） | `b2aa085` |
+| CONTAINER-10 | THROW 前置（光标须为空）与 -999 右键只丢 1 个 | `b2aa085` |
+| CONTAINER-11 | 熔炉窗口把物品拖到窗外直接删除（同 CONTAINER-01 根因） | `b2aa085` |
+| COMBAT-02 | 攻击冷却 `damage *= 0.2 + f2²*0.8` + `item::attack_speed` 表 | `b2aa085` |
 
 ---
 
@@ -54,8 +58,8 @@
 | AI-02 | 移动 | `mob_manager.cpp:969` | `EntityLivingBase.java:216` | 上台阶 1.0（应 0.6），无 `velocity_y=0.42` 跳跃 | 待修 |
 | AI-03 | 经验球 | `xp_orb.cpp:100-121` | `EntityXPOrb.java:114-146,168-173` | 无 8 格吸附、无 6000 tick 寿命、无 `xpCooldown` | 待修 |
 | AI-04 | 苦力怕 | `mob_manager.cpp:762` | `EntityAICreeperSwell.java:24-25` | 引信在 7 格就触发（原版 3 格起爆、7 格维持）；且永不近战 | 待修 |
-| COMBAT-02 | 战斗 | `connection_combat.cpp:60` | `EntityPlayer.java:1387-1390` | 无攻击冷却缩放，连点满额伤害 → DPS 约 5 倍；无暴击/横扫/附魔 | 待修 |
 | LOOT-03 | 战利品 | `loot_table.hpp` 注册表 | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 4 个函数已注册为 Noop + 加载告警；真正生效依赖缺失的附魔表 / ItemStack NBT / 属性修饰符 | 部分（阻塞） |
+| COMBAT-03 | 战斗 | `connection_combat.cpp` | `EntityPlayer.java:1396-1460` | 暴击（下落中、非疾跑、`f2>0.9`，×1.5）与横扫（`flag && !flag2 && !flag1 && onGround`，邻近实体各 1 点 + 0.4 击退）未实现；击退增益也未接 | 待修 |
 | SYS-03e | 规则 | `server.cpp` / `mob_manager.cpp` | `GameRules.java` 各读取点 | 仍未接线：`doMobLoot` `doTileDrops` `doEntityDrops` `showDeathMessages` `naturalRegeneration` `randomTickSpeed` `doFireTick` `mobGriefing` `spawnRadius` `maxEntityCramming` `doLimitedCrafting` `spectatorsGenerateChunks` `logAdminCommands` `commandBlockOutput` `sendCommandFeedback` `announceAdvancements` | 待修 |
 | GEN-01 | 群系 | `biome.hpp:57-109` | `GenLayer.java:22-88` | 自创 sin/cos 气候函数取代 20+ 层 GenLayer 链；无河流/海岛/丘陵/Voronoi，尺度差 1~2 个数量级 | 待修 |
 | GEN-02 | 装饰 | `chunk_generator.hpp:55-67` | `ChunkGeneratorOverworld.java:390-503` | 无 populate 阶段，特征全裁在本区块 → 树/湖/矿脉在区块边界硬切 | 待修 |
@@ -69,8 +73,6 @@
 |---|---|---|---|---|---|
 
 
-| CONTAINER-09 | 容器 | `connection_inventory.cpp:168-192` | `ContainerPlayer.java:167-182` | 缺盔甲/副手 shift 自动装备 | 待修 |
-| CONTAINER-10 | 容器 | `connection_inventory.cpp:193-226` | `Container.java:441-451` | `THROW` 缺“光标必须为空”前置；窗口外右键丢整叠（应只丢 1） | 待修 |
 | AI-05 | 目标 | `mob_manager.cpp:516-534` | `EntityAITarget.java` | `unseen_ticks` 计的是“出范围”不是“看不见” → 僵尸隔墙永久追击 | 待修 |
 | AI-06 | 近战 | `mob_manager.cpp:943` | `EntityAIAttackMelee.java:139-160` | 挥击要求视线（原版不要求）→ 隔墙角贴脸不挥拳 | 待修 |
 | AI-07 | 骷髅 | `mob_manager.cpp:27,907` | `AbstractSkeleton.java:235-237`、`EntityArrow.java:368` | 射箭间隔写死 40（困难应 20）、箭伤写死 2.0；箭 5 秒空中自毁（原版无） | 待修 |
