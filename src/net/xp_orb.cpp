@@ -48,26 +48,34 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
             it->velocity_y -= 0.03f; // 重力 0.03/tick
         }
 
-        // 空气阻力
-        it->velocity_x *= 0.98f;
-        it->velocity_y *= 0.98f;
-        it->velocity_z *= 0.98f;
-
-        // 地面摩擦和落地反弹
-        auto state = world.block_at(bx, by, bz);
-        double slipperiness = world::block_slipperiness(state);
-        bool on_ground = world::is_solid(world.block_at(bx, by - 1, bz));
-
-        if (on_ground) {
-            it->velocity_x *= static_cast<float>(slipperiness) * 0.91f;
-            it->velocity_y = 0.0f;
-            it->velocity_z *= static_cast<float>(slipperiness) * 0.91f;
-            if (it->velocity_y < 0.0f) {
-                it->velocity_y = -it->velocity_y * -0.9f;
+        // EntityXPOrb.onUpdate：8 格内最近玩家吸引。
+        // d1..d3 = 位移/8，d4 = |d|，d5 = (1 - d4)^2，加速度 = d/d4 * d5 * 0.1
+        {
+            const PlayerSnapshot* nearest = nullptr;
+            double best_sq = 64.0;
+            for (const auto& p : players) {
+                const double ddx = p.x - it->x;
+                const double ddy = p.y - it->y;
+                const double ddz = p.z - it->z;
+                const double dsq = ddx * ddx + ddy * ddy + ddz * ddz;
+                if (dsq <= best_sq) {
+                    best_sq = dsq;
+                    nearest = &p;
+                }
             }
-        } else {
-            it->velocity_x *= static_cast<float>(slipperiness) * 0.91f;
-            it->velocity_z *= static_cast<float>(slipperiness) * 0.91f;
+            if (nearest != nullptr) {
+                const double d1 = (nearest->x - it->x) / 8.0;
+                const double d2 = (nearest->y + 1.62 / 2.0 - it->y) / 8.0;
+                const double d3 = (nearest->z - it->z) / 8.0;
+                const double d4 = std::sqrt(d1 * d1 + d2 * d2 + d3 * d3);
+                double d5 = 1.0 - d4;
+                if (d5 > 0.0) {
+                    d5 *= d5;
+                    it->velocity_x += static_cast<float>(d1 / d4 * d5 * 0.1);
+                    it->velocity_y += static_cast<float>(d2 / d4 * d5 * 0.1);
+                    it->velocity_z += static_cast<float>(d3 / d4 * d5 * 0.1);
+                }
+            }
         }
 
         // 更新位置（使用碰撞检测）
@@ -81,6 +89,24 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
         it->z = (box.min_z + box.max_z) * 0.5;
         it->on_ground = outcome.on_ground;
 
+        // EntityXPOrb：move 之后才施加摩擦。f = 0.98（落地时 slipperiness*0.98），
+        // y 恒乘 0.98，落地再乘 -0.9 反弹。
+        {
+            float f = 0.98f;
+            if (it->on_ground) {
+                const int ux = static_cast<int>(std::floor(it->x));
+                const int uy = static_cast<int>(std::floor(it->y)) - 1;
+                const int uz = static_cast<int>(std::floor(it->z));
+                f = static_cast<float>(world::block_slipperiness(world.block_at(ux, uy, uz))) * 0.98f;
+            }
+            it->velocity_x *= f;
+            it->velocity_y *= 0.98f;
+            it->velocity_z *= f;
+            if (it->on_ground) {
+                it->velocity_y *= -0.9f;
+            }
+        }
+
         // 更新同步坐标（每 20 tick 同步一次）
         if (it->age % 20 == 0) {
             result.teleported.push_back({
@@ -93,6 +119,11 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
 
         // 更新 age 和 delay
         ++it->age;
+        if (it->age >= 6000) {  // EntityXPOrb：xpOrbAge >= 6000 即消失
+            result.destroyed.push_back({.entity_id = it->entity_id});
+            it = orbs_.erase(it);
+            continue;
+        }
         if (it->delay_before_can_pickup > 0) {
             --it->delay_before_can_pickup;
         }
