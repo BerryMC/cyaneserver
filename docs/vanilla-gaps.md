@@ -6,7 +6,7 @@
 - 严重度：**P0** = 数据丢失/玩家可见的破缺；**P1** = 机制与原版不同；**P2** = 数值/文本差异
 - 状态：`待修` / `进行中` / `已修`
 
-统计：P0 15 条、P1 24 条、P2 18 条，已修 16 条。
+统计：P0 13 条、P1 22 条、P2 18 条，已修 18 条。
 
 ---
 
@@ -25,11 +25,13 @@
 | CMD-04 | `/gamemode c`/`1` 静默失败（命令层认简写、执行层只认全名） | `44e3c6f` |
 | CMD-05 | `/time set -1` 生效；`query day` 文本；`/seed` 方括号；`/deop` 文本 | `44e3c6f` |
 | COMBAT-01 | 玩家无受伤无敌帧，围殴伤害成倍叠加 | `44e3c6f` |
-| CONTAINER-02 | `slot_click` 补齐 mode 2/3/4/6（换位/复制/丢弃/收集） | `CONTAINER-02` |
-| CONTAINER-03 | QUICK_CRAFT 拖拽状态机（开始/加槽/结束，均分与每槽一个） | `CONTAINER-03` |
-| CONTAINER-04 | 背包窗口改用同一 `slot_click`，mode 0..6 全部生效 | `CONTAINER-04` |
-| CONTAINER-05 | 创造 CLONE 改为从服务端槽复制并限 64，不再采信客户端 count | `CONTAINER-05` |
-| CONTAINER-06 | ConfirmTransaction 改用 slotClick 返回值（含数量）比对 | `CONTAINER-06` |
+| CONTAINER-02 | `slot_click` 补齐 mode 2/3/4/6（换位/复制/丢弃/收集） | `4329bdd` |
+| CONTAINER-03 | QUICK_CRAFT 拖拽状态机（开始/加槽/结束，均分与每槽一个） | `4329bdd` |
+| CONTAINER-04 | 背包窗口改用同一 `slot_click`，mode 0..6 全部生效 | `4329bdd` |
+| CONTAINER-05 | 创造 CLONE 改为从服务端槽复制并限 64，不再采信客户端 count | `4329bdd` |
+| CONTAINER-06 | ConfirmTransaction 改用 slotClick 返回值（含数量）比对 | `4329bdd` |
+| CONTAINER-07 | 容器→背包 QUICK_MOVE 改为 reverse（从热区栏末尾往前填） | `4329bdd` |
+| CONTAINER-08 | 容器装满时余量留在源槽，不再继续在背包内搬动 | `4329bdd` |
 
 ---
 
@@ -58,8 +60,8 @@
 
 | ID | 区域 | 位置 | 原版参照 | 问题 | 状态 |
 |---|---|---|---|---|---|
-| CONTAINER-07 | 容器 | `connection_container.cpp:185-188` | `ContainerChest.java:70` | 容器→背包 `QUICK_MOVE` 方向反了（应 `reverse=true`，从热区栏末尾往前填） | 待修 |
-| CONTAINER-08 | 容器 | `connection_container.cpp:224-229` | `ContainerChest.java:75-78` | 容器装满时余量继续在背包内搬动（原版留在源槽） | 待修 |
+
+
 | CONTAINER-09 | 容器 | `connection_inventory.cpp:168-192` | `ContainerPlayer.java:167-182` | 缺盔甲/副手 shift 自动装备 | 待修 |
 | CONTAINER-10 | 容器 | `connection_inventory.cpp:193-226` | `Container.java:441-451` | `THROW` 缺“光标必须为空”前置；窗口外右键丢整叠（应只丢 1） | 待修 |
 | LOOT-04 | 战利品 | `loot_table.hpp:446` | `LootPool.java:301-311` | 空池被丢弃；原版空池仍消耗 rolls 随机数 → 同种子掉落不同 | 待修 |
