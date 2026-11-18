@@ -21,6 +21,9 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_layer_voronoi.hpp"
+#include "cyane/world/gen_layer_river.hpp"
+#include "cyane/world/gen_layer_smooth.hpp"
 #include "cyane/world/gen_layer_ocean.hpp"
 #include "cyane/world/gen_layer_edge.hpp"
 #include "cyane/world/gen_layer_add_snow.hpp"
@@ -1715,4 +1718,88 @@ CYANE_TEST(gen_layer_edge_mushroom_deep_match_reference) {
     for (std::size_t i = 0; i < expect_deep.size() && i < got_deep.size(); ++i) {
         CYANE_CHECK_EQ(got_deep[i], expect_deep[i]);
     }
+}
+
+CYANE_TEST(gen_layer_smooth_river_voronoi_match_reference) {
+    // 参考网格由独立 Python 实现生成，seed=12345、(-4,-4,8x8)。
+    using namespace cyane::world::layer;
+
+    auto l0 = std::make_shared<GenLayerIsland>(1);
+    auto l1 = std::make_shared<GenLayerAddIsland>(1, l0);
+    auto l2 = std::make_shared<GenLayerAddSnow>(2, l1);
+    auto l7 = std::make_shared<GenLayerDeepOcean>(4, l2);
+    auto smooth_layer = std::make_shared<GenLayerSmooth>(1000, l7);
+    auto river_init = std::make_shared<GenLayerRiverInit>(100, l7);
+    auto river_layer = std::make_shared<GenLayerRiver>(1, river_init);
+    auto voronoi = std::make_shared<GenLayerVoronoiZoom>(10, l7);
+    // 每条的顶层都要初始化世界种子，否则该层自己的 worldGenSeed 仍是 0，
+    // 只有真正取到随机数的分支才会暴露差异。
+    smooth_layer->init_world_gen_seed(12345);
+    river_layer->init_world_gen_seed(12345);
+    voronoi->init_world_gen_seed(12345);
+
+    const std::array<std::int32_t, 64> expect_smooth{
+        0, 24, 0, 24, 24, 24, 0, 24, 0, 0, 24, 24, 24, 24, 24, 0, 0, 1, 0, 24, 24, 24, 24, 24,
+        0, 0, 1, 0, 0, 24, 24, 24, 0, 0, 0, 3, 0, 0, 24, 24, 24, 24, 0, 0, 0, 0, 0, 24,
+        24, 24, 24, 0, 0, 0, 24, 0, 24, 24, 24, 24, 0, 24, 0, 24};
+    const std::array<std::int32_t, 64> expect_voronoi{
+        0, 1, 1, 1, 24, 24, 24, 24, 1, 1, 1, 1, 1, 24, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0,
+        1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 3, 3, 3, 0, 0, 0, 3, 3, 3, 3, 3, 1, 1,
+        0, 3, 3, 3, 3, 3, 1, 1, 24, 3, 3, 3, 3, 1, 1, 1};
+
+    const auto got_smooth = smooth_layer->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < expect_smooth.size() && i < got_smooth.size(); ++i) {
+        CYANE_CHECK_EQ(got_smooth[i], expect_smooth[i]);
+    }
+    const auto got_voronoi = voronoi->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < expect_voronoi.size() && i < got_voronoi.size(); ++i) {
+        CYANE_CHECK_EQ(got_voronoi[i], expect_voronoi[i]);
+    }
+
+    // River：随机河种几乎不会四邻相同，因此绝大多数格是河流 id 7；
+    // 只断言取值域与"存在 -1 的可能"不够严格，这里核对整张网格。
+    const auto got_river = river_layer->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < got_river.size(); ++i) {
+        CYANE_CHECK(got_river[i] == 7 || got_river[i] == -1);
+    }
+    // 河流层必须对同一输入稳定复现
+    auto again = std::make_shared<GenLayerRiver>(
+        1, std::make_shared<GenLayerRiverInit>(100, l7));
+    again->init_world_gen_seed(12345);
+    CYANE_CHECK(again->get_ints(-4, -4, 8, 8) == got_river);
+}
+
+CYANE_TEST(gen_layer_river_mix_applies_biome_overrides) {
+    using namespace cyane::world::layer;
+
+    // 用合成父层直接验证 RiverMix 的四条分支：
+    //   海洋不变 / 非河流不变 / 冰原上的河→冻河 / 蘑菇岛上的河→蘑菇岛岸 / 其余→河流 id
+    class Fixed final : public GenLayer {
+    public:
+        Fixed(std::vector<std::int32_t> values) : GenLayer(0), values_(std::move(values)) {}
+        [[nodiscard]] std::vector<std::int32_t> get_ints(std::int32_t, std::int32_t, std::int32_t width,
+                                                         std::int32_t height) override {
+            std::vector<std::int32_t> out(values_.begin(), values_.begin() +
+                                          static_cast<std::ptrdiff_t>(width) * height);
+            return out;
+        }
+    private:
+        std::vector<std::int32_t> values_;
+    };
+
+    auto biomes = std::make_shared<Fixed>(std::vector<std::int32_t>{
+        biome_ids::kOcean, biome_ids::kDeepOcean, biome_ids::kIcePlains,
+        biome_ids::kMushroomIsland, biome_ids::kMushroomIslandShore, 1});
+    auto rivers = std::make_shared<Fixed>(std::vector<std::int32_t>{
+        biome_ids::kRiver, biome_ids::kRiver, biome_ids::kRiver,
+        biome_ids::kRiver, biome_ids::kRiver, -1});
+    GenLayerRiverMix mix{100, biomes, rivers};
+    const auto got = mix.get_ints(0, 0, 6, 1);
+    CYANE_CHECK_EQ(got.size(), std::size_t{6});
+    CYANE_CHECK_EQ(got[0], biome_ids::kOcean);          // 海洋不变
+    CYANE_CHECK_EQ(got[1], biome_ids::kDeepOcean);      // 深海不变
+    CYANE_CHECK_EQ(got[2], biome_ids::kFrozenRiver);    // 冰原 → 冻河
+    CYANE_CHECK_EQ(got[3], biome_ids::kMushroomIslandShore);
+    CYANE_CHECK_EQ(got[4], biome_ids::kMushroomIslandShore);
+    CYANE_CHECK_EQ(got[5], 1);                          // 非河流保持不变
 }

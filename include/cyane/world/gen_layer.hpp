@@ -97,6 +97,17 @@ private:
     std::uint64_t chunk_seed_{0};
 };
 
+// 本阶段 layer 链用到的原版生物群系 id（Biome.getIdForBiome）
+namespace biome_ids {
+inline constexpr std::int32_t kOcean = 0;
+inline constexpr std::int32_t kRiver = 7;
+inline constexpr std::int32_t kFrozenRiver = 11;
+inline constexpr std::int32_t kIcePlains = 12;
+inline constexpr std::int32_t kMushroomIsland = 14;
+inline constexpr std::int32_t kMushroomIslandShore = 15;
+inline constexpr std::int32_t kDeepOcean = 24;
+}  // namespace biome_ids
+
 // GenLayer 抽象基类。getInts 返回 areaWidth*areaHeight 的层数据（行主序，
 // 下标 = x + y*width），与 net.minecraft.world.gen.layer.GenLayer 一致。
 class GenLayer {
@@ -107,8 +118,8 @@ public:
     GenLayer(const GenLayer&) = delete;
     GenLayer& operator=(const GenLayer&) = delete;
 
-    // initWorldGenSeed：父层先初始化，然后自身
-    void init_world_gen_seed(std::int64_t seed) {
+    // initWorldGenSeed：父层先初始化，然后自身。RiverMix 有两个父层需要覆盖。
+    virtual void init_world_gen_seed(std::int64_t seed) {
         if (parent_) {
             parent_->init_world_gen_seed(seed);
         }

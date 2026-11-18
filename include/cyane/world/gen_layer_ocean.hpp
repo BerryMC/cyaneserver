@@ -5,8 +5,8 @@
 namespace cyane::world::layer {
 
 // Biomes.MUSHROOM_ISLAND / Biomes.DEEP_OCEAN 的注册 id
-inline constexpr std::int32_t kBiomeMushroomIsland = 14;
-inline constexpr std::int32_t kBiomeDeepOcean = 24;
+inline constexpr std::int32_t kBiomeMushroomIsland = biome_ids::kMushroomIsland;
+inline constexpr std::int32_t kBiomeDeepOcean = biome_ids::kDeepOcean;
 
 // GenLayerAddMushroomIsland：四面皆海的中心格以 1/100 概率变成蘑菇岛
 class GenLayerAddMushroomIsland final : public GenLayer {
