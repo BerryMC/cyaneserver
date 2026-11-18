@@ -167,9 +167,25 @@ void Connection::apply_chest_click(std::int16_t slot, std::uint8_t button, std::
         cursor_item_ = clicked;
     }
     if (slot < 0 || slot >= window_slots) {
-        // 窗口外：丢弃游标
-        if (slot < 0) {
-            cursor_item_ = item::ItemStack::air();
+        // 窗口外（slotId = -999）：Container.slotClick 会 dropItem。
+        // button 0 丢整叠、button 1 只丢 1 个；slotId = -1 是无效槽，什么都不做。
+        if (slot == -999 && !cursor_item_.empty()) {
+            const auto [vx, vy, vz] = net::throw_velocity();
+            if (button == 1) {
+                item::ItemStack one = cursor_item_;
+                one.count = 1;
+                if (cursor_item_.count > 1) {
+                    cursor_item_.count = static_cast<std::uint8_t>(cursor_item_.count - 1);
+                } else {
+                    cursor_item_ = item::ItemStack::air();
+                }
+                drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, one,
+                           vx, vy, vz, 40);
+            } else {
+                drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, cursor_item_,
+                           vx, vy, vz, 40);
+                cursor_item_ = item::ItemStack::air();
+            }
         }
         return;
     }
