@@ -6,7 +6,7 @@
 - 严重度：**P0** = 数据丢失/玩家可见的破缺；**P1** = 机制与原版不同；**P2** = 数值/文本差异
 - 状态：`待修` / `进行中` / `已修`
 
-统计：P0 13 条、P1 22 条、P2 18 条，已修 18 条。
+统计：P0 12 条、P1 22 条、P2 18 条，已修 23 条，阻塞 1 条。
 
 ---
 
@@ -32,6 +32,11 @@
 | CONTAINER-06 | ConfirmTransaction 改用 slotClick 返回值（含数量）比对 | `4329bdd` |
 | CONTAINER-07 | 容器→背包 QUICK_MOVE 改为 reverse（从热区栏末尾往前填） | `4329bdd` |
 | CONTAINER-08 | 容器装满时余量留在源槽，不再继续在背包内搬动 | `4329bdd` |
+| LOOT-01 | 未知条件改为恒假（不再当成满足）；新增 entity_properties(on_fire) | `21d956b` |
+| LOOT-02 | `set_damage` 独立 Kind + `item::max_damage` 表，按比例磨损 | `21d956b` |
+| LOOT-04 | 空池保留（仍消耗 rolls 随机数） | `21d956b` |
+| LOOT-05 | `set_count` 不截断，按堆叠上限拆堆 | `21d956b` |
+| LOOT-06 | `killed_by_player` 支持 `inverse` | `21d956b` |
 
 ---
 
@@ -39,9 +44,6 @@
 
 | ID | 区域 | 位置 | 原版参照 | 问题 | 状态 |
 |---|---|---|---|---|---|
-| LOOT-01 | 战利品 | `loot_table.hpp:289-294` | `LootConditionManager.java:120-126` | 未注册条件静默 `continue` → 条件恒真；`entity_properties(on_fire)` 失效 → **牛/鸡/猪永远掉熟肉** | 待修 |
-| LOOT-02 | 战利品 | `loot_table.hpp:359-366` | `SetDamage.java:75-80` | `set_damage` 映射成 `SetData` → 钓到的破损物品耐久永远满 | 待修 |
-| LOOT-03 | 战利品 | `loot_table.hpp:317-385` | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 缺 4 个函数（数据里 21+4+2 处引用）→ 附魔书/附魔金苹果无附魔 | 待修 |
 | AI-01 | 寻路 | `pathfinding.hpp:657-659` | `WalkNodeProcessor.java:364-367` | `door_open` 被 `continue` 排除；全落在门洞时返回 `blocked` → 生物无法穿过开着的门 | 待修 |
 | AI-02 | 移动 | `mob_manager.cpp:969` | `EntityLivingBase.java:216` | 上台阶 1.0（应 0.6），无 `velocity_y=0.42` 跳跃 | 待修 |
 | AI-03 | 经验球 | `xp_orb.cpp:100-121` | `EntityXPOrb.java:114-146,168-173` | 无 8 格吸附、无 6000 tick 寿命、无 `xpCooldown` | 待修 |
@@ -50,6 +52,7 @@
 | SYS-01 | 天气 | `command.cpp:497-508` | `CommandWeather.java:180-220` | 无任何天气状态与 `ChangeGameState(1/2/7/8)` 发包；`/weather` 只回显 | 待修 |
 | SYS-02 | 难度 | `command.cpp:521-524` | `CommandDifficulty.java:280-294` | 不校验不回写；和平不清敌对生物、不阻刷怪；困难无骷髅加速 | 待修 |
 | SYS-03 | 规则 | `server.cpp:548` | `GameRules.java` | 24 条规则只有 `doDaylightCycle` 被读取；`keepInventory` 无效导致死亡必掉物品 | 待修 |
+| LOOT-03 | 战利品 | `loot_table.hpp` 注册表 | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 4 个函数已注册为 Noop + 加载告警；真正生效依赖缺失的附魔表 / ItemStack NBT / 属性修饰符 | 部分（阻塞） |
 | GEN-01 | 群系 | `biome.hpp:57-109` | `GenLayer.java:22-88` | 自创 sin/cos 气候函数取代 20+ 层 GenLayer 链；无河流/海岛/丘陵/Voronoi，尺度差 1~2 个数量级 | 待修 |
 | GEN-02 | 装饰 | `chunk_generator.hpp:55-67` | `ChunkGeneratorOverworld.java:390-503` | 无 populate 阶段，特征全裁在本区块 → 树/湖/矿脉在区块边界硬切 | 待修 |
 | GEN-03 | 结构 | `structure.hpp` 仅 136 行 | `MapGenStructure` 全家族 | 矿井/村庄/要塞/神殿/海底神殿/府邸/下界要塞/末地城全部缺失；地牢/水井/化石写好但未接线 | 待修 |
@@ -64,9 +67,6 @@
 
 | CONTAINER-09 | 容器 | `connection_inventory.cpp:168-192` | `ContainerPlayer.java:167-182` | 缺盔甲/副手 shift 自动装备 | 待修 |
 | CONTAINER-10 | 容器 | `connection_inventory.cpp:193-226` | `Container.java:441-451` | `THROW` 缺“光标必须为空”前置；窗口外右键丢整叠（应只丢 1） | 待修 |
-| LOOT-04 | 战利品 | `loot_table.hpp:446` | `LootPool.java:301-311` | 空池被丢弃；原版空池仍消耗 rolls 随机数 → 同种子掉落不同 | 待修 |
-| LOOT-05 | 战利品 | `loot_types.hpp:92-96` | `SetCount.java:24-27` + `LootEntryItem.java:165-183` | `set_count` 截断到 64 且不拆堆 | 待修 |
-| LOOT-06 | 战利品 | `loot_types.hpp:66-67` | `KilledByPlayer.java:104-113` | `killed_by_player` 忽略 `inverse` | 待修 |
 | AI-05 | 目标 | `mob_manager.cpp:516-534` | `EntityAITarget.java` | `unseen_ticks` 计的是“出范围”不是“看不见” → 僵尸隔墙永久追击 | 待修 |
 | AI-06 | 近战 | `mob_manager.cpp:943` | `EntityAIAttackMelee.java:139-160` | 挥击要求视线（原版不要求）→ 隔墙角贴脸不挥拳 | 待修 |
 | AI-07 | 骷髅 | `mob_manager.cpp:27,907` | `AbstractSkeleton.java:235-237`、`EntityArrow.java:368` | 射箭间隔写死 40（困难应 20）、箭伤写死 2.0；箭 5 秒空中自毁（原版无） | 待修 |
