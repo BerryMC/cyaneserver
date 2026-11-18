@@ -21,6 +21,7 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/biome_table.hpp"
 #include "cyane/world/gen_layer_rare_biome.hpp"
 #include "cyane/world/gen_layer_biome.hpp"
 #include "cyane/world/gen_layer_voronoi.hpp"
@@ -1961,4 +1962,35 @@ CYANE_TEST(gen_layer_rare_biome_only_replaces_plains) {
     for (const auto value : rare2.get_ints(0, 0, 64, 64)) {
         CYANE_CHECK_EQ(value, biome_ids::kForest);
     }
+}
+
+CYANE_TEST(biome_table_matches_vanilla_extraction) {
+    using namespace cyane::world::biome_table;
+
+    // 21 对变异体，全部是 base + 128
+    CYANE_CHECK_EQ(kMutationBases.size(), std::size_t{21});
+    CYANE_CHECK_EQ(*mutation_of(1), 129);    // plains -> mutated_plains
+    CYANE_CHECK_EQ(*mutation_of(39), 167);   // mesa_clear_rock -> mutated_mesa_clear_rock
+    CYANE_CHECK(!mutation_of(0).has_value());   // ocean 无变异体
+    CYANE_CHECK(!mutation_of(13).has_value());  // ice_mountains 无变异体
+    CYANE_CHECK(!mutation_of(17).has_value());  // desert_hills 无变异体
+
+    // isMutation：id >= 128 且 base 有变异体
+    CYANE_CHECK(is_mutation(129));
+    CYANE_CHECK(is_mutation(167));
+    CYANE_CHECK(!is_mutation(38));
+    CYANE_CHECK(!is_mutation(128));  // 128 不存在
+
+    // 群系类等价：mesa 三兄弟同类；desert 与 desert_hills 同类但不同于 plains
+    CYANE_CHECK(biomes_equal_or_mesa_plateau(37, 38));   // mesa 与 mesa_rock 同为 BiomeMesa
+    CYANE_CHECK(biomes_equal_or_mesa_plateau(38, 39));   // 两个 mesa 兄弟
+    CYANE_CHECK(!biomes_equal_or_mesa_plateau(37, 2));   // mesa 与非 mesa 不等价
+    CYANE_CHECK(biomes_equal_or_mesa_plateau(2, 17));    // desert / desert_hills 同为 BiomeDesert
+    // mutated_forest(132) 的实现类就是 BiomeForest，与 forest 同类；
+    // 而 mutated_birch_forest(155) 是 BiomeForestMutated 子类，与 forest 不同类。
+    CYANE_CHECK(biomes_equal_or_mesa_plateau(4, 132));
+    CYANE_CHECK(!biomes_equal_or_mesa_plateau(4, 155));
+    CYANE_CHECK(biomes_equal_or_mesa_plateau(155, 156)); // mutated_forest 两兄弟同类
+    CYANE_CHECK(biomes_equal_or_mesa_plateau(0, 24));    // ocean / deep_ocean
+    CYANE_CHECK(!biomes_equal_or_mesa_plateau(1, 4));
 }
