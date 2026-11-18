@@ -21,6 +21,8 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_layer_ocean.hpp"
+#include "cyane/world/gen_layer_edge.hpp"
 #include "cyane/world/gen_layer_add_snow.hpp"
 #include "cyane/world/gen_layer_remove_ocean.hpp"
 #include "cyane/world/gen_layer_add_island.hpp"
@@ -1669,5 +1671,48 @@ CYANE_TEST(gen_layer_add_island_remove_ocean_snow_match_reference) {
     const auto got_snow = add_snow->get_ints(-4, -4, 8, 8);
     for (std::size_t i = 0; i < expect_snow.size() && i < got_snow.size(); ++i) {
         CYANE_CHECK_EQ(got_snow[i], expect_snow[i]);
+    }
+}
+
+CYANE_TEST(gen_layer_edge_mushroom_deep_match_reference) {
+    // 参考网格由独立 Python 实现生成，seed=12345、(-4,-4,8x8)。
+    // 整链 Island→AddIsland→AddSnow→Edge(三模式)→Mushroom→DeepOcean 一起比对：
+    // 任一层的索引或随机序列错位都会让最终网格对不上。
+    using namespace cyane::world::layer;
+
+    auto l0 = std::make_shared<GenLayerIsland>(1);
+    auto l1 = std::make_shared<GenLayerAddIsland>(1, l0);
+    auto l2 = std::make_shared<GenLayerAddSnow>(2, l1);
+    auto l3 = std::make_shared<GenLayerEdge>(2, l2, GenLayerEdge::Mode::cool_warm);
+    auto l4 = std::make_shared<GenLayerEdge>(2, l3, GenLayerEdge::Mode::heat_ice);
+    auto l5 = std::make_shared<GenLayerEdge>(3, l4, GenLayerEdge::Mode::special);
+    auto l6 = std::make_shared<GenLayerAddMushroomIsland>(5, l5);
+    auto l7 = std::make_shared<GenLayerDeepOcean>(4, l6);
+    l7->init_world_gen_seed(12345);
+
+    const std::array<std::int32_t, 64> expect_cw{
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        4, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
+    const std::array<std::int32_t, 64> expect_special{
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        3, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 514, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
+    const std::array<std::int32_t, 64> expect_deep{
+        24, 0, 24, 24, 24, 0, 24, 0, 0, 1, 0, 24, 24, 24, 0, 1, 0, 0, 24, 0, 24, 24, 24, 0,
+        3, 2, 0, 2, 0, 24, 24, 24, 0, 0, 0, 3, 514, 0, 24, 24, 24, 24, 24, 0, 0, 0, 24, 0,
+        24, 24, 0, 1, 0, 3, 0, 1, 0, 0, 24, 0, 24, 0, 24, 0};
+
+    const auto got_cw = l3->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < expect_cw.size() && i < got_cw.size(); ++i) {
+        CYANE_CHECK_EQ(got_cw[i], expect_cw[i]);
+    }
+    const auto got_special = l5->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < expect_special.size() && i < got_special.size(); ++i) {
+        CYANE_CHECK_EQ(got_special[i], expect_special[i]);
+    }
+    const auto got_deep = l7->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < expect_deep.size() && i < got_deep.size(); ++i) {
+        CYANE_CHECK_EQ(got_deep[i], expect_deep[i]);
     }
 }
