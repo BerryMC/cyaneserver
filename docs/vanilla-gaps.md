@@ -62,7 +62,14 @@
 | COMBAT-03 | 战斗 | `connection_combat.cpp` | `EntityPlayer.java:1396-1460` | 暴击（下落中、非疾跑、`f2>0.9`，×1.5）与横扫（`flag && !flag2 && !flag1 && onGround`，邻近实体各 1 点 + 0.4 击退）未实现；击退增益也未接 | 待修 |
 | AI-11 | 经验球 | `src/net/xp_orb.cpp` | `EntityXPOrb.java:239`、`EntityPlayer.java` | 拾取冷却 `xpCooldown`（拾取后置 2、每 tick 递减）未做；经验球模块无单元测试覆盖（需 World 实例） | 待修 |
 | SYS-03e | 规则 | `server.cpp` / `mob_manager.cpp` | `GameRules.java` 各读取点 | 仍未接线：`doMobLoot` `doTileDrops` `doEntityDrops` `showDeathMessages` `naturalRegeneration` `randomTickSpeed` `doFireTick` `mobGriefing` `spawnRadius` `maxEntityCramming` `doLimitedCrafting` `spectatorsGenerateChunks` `logAdminCommands` `commandBlockOutput` `sendCommandFeedback` `announceAdvancements` | 待修 |
-| GEN-01 | 群系 | `gen_layer.hpp` / `biome.hpp:57-109` | `GenLayer.java:22-88` | **进行中**：种子核心（`3dc31fd`）+ 基类/Island/Zoom/FuzzyZoom（`c1b1572`）+ AddIsland/RemoveTooMuchOcean/AddSnow（`a0ba9cd`）+ Edge(三模式)/MushroomIsland/DeepOcean（`3b506f7`）+ Smooth/RiverInit/River/RiverMix/VoronoiZoom（`aeed485`）+ Biome（`06f1803`，数据取自 Spigot 反编译）已完成并有测试；仍缺 BiomeEdge / Hills / RareBiome / Shore、`Biome.getBiome` 映射、WorldType 分支，以及把生成器从自创 sin/cos 气候函数切到 GenLayer 链 | 进行中 |
+| GEN-01 | 群系 | `gen_layer.hpp` / `biome.hpp:57-109` | `GenLayer.java:22-88` | **进行中**：种子核心（`3dc31fd`）+ 基类/Island/Zoom/FuzzyZoom（`c1b1572`）+ AddIsland/RemoveTooMuchOcean/AddSnow（`a0ba9cd`）+ Edge(三模式)/MushroomIsland/DeepOcean（`3b506f7`）+ Smooth/RiverInit/River/RiverMix/VoronoiZoom（`aeed485`）+ Biome（`06f1803`，数据取自 Spigot 反编译）+ RareBiome（`050432e`）已完成并有测试。
+  仍缺 BiomeEdge / Hills / Shore，三者都卡在两个尚未建模的机制上：
+  · **变异体表**：`Biome.getMutationForBiome(id)` = `fromId(id + 128)`，但只有部分群系有变异体，
+    需要在表里标明"无变异"以复现原版返回 null 的分支
+  · **群系类等价**：`GenLayer.biomesEqualOrMesaPlateau` 用 `getBiomeClass()` 比较，
+    即同一 Java 类视为等价（desert 与 desert_hills 不同类，但 mesa_rock/mesa_clear_rock 同类等价），
+    需要一张"类族"表才能忠实实现
+  · Shore 另需 `c(int)`/`d(int)` 两个谓词与丛林特例、`Biome.getBiome` 映射、WorldType 分支，以及把生成器从自创 sin/cos 气候函数切到 GenLayer 链 | 进行中 |
 | GEN-02 | 装饰 | `chunk_generator.hpp:55-67` | `ChunkGeneratorOverworld.java:390-503` | 无 populate 阶段，特征全裁在本区块 → 树/湖/矿脉在区块边界硬切 | 待修 |
 | GEN-03 | 结构 | `structure.hpp` 仅 136 行 | `MapGenStructure` 全家族 | 矿井/村庄/要塞/神殿/海底神殿/府邸/下界要塞/末地城全部缺失；地牢/水井/化石写好但未接线 | 待修 |
 
