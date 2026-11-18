@@ -111,6 +111,11 @@ public:
     [[nodiscard]] float raining_strength() const noexcept { return raining_strength_; }
     // CommandWeather：clear/rain/thunder + 可选时长（秒），内部按原版写入 5 个字段
     void set_weather(std::string_view mode, std::int32_t duration_seconds = -1);
+    // GameRules（主世界）
+    [[nodiscard]] world::GameRules& game_rules() noexcept { return world_info_.game_rules; }
+    [[nodiscard]] const world::GameRules& game_rules() const noexcept { return world_info_.game_rules; }
+    // CommandGameRule.notifyGameRuleChange：reducedDebugInfo 变化时广播 EntityStatus 22/23
+    void notify_game_rule_change(std::string_view rule);
     // 难度
     [[nodiscard]] world::EnumDifficulty difficulty() const noexcept { return world_info_.difficulty; }
     void set_difficulty(world::EnumDifficulty difficulty);

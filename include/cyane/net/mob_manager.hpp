@@ -290,6 +290,9 @@ public:
         return mobs_.size();
     }
 
+    // doMobSpawning=false 时跳过自然刷怪（WorldEntitySpawner 整体不执行）
+    void set_mob_spawning(bool enabled) noexcept { mob_spawning_enabled_ = enabled; }
+
     // EntityMob.onUpdate：难度切到和平后敌对生物立即消失。返回移除的实体 id。
     std::vector<std::uint32_t> despawn_hostile() {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -309,6 +312,8 @@ public:
 
 private:
     [[nodiscard]] bool remove_locked(std::uint32_t id);
+
+    bool mob_spawning_enabled_{true};
 
     // 自然刷怪：每隔 kSpawnIntervalTick 检查玩家周围 24~128 格环，
     // 依据光照/地形/生物上限生成敌对/被动生物。

@@ -355,3 +355,42 @@ CYANE_TEST(difficulty_command_sets_state_and_names) {
     CYANE_CHECK(console.messages[0].find("Difficulty does not exist") != std::string::npos);
     CYANE_CHECK(srv->difficulty() == cyane::world::EnumDifficulty::Peaceful);
 }
+
+CYANE_TEST(gamerule_command_matches_vanilla_semantics) {
+    auto settings = fast_config();
+    CYANE_CHECK(settings.has_value());
+    auto server = cyane::Server::create(std::move(*settings));
+    CYANE_CHECK(server.has_value());
+    auto* srv = server->get();
+    TestSender console{4, false, "Server"};
+
+    // 无参：列出全部规则名（20+ 条，逗号分隔）
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "gamerule"));
+    CYANE_CHECK_EQ(console.messages.size(), std::size_t{1});
+    CYANE_CHECK(console.messages[0].find("keepInventory") != std::string::npos);
+    CYANE_CHECK(console.messages[0].find(", ") != std::string::npos);
+
+    // 单参：查询 "name = value"
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "gamerule keepInventory"));
+    CYANE_CHECK_EQ(console.messages.size(), std::size_t{1});
+    CYANE_CHECK_EQ(console.messages[0], std::string("keepInventory = false"));
+
+    // 双参：设置成功
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "gamerule keepInventory true"));
+    CYANE_CHECK(srv->game_rules().get_bool("keepInventory"));
+    CYANE_CHECK_EQ(console.messages[0], std::string("Game rule keepInventory has been updated to true"));
+
+    // 布尔规则给非 true/false：commands.generic.boolean.invalid
+    CYANE_CHECK(srv->game_rules().is_boolean("keepInventory"));
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "gamerule keepInventory yes"));
+    CYANE_CHECK(srv->game_rules().get_bool("keepInventory"));
+    CYANE_CHECK(console.messages[0].find("not a valid boolean") != std::string::npos);
+
+    // 未知规则查询
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "gamerule noSuchRule"));
+    CYANE_CHECK(console.messages[0].find("There is no game rule named noSuchRule") != std::string::npos);
+}

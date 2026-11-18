@@ -1061,8 +1061,10 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         }
     }
 
-    // 自然刷怪
-    spawn_cycle(world, players, daytime, result);
+    // 自然刷怪（doMobSpawning=false 时整体跳过）
+    if (mob_spawning_enabled_) {
+        spawn_cycle(world, players, daytime, result);
+    }
 
     return result;
 }

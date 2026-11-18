@@ -587,6 +587,49 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         return true;
     }
 
+    // gamerule
+    if (cmd == "gamerule") {
+        if (op < 2) {
+            sender.send_feedback("You do not have permission to use this command.", true);
+            return true;
+        }
+        auto& rules = server.game_rules();
+        if (args.empty()) {
+            // 无参：列出全部规则名（原版 joinNiceString，TreeMap 顺序）
+            std::string list;
+            for (const auto& [name, value] : rules.get_rules()) {
+                (void)value;
+                if (!list.empty()) list += ", ";
+                list += name;
+            }
+            sender.send_feedback(list);
+            return true;
+        }
+        const std::string key{args[0]};
+        if (args.size() == 1) {
+            if (!rules.has_rule(key)) {
+                sender.send_feedback(std::format("There is no game rule named {}", key), true);
+                return true;
+            }
+            sender.send_feedback(std::format("{} = {}", key, rules.get_string(key)));
+            return true;
+        }
+        // buildString(args, 1)：把剩余参数用空格拼起来
+        std::string value;
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            if (!value.empty()) value += ' ';
+            value += args[i];
+        }
+        if (rules.is_boolean(key) && value != "true" && value != "false") {
+            sender.send_feedback(std::format("{} is not a valid boolean", value), true);
+            return true;
+        }
+        rules.set_or_create(key, value);
+        server.notify_game_rule_change(key);
+        sender.send_feedback(std::format("Game rule {} has been updated to {}", key, value));
+        return true;
+    }
+
     // 11. difficulty
     if (cmd == "difficulty") {
         if (op < 2) {

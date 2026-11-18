@@ -122,8 +122,9 @@ public:
 
         if (const auto* rules = data.find("GameRules"); rules != nullptr) {
             if (const auto* fields = rules->get_if<nbt::Compound>(); fields != nullptr) {
+                // GameRules.loadFromNBT：不 clear，逐个 setOrCreateGameRule，
+                // 已声明规则因此保留布尔/数值类型；未知键按原版落成字符串。
                 game_rules = GameRules{};
-                game_rules.clear();
                 for (const auto& [key, value] : *fields) {
                     game_rules.set_or_create(key, value.text().value_or(""));
                 }

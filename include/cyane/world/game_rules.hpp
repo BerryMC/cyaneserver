@@ -103,6 +103,12 @@ public:
         return rules_.contains(std::string(key));
     }
 
+    // GameRules.areSameType(key, BOOLEAN_VALUE)：规则不存在时返回 false（原版同）
+    [[nodiscard]] bool is_boolean(std::string_view key) const noexcept {
+        auto it = rules_.find(std::string(key));
+        return it != rules_.end() && it->second.type == ValueType::Boolean;
+    }
+
     [[nodiscard]] const std::map<std::string, Value>& get_rules() const noexcept {
         return rules_;
     }

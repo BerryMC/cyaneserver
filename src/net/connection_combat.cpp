@@ -244,9 +244,14 @@ void Connection::kill_player() {
         context_.hub->broadcast(player_id_, proto::play_cb::kEntityStatus, status.data());
     }
 
+    // EntityPlayerMP.onDeath：keepInventory 为 true（或旁观者）时保留全部物品
+    const bool keep_inventory =
+        context_.game_rules != nullptr && context_.game_rules->get_bool("keepInventory");
+    const bool spectator = context_.game_mode == proto::game_mode::kSpectator;
     // 生存模式玩家死亡：手持/背包/装备物品全部掉落在地（vanilla dropAllItems）
     // 掉入虚空（y < -64）除外，虚空中物品直接销毁
-    if (context_.game_mode != proto::game_mode::kCreative && player_pos_.y >= -64.0) {
+    if (!keep_inventory && !spectator && context_.game_mode != proto::game_mode::kCreative &&
+        player_pos_.y >= -64.0) {
         for (std::size_t i = 0; i < item::PlayerInventory::kSlotCount; ++i) {
             const auto stack = inventory_.slot(i);
             if (!stack.empty()) {
@@ -256,7 +261,8 @@ void Connection::kill_player() {
                 inventory_.set_slot(i, item::ItemStack::air());
             }
         }
-    } else if (context_.game_mode != proto::game_mode::kCreative && player_pos_.y < -64.0) {
+    } else if (!keep_inventory && !spectator &&
+               context_.game_mode != proto::game_mode::kCreative && player_pos_.y < -64.0) {
         for (std::size_t i = 0; i < item::PlayerInventory::kSlotCount; ++i) {
             inventory_.set_slot(i, item::ItemStack::air());
         }

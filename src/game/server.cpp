@@ -256,6 +256,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     context.crafting = server->crafting_.get();
     server->hub_ = std::make_unique<net::PlayerHub>();
     context.hub = server->hub_.get();
+    context.game_rules = &server->world_info_.game_rules;
     server->block_ticks_ = std::make_unique<net::BlockTicks>();
     context.block_ticks = server->block_ticks_.get();
     server->projectiles_ = std::make_unique<net::ProjectileManager>();
@@ -511,6 +512,14 @@ void Server::set_weather(std::string_view mode, std::int32_t duration_seconds) {
     // 下一个 tick 就会按 was_raining 的差异发出 1/2 + 7/8。
 }
 
+void Server::notify_game_rule_change(std::string_view rule) {
+    if (rule != "reducedDebugInfo" || hub_ == nullptr) return;
+    // EntityStatus 22 = 开启 reducedDebugInfo，23 = 关闭
+    ByteWriter packet;
+    packet.varint(world_info_.game_rules.get_bool("reducedDebugInfo") ? 22 : 23);
+    hub_->broadcast_all(proto::play_cb::kEntityStatus, packet.data());
+}
+
 void Server::set_difficulty(world::EnumDifficulty difficulty) {
     world_info_.difficulty = difficulty;
     if (hub_ != nullptr) {
@@ -667,6 +676,7 @@ void Server::tick() {
         update_weather();
         const auto day_phase = time_of_day_ >= 0 ? time_of_day_ % 24000 : 24000;
         const bool daytime = day_phase < 12000;
+        mobs_->set_mob_spawning(world_info_.game_rules.get_bool("doMobSpawning"));
         const auto mob_events = mobs_->tick(*world_, players, daytime);
         for (const auto& mob : mob_events.moved) {
             const auto old_cpos = world::ChunkPos::from_world(mob.old_x, mob.old_z);

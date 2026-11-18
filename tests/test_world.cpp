@@ -1406,7 +1406,11 @@ CYANE_TEST(world_info_preserves_legacy_generator_and_dimension_data) {
     info.read_from_nbt(world::nbt::make_compound(std::move(data)));
     CYANE_CHECK(info.terrain_type == world::WorldType::Default1_1);
     CYANE_CHECK_EQ(info.day_time, -1);
-    CYANE_CHECK(info.game_rules.get_rules().empty());
+    // GameRules.loadFromNBT 只对 NBT 里出现的键 setOrCreateGameRule，不会清空默认值，
+    // 因此空 GameRules 复合仍保留 24 条默认规则，且类型不被降级成字符串。
+    CYANE_CHECK_EQ(info.game_rules.get_rules().size(), std::size_t{24});
+    CYANE_CHECK(info.game_rules.get_bool("doDaylightCycle"));
+    CYANE_CHECK(info.game_rules.is_boolean("doDaylightCycle"));
     const auto* custom = info.dimension_data().find("1");
     CYANE_CHECK(custom != nullptr);
     if (custom != nullptr) {

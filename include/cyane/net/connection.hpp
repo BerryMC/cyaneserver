@@ -35,6 +35,7 @@
 #include "cyane/net/item_drop.hpp"
 #include "cyane/net/player_hub.hpp"
 #include "cyane/net/xp_orb.hpp"
+#include "cyane/world/game_rules.hpp"
 #include "cyane/world/world.hpp"
 #include "cyane/game/player_data.hpp"
 
@@ -91,6 +92,8 @@ struct ConnectionContext {
     std::int32_t spawn_z{0};
     // 玩家数据持久化存储（加载/保存玩家背包、位置、游戏模式）
     game::PlayerDataStore* player_data_store{nullptr};
+    // 主世界 GameRules（keepInventory / doMobLoot / doTileDrops 等）
+    const world::GameRules* game_rules{nullptr};
 };
 
 class Connection final : public ReactorHandler {
