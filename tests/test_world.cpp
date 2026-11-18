@@ -19,6 +19,8 @@
 #include "cyane/world/nbt.hpp"
 #include "cyane/world/anvil.hpp"
 #include "cyane/world/gen_layer.hpp"
+#include "cyane/world/gen_layer_island.hpp"
+#include "cyane/world/gen_layer_zoom.hpp"
 #include "cyane/world/world.hpp"
 #include "cyane/world/structure.hpp"
 #include "cyane/world/flat_generator_info.hpp"
@@ -1559,4 +1561,71 @@ CYANE_TEST(gen_layer_seed_matches_vanilla_lcg) {
     for (int i = 0; i < 32; ++i) {
         CYANE_CHECK_EQ(a.next_int(1000), b.next_int(1000));
     }
+}
+
+CYANE_TEST(gen_layer_island_zoom_chain_matches_reference) {
+    // 参考网格由独立的 Python 实现（照 GenLayerIsland / GenLayerZoom /
+    // GenLayerFuzzyZoom 的 Java 源码另写一遍）在 seed=12345、区域 (-4,-4,8x8) 上算出，
+    // 用于校验索引数学（zoom 的 l1++ 交错写、按 areaX&1 的偏移取窗口）。
+    using namespace cyane::world::layer;
+
+    auto island = std::make_shared<GenLayerIsland>(1);
+    std::shared_ptr<GenLayer> fuzzy = std::make_shared<GenLayerFuzzyZoom>(2000, island);
+    auto zoom = std::make_shared<GenLayerZoom>(2001, fuzzy);
+    zoom->init_world_gen_seed(12345);
+
+    constexpr std::int32_t kW = 8;
+    constexpr std::int32_t kH = 8;
+    const std::array<std::int32_t, 64> expect_island{
+        0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0};
+    const std::array<std::int32_t, 64> expect_zoom{
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0,
+        0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0};
+
+    const auto got_island = island->get_ints(-4, -4, kW, kH);
+    CYANE_CHECK_EQ(got_island.size(), std::size_t{64});
+    for (std::size_t i = 0; i < expect_island.size() && i < got_island.size(); ++i) {
+        CYANE_CHECK_EQ(got_island[i], expect_island[i]);
+    }
+
+    const auto got_zoom = zoom->get_ints(-4, -4, kW, kH);
+    CYANE_CHECK_EQ(got_zoom.size(), std::size_t{64});
+    for (std::size_t i = 0; i < expect_zoom.size() && i < got_zoom.size(); ++i) {
+        CYANE_CHECK_EQ(got_zoom[i], expect_zoom[i]);
+    }
+
+    // 从世界种子重新初始化必须完全可复现
+    auto again = std::make_shared<GenLayerZoom>(
+        2001, std::make_shared<GenLayerFuzzyZoom>(2000, std::make_shared<GenLayerIsland>(1)));
+    again->init_world_gen_seed(12345);
+    CYANE_CHECK(again->get_ints(-4, -4, kW, kH) == got_zoom);
+}
+
+CYANE_TEST(gen_layer_select_mode_or_random_has_inequality_guards) {
+    using cyane::world::layer::LayerSeed;
+    // seed=0 是这套 LCG 的不动点（lcg_step(0,0)=0），chunkSeed 会恒为 0，
+    // 无法观察"是否消耗随机数"，因此用非退化种子。
+    LayerSeed seed{12345};
+    seed.init_world_gen_seed(67890);
+    seed.init_chunk_seed(3, -7);
+
+    // 三值相同：直接返回，不消耗随机数
+    const auto mark1 = seed.chunk_seed();
+    CYANE_CHECK_EQ(seed.select_mode_or_random(5, 7, 7, 7), 7);
+    CYANE_CHECK_EQ(seed.chunk_seed(), mark1);
+
+    // {a,a,b,b}：所有三缺一分支都被不等式守卫否掉，必须落到 selectRandom，
+    // 也就是要消耗一次 chunkSeed。漏掉守卫的旧实现会直接返回 a 且不消耗。
+    const auto mark2 = seed.chunk_seed();
+    const auto picked = seed.select_mode_or_random(3, 3, 9, 9);
+    CYANE_CHECK(seed.chunk_seed() != mark2);
+    CYANE_CHECK(picked == 3 || picked == 9);
+
+    // {a,a,a,b}：a==b && a==c 成立 → 返回 a，不消耗
+    const auto mark3 = seed.chunk_seed();
+    CYANE_CHECK_EQ(seed.select_mode_or_random(4, 4, 4, 1), 4);
+    CYANE_CHECK_EQ(seed.chunk_seed(), mark3);
 }

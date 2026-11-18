@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace cyane::world::layer {
@@ -72,20 +73,21 @@ public:
             next_int(static_cast<std::int32_t>(options.size())))];
     }
 
-    // selectModeOrRandom：四邻多数值优先，否则随机
-    [[nodiscard]] constexpr std::int32_t select_mode_or_random(std::int32_t a, std::int32_t b,
-                                                              std::int32_t c,
-                                                              std::int32_t d) {
+    // selectModeOrRandom：多数值优先，否则随机。
+    // 注意每条"三缺一"分支都带不等式守卫（Java 里的 p3 != p4 等）——
+    // 少了守卫会把两两相等的四元组错误地收敛到 a。
+    [[nodiscard]] std::int32_t select_mode_or_random(std::int32_t a, std::int32_t b,
+                                                    std::int32_t c, std::int32_t d) {
         if (b == c && c == d) return b;
         if (a == b && a == c) return a;
         if (a == b && a == d) return a;
         if (a == c && a == d) return a;
-        if (a == b) return a;
-        if (a == c) return a;
-        if (a == d) return a;
-        if (b == c) return b;
-        if (b == d) return b;
-        if (c == d) return c;
+        if (a == b && c != d) return a;
+        if (a == c && b != d) return a;
+        if (a == d && b != c) return a;
+        if (b == c && a != d) return b;
+        if (b == d && a != c) return b;
+        if (c == d && a != b) return c;
         return select_random({a, b, c, d});
     }
 
@@ -93,6 +95,44 @@ private:
     std::uint64_t base_seed_{0};
     std::uint64_t world_gen_seed_{0};
     std::uint64_t chunk_seed_{0};
+};
+
+// GenLayer 抽象基类。getInts 返回 areaWidth*areaHeight 的层数据（行主序，
+// 下标 = x + y*width），与 net.minecraft.world.gen.layer.GenLayer 一致。
+class GenLayer {
+public:
+    explicit GenLayer(std::int64_t base_seed) : seed_(base_seed) {}
+    virtual ~GenLayer() = default;
+
+    GenLayer(const GenLayer&) = delete;
+    GenLayer& operator=(const GenLayer&) = delete;
+
+    // initWorldGenSeed：父层先初始化，然后自身
+    void init_world_gen_seed(std::int64_t seed) {
+        if (parent_) {
+            parent_->init_world_gen_seed(seed);
+        }
+        seed_.init_world_gen_seed(seed);
+    }
+
+    [[nodiscard]] virtual std::vector<std::int32_t> get_ints(std::int32_t area_x,
+                                                             std::int32_t area_y,
+                                                             std::int32_t width,
+                                                             std::int32_t height) = 0;
+
+protected:
+    // 子类可覆盖（GenLayerFuzzyZoom 把众数选择换成纯随机）
+    [[nodiscard]] virtual std::int32_t select_mode_or_random(std::int32_t a, std::int32_t b,
+                                                             std::int32_t c, std::int32_t d) {
+        return seed_.select_mode_or_random(a, b, c, d);
+    }
+
+    [[nodiscard]] std::int32_t select_random(const std::vector<std::int32_t>& options) {
+        return seed_.select_random(options);
+    }
+
+    LayerSeed seed_;
+    std::shared_ptr<GenLayer> parent_;
 };
 
 }  // namespace cyane::world::layer
