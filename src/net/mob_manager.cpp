@@ -653,6 +653,13 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
             if (dxn * dxn + dzn * dzn > 1e-6) {
                 walk(dxn, dzn, speed_scale);
                 mob.pos.yaw = yaw_towards(mob.pos.yaw, dxn, dzn);
+                // EntityMoveHelper：目标比 stepHeight 高且水平距离 < max(1, width) 时起跳，
+                // 起跳初速为 EntityLiving.getJumpUpwardsMotion() = 0.42
+                const double dy_node = static_cast<double>(node.y) - mob.pos.y;
+                const double horizontal = std::max(1.0, static_cast<double>(species->width));
+                if (dy_node > 0.6 && dxn * dxn + dzn * dzn < horizontal && mob.on_ground) {
+                    mob.velocity_y = 0.42;
+                }
             }
         };
 
@@ -760,7 +767,11 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     // PathfinderGoalSwell.e() + EntityCreeper.B_()：目标在 7 格内且可见 →
                     // state=1（引信 +1/tick），丢失/超 7 格/不可见 → state=-1（引信回退）；
                     // 引信到 30 tick 即引爆（radius 3，无火）。
-                    const std::int32_t next = dist_sq <= 49.0 && can_see ? 1 : -1;
+                    // EntityAICreeperSwell：未引信时 distSq < 9 才起爆（3 格），
+                    // 已引信时 distSq < 49 维持（7 格）。原版该 goal 不检查视线。
+                    const bool swelling = mob.fuse_state > 0;
+                    const bool in_range = swelling ? dist_sq < 49.0 : dist_sq < 9.0;
+                    const std::int32_t next = in_range ? 1 : -1;
                     if (next != mob.fuse_state) {
                         mob.fuse_state = next;
                         result.ignitions.push_back(
@@ -967,7 +978,8 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         double dz = mob.velocity_z;
         auto box = world::entity_box(mob.pos.x, mob.pos.y, mob.pos.z, species->width, species->height);
         const auto before = mob.pos;
-        const auto outcome = world::move_with_collision(world, box, dx, dy, dz, 1.0);
+        // EntityLivingBase.stepHeight = 0.6F（马为 1.0，本阶段无马）
+        const auto outcome = world::move_with_collision(world, box, dx, dy, dz, 0.6);
         mob.pos.x = (box.min_x + box.max_x) * 0.5;
         mob.pos.y = box.min_y;
         mob.pos.z = (box.min_z + box.max_z) * 0.5;

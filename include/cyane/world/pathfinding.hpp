@@ -366,6 +366,8 @@ public:
 
     // 跟随捷径的安全性检查按原版用 canOpenDoors=true/canEnterDoors=true 的节点判定
     void set_can_open_doors(bool value) noexcept { can_open_doors_ = value; }
+    // WalkNodeProcessor 的 canEnterDoorsIn：false 时开着的门视为阻塞
+    void set_can_enter_doors(bool value) noexcept { can_enter_doors_ = value; }
 
     // WalkNodeProcessor.getStart
     [[nodiscard]] PathPoint* get_start(double pos_x, double pos_y, double pos_z, bool on_ground) {
@@ -654,8 +656,11 @@ private:
                     if (type == PathNodeType::door_wood_closed && can_open_doors_) {
                         type = PathNodeType::walkable;
                     }
-                    if (type == PathNodeType::door_open) {
-                        continue;  // canEnterDoors = true
+                    // WalkNodeProcessor：DOOR_OPEN 在 canEnterDoors 时保持原样（优先级 0，
+                    // 即可行走）；只有 canEnterDoors=false 才降级为 BLOCKED。
+                    // 之前直接 continue 会让全落在门洞的采样集 seen 全空 → 返回 blocked。
+                    if (type == PathNodeType::door_open && !can_enter_doors_) {
+                        type = PathNodeType::blocked;
                     }
                     if (type == PathNodeType::rail && !base_rail) {
                         type = PathNodeType::fence;
@@ -773,6 +778,7 @@ private:
     const World::BlockCache& blocks_;  // 节点判定（vanilla: PathFinder 的 ChunkCache）
     MobShape shape_;
     bool can_open_doors_{false};
+    bool can_enter_doors_{true};
     std::deque<PathPoint> arena_;
     std::unordered_map<std::int64_t, PathPoint*> point_map_;
     std::unordered_map<std::int64_t, PathNodeType> raw_cache_;
