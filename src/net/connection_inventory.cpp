@@ -59,45 +59,48 @@ bool Connection::handle_play_click_window(ByteSpan payload) {
     // 箱子窗口(id=1)交给容器点击处理；熔炉窗口(id=2)交给熔炉处理；windowId=0 走玩家自身背包
     // NMS 游标校验：客户端在包内声明点击后的游标(clickedItem)；物品类型(id+damage)失配时
     // 拒绝事务并全量重同步，防止本地容器状态与服务端持续分叉
-    auto finish_click = [this, window_id, action, clicked] {
+    // NetHandlerPlayServer.processClickWindow：用 slotClick 的返回栈与客户端 clickedItem
+    // 比对（areItemStacksEqual 含数量），失配则拒绝并全量重同步。
+    const auto finish_click = [this, window_id, action, clicked](
+                                  const item::ItemStack& expected) {
         ByteWriter confirm;
         confirm.u8(*window_id);
         confirm.i16(*action);
-        const bool ok = cursor_item_.matches_type(*clicked);
+        const bool ok = expected.id == (*clicked).id && expected.damage == (*clicked).damage &&
+                        expected.count == (*clicked).count;
         confirm.boolean(ok);
         send_packet(proto::play_cb::kConfirmTransaction, confirm.data());
         if (!ok) {
-            log::warn(
-                "{}: window {} cursor mismatch (claimed item {} x{}, now {} x{}) — resyncing window",
-                username_, *window_id, (*clicked).id, (*clicked).count, cursor_item_.id,
-                cursor_item_.count);
+            log::warn("{}: window {} transaction {} rejected (expected {} x{}, client sent {} x{})",
+                      username_, *window_id, *action, expected.id, expected.count, (*clicked).id,
+                      (*clicked).count);
             resync_open_window();
         }
     };
     if (*window_id == kChestWindowId && chest_open_) {
-        apply_chest_click(*slot, *button, *mode, *clicked);
-        finish_click();
+        finish_click(apply_chest_click(*slot, *button, *mode, *clicked));
         return true;
     }
     // 小容器（发射器/投掷器/漏斗）与箱子共用点击逻辑，按打开时的容器格数区分
     if (*window_id == kSmallWindowId && small_open_) {
-        apply_chest_click(*slot, *button, *mode, *clicked);
-        finish_click();
+        finish_click(apply_chest_click(*slot, *button, *mode, *clicked));
         return true;
     }
     if (*window_id == kFurnaceWindowId && furnace_open_) {
+        // 熔炉槽位尚未改造成 slotClick 语义，仍按游标比对（见 gaps SYS/CONTAINER 待办）
         apply_furnace_click(*slot, *button, *mode, *clicked);
-        finish_click();
+        finish_click(cursor_item_);
         return true;
     }
     if (*window_id == kCraftingTableWindowId && table_open_) {
         apply_table_click(*slot, *button, *mode, *clicked);
-        finish_click();
+        finish_click(cursor_item_);
         return true;
     }
     // 只处理玩家自身背包 windowId=0；其余窗口本阶段照旧回滚
+    item::ItemStack expected_click;
     if (*window_id == 0) {
-        apply_click(*slot, *button, *mode);
+        expected_click = apply_click(*slot, *button, *mode);
     } else if (*window_id == kChestWindowId || *window_id == kFurnaceWindowId ||
                *window_id == kCraftingTableWindowId) {
         // 客户端本地开了窗口、服务端却认为关着（右键未成功开窗等）：点击不会生效，
@@ -114,7 +117,7 @@ bool Connection::handle_play_click_window(ByteSpan payload) {
     // windowId=0 且游标物品类型失配时拒绝并全量重同步；其余非 0 窗口本阶段不支持，
     // 回 accepted=false 让客户端回滚，并权威重发被点槽。
     if (*window_id == 0) {
-        finish_click();
+        finish_click(expected_click);
     } else {
         ByteWriter confirm;
         confirm.u8(*window_id);
@@ -156,145 +159,66 @@ bool Connection::merge_into_range(item::ItemStack& moving, std::size_t lo, std::
     return changed;
 }
 
-void Connection::apply_click(std::int16_t slot, std::uint8_t button, std::int32_t mode) {
-    // 主背包窗口的槽范围：0..45（slot=-999 表示窗口外，丢弃游标物品）
+item::ItemStack Connection::apply_click(std::int16_t slot, std::uint8_t button,
+                                        std::int32_t mode) {
+    // 主背包窗口的槽范围：0..45；-999 表示窗口外
     const auto slot_count = static_cast<std::int16_t>(item::PlayerInventory::kSlotCount);
-    // 合成结果槽 (0)：点击拿取产物并消耗材料，不走普通拿放逻辑
-    if (slot == 0 && (mode == 0 || mode == 1)) {
-        take_craft_result(mode == 1);
-        return;
-    }
-    // mode 0：普通左/右键拿放；mode 1：shift 快速转移
-    if (mode == 1) {
-        // shift-move（原版 ContainerPlayer.transferStack 顺序）：
-        // 热区栏(36..44) → 主背包；主背包(9..35) → 热区栏（源槽必须在目标区间外，
-        // 否则会把整叠合并回自身槽导致物品消失）；合成格/护甲/副手 → 主背包再热区栏
-        if (slot < 0 || slot >= slot_count) {
-            return;
+    // 合成结果槽 (0)：原版 SlotCrafting 只允许取走，放回/其它模式一律忽略
+    if (slot == 0) {
+        if (mode == click_type::kPickup || mode == click_type::kQuickMove) {
+            take_craft_result(mode == click_type::kQuickMove);
         }
-        item::ItemStack moving = inventory_.slot(static_cast<std::size_t>(slot));
-        if (moving.empty()) {
-            return;
-        }
-        if (slot >= 36 && slot <= 44) {
-            (void)merge_into_range(moving, 9, 35);
-        } else if (slot >= 9 && slot <= 35) {
-            (void)merge_into_range(moving, 36, 44);
-        } else {
-            (void)merge_into_range(moving, 9, 35);
-            if (!moving.empty()) {
-                (void)merge_into_range(moving, 36, 44);
-            }
-        }
-        inventory_.set_slot(static_cast<std::size_t>(slot), moving);
-        send_inventory();
-        return;
+        return item::ItemStack::air();
     }
-    // mode 4：ClickType.THROW——Q 丢 1 个 / Ctrl+Q 丢全组（slot=-1 为游标堆）
-    if (mode == 4) {
-        item::ItemStack dropped;
-        if (slot == -1) {
-            if (cursor_item_.empty()) {
-                return;
-            }
-            const auto take = static_cast<std::uint8_t>(button == 0 ? 1 : cursor_item_.count);
-            dropped = cursor_item_;
-            dropped.count = take;
-            cursor_item_.count = static_cast<std::uint8_t>(cursor_item_.count - take);
-            if (cursor_item_.count == 0) {
-                cursor_item_ = item::ItemStack::air();
-            }
-        } else if (slot >= 0 && slot < slot_count) {
-            item::ItemStack in_slot = inventory_.slot(static_cast<std::size_t>(slot));
-            if (in_slot.empty()) {
-                return;
-            }
-            const auto take = static_cast<std::uint8_t>(button == 0 ? 1 : in_slot.count);
-            dropped = in_slot;
-            dropped.count = take;
-            in_slot.count = static_cast<std::uint8_t>(in_slot.count - take);
-            inventory_.set_slot(static_cast<std::size_t>(slot), in_slot);
-            send_slot(0, slot, in_slot);
-        } else {
-            return;
+
+    struct Ops {
+        Connection& self;
+        std::int16_t slots{0};
+        [[nodiscard]] std::int16_t slot_count() const noexcept { return slots; }
+        [[nodiscard]] std::uint8_t stack_limit(std::int16_t, const item::ItemStack&) const noexcept {
+            return item::kMaxStack;
         }
-        // EntityPlayer.dropItem：出生 (posX, posY−0.3+eyeHeight, posZ)、
-        // dropAround 随机环绕初速 + y 0.2、拾取延迟 40
-        const auto [vx, vy, vz] = net::throw_velocity();
-        drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, dropped,
-                   vx, vy, vz, 40);
-        return;
-    }
-    if (mode != 0) {
-        return;  // 双击/拖拽/数字键等暂不支持
-    }
-    // 窗口外点击（mode 0）：丢出整个游标堆（dropAround + 延迟 40，vanilla 同）
-    if (slot < 0) {
-        if (!cursor_item_.empty()) {
+        [[nodiscard]] item::ItemStack get(std::int16_t s) const {
+            return self.inventory_.slot(static_cast<std::size_t>(s));
+        }
+        void set(std::int16_t s, item::ItemStack stack) {
+            self.inventory_.set_slot(static_cast<std::size_t>(s), stack);
+        }
+        // ContainerPlayer.transferStackInSlot 的分区：热区栏↔主背包，其余→主背包再热区栏
+        [[nodiscard]] item::ItemStack transfer(std::int16_t s) {
+            auto moving = get(s);
+            if (moving.empty()) return moving;
+            if (s >= 36 && s <= 44) {
+                (void)self.merge_into_range(moving, 9, 35);
+            } else if (s >= 9 && s <= 35) {
+                (void)self.merge_into_range(moving, 36, 44);
+            } else {
+                (void)self.merge_into_range(moving, 9, 35);
+                if (!moving.empty()) (void)self.merge_into_range(moving, 36, 44);
+            }
+            set(s, moving);
+            return moving;
+        }
+        void drop(item::ItemStack stack, bool) {
+            if (stack.empty()) return;
             const auto [vx, vy, vz] = net::throw_velocity();
-            drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, cursor_item_,
-                       vx, vy, vz, 40);
+            self.drop_stack(self.player_pos_.x, self.player_pos_.y - 0.3 + 1.62,
+                            self.player_pos_.z, stack, vx, vy, vz, 40);
         }
-        cursor_item_ = item::ItemStack::air();
-        return;
-    }
-    if (slot >= slot_count) {
-        return;
-    }
-    const std::size_t idx = static_cast<std::size_t>(slot);
-    item::ItemStack in_slot = inventory_.slot(idx);
-    if (button == 0) {
-        // 左键：游标与槽整堆交换，或同类合并
-        if (cursor_item_.stacks_with(in_slot)) {
-            const int total = static_cast<int>(in_slot.count) + static_cast<int>(cursor_item_.count);
-            const int keep = std::min(total, static_cast<int>(item::kMaxStack));
-            in_slot.count = static_cast<std::uint8_t>(keep);
-            cursor_item_.count = static_cast<std::uint8_t>(total - keep);
-            if (cursor_item_.count == 0) {
-                cursor_item_ = item::ItemStack::air();
-            }
-        } else {
-            std::swap(cursor_item_, in_slot);
+        [[nodiscard]] bool add_to_inventory(item::ItemStack stack) {
+            return self.give_item(stack).empty();
         }
-    } else if (button == 1) {
-        // 右键：放下一个 / 拿起一半
-        if (cursor_item_.empty()) {
-            if (!in_slot.empty()) {
-                const std::uint8_t take = static_cast<std::uint8_t>((in_slot.count + 1) / 2);
-                cursor_item_ = in_slot;
-                cursor_item_.count = take;
-                in_slot.count = static_cast<std::uint8_t>(in_slot.count - take);
-                if (in_slot.count == 0) {
-                    in_slot = item::ItemStack::air();
-                }
-            }
-        } else if (in_slot.empty()) {
-            in_slot = cursor_item_;
-            in_slot.count = 1;
-            --cursor_item_.count;
-            if (cursor_item_.count == 0) {
-                cursor_item_ = item::ItemStack::air();
-            }
-        } else if (cursor_item_.stacks_with(in_slot) && in_slot.count < item::kMaxStack) {
-            ++in_slot.count;
-            --cursor_item_.count;
-            if (cursor_item_.count == 0) {
-                cursor_item_ = item::ItemStack::air();
-            }
-        } else {
-            std::swap(cursor_item_, in_slot);
-        }
-    } else {
-        return;
-    }
-    inventory_.set_slot(idx, in_slot);
-    send_slot(0, slot, in_slot);
-    // SetSlot 到 windowId=-1 slot=-1 表示更新游标物品
-    send_slot(-1, -1, cursor_item_);
+    };
+    Ops ops{*this, slot_count};
+    const auto expected = slot_click(ops, cursor_item_, drag_state_, mode, slot,
+                                     static_cast<std::int8_t>(button),
+                                     context_.game_mode == proto::game_mode::kCreative);
+
     // 合成格（1..4）变动后重新匹配配方
     if (slot >= 1 && slot <= 4) {
         refresh_crafting_result();
     }
+    return expected;
 }
 
 void Connection::refresh_crafting_result() {

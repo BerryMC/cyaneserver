@@ -6,7 +6,7 @@
 - 严重度：**P0** = 数据丢失/玩家可见的破缺；**P1** = 机制与原版不同；**P2** = 数值/文本差异
 - 状态：`待修` / `进行中` / `已修`
 
-统计：P0 20 条、P1 24 条、P2 18 条，已修 11 条。
+统计：P0 15 条、P1 24 条、P2 18 条，已修 16 条。
 
 ---
 
@@ -25,6 +25,11 @@
 | CMD-04 | `/gamemode c`/`1` 静默失败（命令层认简写、执行层只认全名） | `44e3c6f` |
 | CMD-05 | `/time set -1` 生效；`query day` 文本；`/seed` 方括号；`/deop` 文本 | `44e3c6f` |
 | COMBAT-01 | 玩家无受伤无敌帧，围殴伤害成倍叠加 | `44e3c6f` |
+| CONTAINER-02 | `slot_click` 补齐 mode 2/3/4/6（换位/复制/丢弃/收集） | `CONTAINER-02` |
+| CONTAINER-03 | QUICK_CRAFT 拖拽状态机（开始/加槽/结束，均分与每槽一个） | `CONTAINER-03` |
+| CONTAINER-04 | 背包窗口改用同一 `slot_click`，mode 0..6 全部生效 | `CONTAINER-04` |
+| CONTAINER-05 | 创造 CLONE 改为从服务端槽复制并限 64，不再采信客户端 count | `CONTAINER-05` |
+| CONTAINER-06 | ConfirmTransaction 改用 slotClick 返回值（含数量）比对 | `CONTAINER-06` |
 
 ---
 
@@ -32,11 +37,6 @@
 
 | ID | 区域 | 位置 | 原版参照 | 问题 | 状态 |
 |---|---|---|---|---|---|
-| CONTAINER-02 | 容器 | `connection_container.cpp` 仅判 `mode==1` | `Container.java:372-491` | mode 2/3/4/6（换位/复制/丢弃/收集）落到 PICKUP 分支：数字键变成拿起、Q 丢不出去、双击把光标压进槽 | 待修 |
-| CONTAINER-03 | 容器 | 同上 | `Container.java:152-227` | QUICK_CRAFT(mode 5) 无状态机；起始包被当“点窗外”清空光标 → 拖拽 64 个物品消失 | 待修 |
-| CONTAINER-04 | 容器 | `connection_inventory.cpp:228-230` | `ContainerPlayer` 继承全部 | 背包窗口 `mode != 0` 直接 return，数字键/拖拽/双击全无效；SWAP 客户端本地预测成功 → 幽灵复制 | 待修 |
-| CONTAINER-05 | 容器 | `connection_container.cpp:165-168` | `Container.java:430-440` | 创造模式采信客户端 `clickedItem` 且不校验 count → 可注入任意 id/damage/count 写入槽位 | 待修 |
-| CONTAINER-06 | 容器 | `connection_inventory.cpp:62-76` | `NetHandlerPlayServer.java:1224-1233` | ConfirmTransaction 比较**光标**而非**点击槽旧内容** → 每次 shift 点击都 `accepted=false` + 全窗重发 | 待修 |
 | LOOT-01 | 战利品 | `loot_table.hpp:289-294` | `LootConditionManager.java:120-126` | 未注册条件静默 `continue` → 条件恒真；`entity_properties(on_fire)` 失效 → **牛/鸡/猪永远掉熟肉** | 待修 |
 | LOOT-02 | 战利品 | `loot_table.hpp:359-366` | `SetDamage.java:75-80` | `set_damage` 映射成 `SetData` → 钓到的破损物品耐久永远满 | 待修 |
 | LOOT-03 | 战利品 | `loot_table.hpp:317-385` | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 缺 4 个函数（数据里 21+4+2 处引用）→ 附魔书/附魔金苹果无附魔 | 待修 |

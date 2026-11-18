@@ -26,6 +26,7 @@
 #include "cyane/entity/player_manager.hpp"
 #include "cyane/item/crafting.hpp"
 #include "cyane/item/player_inventory.hpp"
+#include "cyane/net/slot_click.hpp"
 #include "cyane/net/block_ticks.hpp"
 #include "cyane/net/container_store.hpp"
 #include "cyane/net/crafting_table_store.hpp"
@@ -162,12 +163,12 @@ private:
     void commit_furnace_slot(std::size_t fslot, const item::ItemStack& in_slot);
     // 熔炉槽经权威存储更新后，立即回发三槽与进度条
     void send_furnace_slots_now();
-    void apply_click(std::int16_t slot, std::uint8_t button, std::int32_t mode);
+    [[nodiscard]] item::ItemStack apply_click(std::int16_t slot, std::uint8_t button, std::int32_t mode);
     // 合成：读取合成格匹配配方并刷新结果槽（0）；take=true 时消耗一份材料
     void refresh_crafting_result();
     // 拿取合成结果：all=false 放到游标，all=true（shift）批量进背包
     void take_craft_result(bool all);
-    void apply_chest_click(std::int16_t slot, std::uint8_t button, std::int32_t mode,
+    [[nodiscard]] item::ItemStack apply_chest_click(std::int16_t slot, std::uint8_t button, std::int32_t mode,
                            const item::ItemStack& clicked);
     // 工作台窗口（windowId=4，10 槽：0-8 格、9 结果）：打开/点击/结果计算
     void open_crafting_table(std::int64_t table_key);
@@ -345,6 +346,8 @@ private:
     std::int32_t hurt_resistant_ticks_{0};
     float last_damage_{0.0f};
     static constexpr std::int32_t kMaxHurtResistantTicks = 20;
+    // Container.slotClick 的 QUICK_CRAFT 拖拽事务状态（窗口间共享）
+    DragState drag_state_;
 
     // 已发送给客户端的区块集合，与玩家所在区块 + 视距一同维护
     std::unordered_set<std::int64_t> loaded_chunks_;
