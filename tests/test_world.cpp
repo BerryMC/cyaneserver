@@ -21,6 +21,9 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_layer_add_snow.hpp"
+#include "cyane/world/gen_layer_remove_ocean.hpp"
+#include "cyane/world/gen_layer_add_island.hpp"
 #include "cyane/world/world.hpp"
 #include "cyane/world/structure.hpp"
 #include "cyane/world/flat_generator_info.hpp"
@@ -1628,4 +1631,43 @@ CYANE_TEST(gen_layer_select_mode_or_random_has_inequality_guards) {
     const auto mark3 = seed.chunk_seed();
     CYANE_CHECK_EQ(seed.select_mode_or_random(4, 4, 4, 1), 4);
     CYANE_CHECK_EQ(seed.chunk_seed(), mark3);
+}
+
+CYANE_TEST(gen_layer_add_island_remove_ocean_snow_match_reference) {
+    // 参考网格来自独立的 Python 实现（照 Java 源码另写一遍），seed=12345、(-4,-4,8x8)。
+    // 重点校验 AddIsland 的短路求值：邻格为 0 时不取随机数也不自增计数，
+    // 这决定了后续所有 nextInt 的 bound 序列。
+    using namespace cyane::world::layer;
+
+    auto island = std::make_shared<GenLayerIsland>(1);
+    auto add_island = std::make_shared<GenLayerAddIsland>(1, island);
+    auto remove_ocean = std::make_shared<GenLayerRemoveTooMuchOcean>(2, add_island);
+    auto add_snow = std::make_shared<GenLayerAddSnow>(2, remove_ocean);
+    add_snow->init_world_gen_seed(12345);
+
+    const std::array<std::int32_t, 64> expect_island{
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
+    const std::array<std::int32_t, 64> expect_ocean{
+        0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0,
+        1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0,
+        0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0};
+    const std::array<std::int32_t, 64> expect_snow{
+        0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0,
+        4, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 1, 0, 0, 1, 0, 4, 4, 0, 0, 0, 1, 0,
+        0, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 0, 4, 0, 0, 0};
+
+    const auto got_island = add_island->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < expect_island.size() && i < got_island.size(); ++i) {
+        CYANE_CHECK_EQ(got_island[i], expect_island[i]);
+    }
+    const auto got_ocean = remove_ocean->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < expect_ocean.size() && i < got_ocean.size(); ++i) {
+        CYANE_CHECK_EQ(got_ocean[i], expect_ocean[i]);
+    }
+    const auto got_snow = add_snow->get_ints(-4, -4, 8, 8);
+    for (std::size_t i = 0; i < expect_snow.size() && i < got_snow.size(); ++i) {
+        CYANE_CHECK_EQ(got_snow[i], expect_snow[i]);
+    }
 }
