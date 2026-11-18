@@ -3,7 +3,7 @@
 纯 C++23 实现的 Minecraft Java Edition **1.12.2**（协议 340）服务端。
 
 > 详细文档见 `docs/`：架构、兼容契约、里程碑、协议、参考日志。
-> 原版对齐进度：`vanilla/` 2185 文件燃尽清单，已核销 228（10.4%），`tools/vanilla_progress.py` 输出。
+> 原版对齐进度：`vanilla/` 2185 文件燃尽清单，已核销 310（14.2%），`tools/vanilla_progress.py` 输出。
 
 ## 快速开始
 
@@ -13,7 +13,7 @@ cmake --build build -j
 ./build/cyane
 ```
 
-单元测试（184 项）：`cmake --build build -j4 && ./build/cyane_tests`
+单元测试（207 项）：`cmake --build build -j2 && ./build/cyane_tests`
 
 ## 目标
 
@@ -78,6 +78,11 @@ C++23（clang）· CMake 3.25+ · lld · zlib-ng · OpenSSL · liburing · 内�
 - **协议与连接**：握手/状态/登录/加密/压缩完整流程，与原版逐字节一致。
 - **世界与移动**：自然噪声地形区块、动态加载/卸载、多人可见、聊天、KeepAlive。
 - **Anvil 存档**：完整区块存储，可**加载原版世界**（真实地形 + `level.dat` 出生点），保存为无损打补丁（光照/群系/实体透传）；方块修改与箱子/熔炉内容跨重启保留；停机保存 + 自动保存 + 控制台 `save`。
+- **存档互操作（Spigot 双向实测）**：
+  - `session.lock` 用 Java `writeLong` 的大端 8 字节；被其他进程接管后拒绝写盘（`The save is being accessed from another location, aborting`），关服不删除锁文件。
+  - `level.dat` 走原版 `level.dat_new → level.dat_old → level.dat` 轮换，读取失败回退 `level.dat_old`，每次保存强制 `saveVersion=19133`。
+  - `WorldInfo` 逐字段对齐原版：`Version/DataVersion/RandomSeed/generatorName/generatorVersion/MapFeatures/GameType/Difficulty/hardcore/allowCommands/initialized/Time/DayTime/SizeOnDisk/LastPlayed/天气/GameRules/Player/DimensionData`，以及位于 **Data 根**的 `BorderCenterX/BorderCenterZ/BorderSize/BorderSizeLerpTime/BorderSizeLerpTarget/BorderSafeZone/BorderDamagePerBlock/BorderWarningBlocks/BorderWarningTime`。
+  - 保存只覆盖已建模字段，Bukkit/Spigot/Forge 追加的未知键原样保留；`SaveFormatOld` 提供 `World1..World5` 枚举、`renameWorld`（只改 `LevelName`）、`deleteWorldDirectory`（5 次重试）等存档目录管理。
 - **自然地形生成（M5 核心）**：逐行转写原版 `ChunkGeneratorOverworld`——
   - 5×5×33 噪声高度图（depth/main/minLimit/maxLimit 四组八度 Perlin + 群系 5×5 权重卷积）→ 三线性插值填石头/水；
   - **30 种原版生物群系**（大陆度宏观分带 + 温湿度气候区，陆海间沙滩缓冲，冷/温带/热区不交错）；
@@ -96,13 +101,13 @@ C++23（clang）· CMake 3.25+ · lld · zlib-ng · OpenSSL · liburing · 内�
 
 ## 原版燃尽跟踪
 
-`vanilla/` 下按原版 1.12.2 源码目录保存 2185 个零字节占位文件，**每个机制先实现 C++ 等价物、加单元测试，再 `git rm` 核销对应占位文件**。当前进度 228/2185（10.4%）：
+`vanilla/` 下按原版 1.12.2 源码目录保存 2185 个零字节占位文件，**每个机制先实现 C++ 等价物、加单元测试，再 `git rm` 核销对应占位文件**。当前进度 310/2185（14.2%）：
 
 ```bash
 python3 tools/vanilla_progress.py
 ```
 
-按包分布剩余大头：client 643 / entity 236 / block 205 / world 187，详见输出。
+按包分布剩余大头：client 643 / entity 236 / block 205 / util 145 / world 105，详见输出。
 
 ## 文档索引
 
