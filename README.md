@@ -118,3 +118,4 @@ python3 tools/vanilla_progress.py
 | `docs/roadmap.md` | 里程碑交付清单、当前状态、性能目标、风险 |
 | `docs/protocol.md` | 协议 340 事实与验证状态 |
 | `docs/reference-log.md` | 参考源审计日志 |
+| `docs/vanilla-gaps.md` | **原版一致性缺口清单（待修复列表，按 P0/P1/P2 分级）** |
