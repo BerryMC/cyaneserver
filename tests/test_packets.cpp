@@ -2,6 +2,7 @@
 #include <string_view>
 
 #include "cyane/item/item_stack.hpp"
+#include "cyane/item/item_tools.hpp"
 #include "cyane/net/packet_writers.hpp"
 #include "cyane/proto/play_fields.hpp"
 #include "cyane/world/blocks.hpp"
@@ -170,4 +171,54 @@ CYANE_TEST(game_mode_parses_names_shortnames_and_ids) {
     }
     CYANE_CHECK(!from_id(-1).has_value());
     CYANE_CHECK(!from_id(4).has_value());
+}
+
+CYANE_TEST(item_equipment_slot_matches_getSlotForItemStack) {
+    using cyane::item::equipment_slot;
+    // EntityLiving.getSlotForItemStack：护甲按 armorType，鞘翅→胸甲，盾→副手，
+    // 南瓜/头颅→头盔，其余无专用槽。槽位 = ContainerPlayer 的 8-index。
+    CYANE_CHECK_EQ(equipment_slot(298), 5);  // 皮革头盔
+    CYANE_CHECK_EQ(equipment_slot(311), 6);  // 钻石胸甲
+    CYANE_CHECK_EQ(equipment_slot(300), 7);  // 皮革护腿
+    CYANE_CHECK_EQ(equipment_slot(317), 8);  // 金靴子
+    CYANE_CHECK_EQ(equipment_slot(443), 6);  // 鞘翅
+    CYANE_CHECK_EQ(equipment_slot(442), 45); // 盾牌
+    CYANE_CHECK_EQ(equipment_slot(86), 5);   // 南瓜
+    CYANE_CHECK_EQ(equipment_slot(397), 5);  // 头颅
+    CYANE_CHECK_EQ(equipment_slot(276), -1); // 钻石剑无专用槽
+    CYANE_CHECK_EQ(equipment_slot(264), -1); // 钻石
+}
+
+CYANE_TEST(item_attack_speed_matches_tool_material_modifiers) {
+    using cyane::item::attack_speed;
+    // 基础 4.0；剑 -2.4；斧 ATTACK_SPEEDS{-3.2,-3.2,-3.1,-3.0,-3.0}
+    for (const int sword : {268, 272, 267, 276, 283}) {
+        CYANE_CHECK_EQ(attack_speed(static_cast<std::int16_t>(sword)), 1.6f);
+    }
+    CYANE_CHECK_EQ(attack_speed(271), 0.8f);  // 木斧
+    CYANE_CHECK_EQ(attack_speed(275), 0.8f);  // 石斧
+    CYANE_CHECK_EQ(attack_speed(258), 0.9f);  // 铁斧
+    CYANE_CHECK_EQ(attack_speed(279), 1.0f);  // 钻石斧
+    CYANE_CHECK_EQ(attack_speed(286), 1.0f);  // 金斧
+    // 镐/锹/锄不加攻击速度修饰符
+    CYANE_CHECK_EQ(attack_speed(257), 4.0f);  // 铁镐
+    CYANE_CHECK_EQ(attack_speed(-1), 4.0f);   // 空手
+}
+
+CYANE_TEST(attack_cooldown_scaling_matches_vanilla) {
+    // getCooledAttackStrength(0.5) = clamp((ticks + 0.5) / (20 / attackSpeed), 0, 1)
+    // damage *= 0.2 + strength^2 * 0.8
+    const auto scaled = [](float strength) { return 0.2f + strength * strength * 0.8f; };
+    using cyane::item::attack_speed;
+    const float sword_period = 20.0f / attack_speed(276);  // 12.5
+    const auto strength_after = [&](int ticks) {
+        return std::clamp((static_cast<float>(ticks) + 0.5f) / sword_period, 0.0f, 1.0f);
+    };
+    // 连点：0 tick 后只有 0.2 倍
+    CYANE_CHECK(scaled(strength_after(0)) < 0.3f);
+    // 挥满：13 tick 后达到 1.0（12.5 周期 + 0.5 偏移）
+    CYANE_CHECK_EQ(strength_after(13), 1.0f);
+    CYANE_CHECK_EQ(scaled(strength_after(13)), 1.0f);
+    // 单调递增
+    CYANE_CHECK(scaled(strength_after(6)) < scaled(strength_after(13)));
 }

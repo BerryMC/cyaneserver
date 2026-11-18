@@ -30,6 +30,33 @@ struct ToolInfo {
     }
 }
 
+// EntityLiving.getSlotForItemStack 的目标槽（ContainerPlayer 布局）：
+// 返回 5..8 = 头盔/胸甲/护腿/靴子，45 = 副手，-1 = 无专用槽（走主背包）。
+// 护甲 index 为 FEET=0/LEGS=1/CHEST=2/HEAD=3，ContainerPlayer 用 8-index。
+[[nodiscard]] constexpr int equipment_slot(std::int16_t item_id) noexcept {
+    switch (item_id) {
+        case 298: case 302: case 306: case 310: case 314: return 5;  // 头盔
+        case 86: case 397: return 5;                                 // 南瓜 / 头颅 → HEAD
+        case 299: case 303: case 307: case 311: case 315: return 6;  // 胸甲
+        case 443: return 6;                                          // 鞘翅 → CHEST
+        case 300: case 304: case 308: case 312: case 316: return 7;  // 护腿
+        case 301: case 305: case 309: case 313: case 317: return 8;  // 靴子
+        case 442: return 45;                                         // 盾牌 → OFFHAND
+        default: return -1;
+    }
+}
+
+// SharedMonsterAttributes.ATTACK_SPEED：基础 4.0，剑 -2.4、斧按材质 -3.2..-3.0
+[[nodiscard]] constexpr float attack_speed(std::int16_t item_id) noexcept {
+    switch (item_id) {
+        case 268: case 272: case 267: case 276: case 283: return 1.6f;  // 剑（全材质）
+        case 271: case 275: return 0.8f;                                // 木斧 / 石斧
+        case 258: return 0.9f;                                          // 铁斧
+        case 279: case 286: return 1.0f;                                // 钻石斧 / 金斧
+        default: return 4.0f;                                           // 空手/其它工具
+    }
+}
+
 // 物品最大耐久（Item.setMaxDamage）。数值来自原版 ToolMaterial 与
 // ItemArmor.ArmorMaterial：工具五档 59/131/250/1561/32，
 // 护甲 = MAX_DAMAGE_ARRAY{13,15,16,11} × 材质系数（皮革5/锁链15/铁15/金7/钻石33）。

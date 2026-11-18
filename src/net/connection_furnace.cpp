@@ -131,8 +131,24 @@ void Connection::apply_furnace_click(std::int16_t slot, std::uint8_t button, std
         cursor_item_ = clicked;
     }
     if (slot < 0 || slot >= kFurnaceWindowSlots) {
-        if (slot < 0) {
-            cursor_item_ = item::ItemStack::air();
+        // Container.slotClick(-999)：button 0 丢整叠、button 1 只丢 1 个；-1 无效槽不动
+        if (slot == -999 && !cursor_item_.empty()) {
+            const auto [vx, vy, vz] = net::throw_velocity();
+            if (button == 1) {
+                item::ItemStack one = cursor_item_;
+                one.count = 1;
+                if (cursor_item_.count > 1) {
+                    cursor_item_.count = static_cast<std::uint8_t>(cursor_item_.count - 1);
+                } else {
+                    cursor_item_ = item::ItemStack::air();
+                }
+                drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, one,
+                           vx, vy, vz, 40);
+            } else {
+                drop_stack(player_pos_.x, player_pos_.y - 0.3 + 1.62, player_pos_.z, cursor_item_,
+                           vx, vy, vz, 40);
+                cursor_item_ = item::ItemStack::air();
+            }
         }
         return;
     }

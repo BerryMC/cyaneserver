@@ -184,17 +184,27 @@ item::ItemStack Connection::apply_click(std::int16_t slot, std::uint8_t button,
         void set(std::int16_t s, item::ItemStack stack) {
             self.inventory_.set_slot(static_cast<std::size_t>(s), stack);
         }
-        // ContainerPlayer.transferStackInSlot 的分区：热区栏↔主背包，其余→主背包再热区栏
+        // ContainerPlayer.transferStackInSlot：分支顺序与原版一致
         [[nodiscard]] item::ItemStack transfer(std::int16_t s) {
             auto moving = get(s);
             if (moving.empty()) return moving;
-            if (s >= 36 && s <= 44) {
-                (void)self.merge_into_range(moving, 9, 35);
+            const int target = item::equipment_slot(moving.id);
+            if (s >= 1 && s <= 8) {
+                // 合成格 / 盔甲槽 → 主背包+热区栏
+                (void)self.merge_into_range(moving, 9, 44);
+            } else if (target >= 5 && target <= 8 && get(static_cast<std::int16_t>(target)).empty()) {
+                // 盔甲自动装备（目标槽为空时）
+                (void)self.merge_into_range(moving, static_cast<std::size_t>(target),
+                                            static_cast<std::size_t>(target));
+            } else if (target == 45 && get(45).empty()) {
+                // 盾牌 → 副手
+                (void)self.merge_into_range(moving, 45, 45);
             } else if (s >= 9 && s <= 35) {
                 (void)self.merge_into_range(moving, 36, 44);
-            } else {
+            } else if (s >= 36 && s <= 44) {
                 (void)self.merge_into_range(moving, 9, 35);
-                if (!moving.empty()) (void)self.merge_into_range(moving, 36, 44);
+            } else {
+                (void)self.merge_into_range(moving, 9, 44);
             }
             set(s, moving);
             return moving;

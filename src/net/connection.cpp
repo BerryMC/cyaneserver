@@ -147,6 +147,7 @@ void Connection::tick(std::uint64_t now_ms) {
     if (hurt_resistant_ticks_ > 0) {
         --hurt_resistant_ticks_;
     }
+    ++ticks_since_last_swing_;
     // 先投递他人广播来的消息（进入 play 后 hub_entry_ 有效）
     drain_mailbox();
     // 挖掘裂纹进度推进

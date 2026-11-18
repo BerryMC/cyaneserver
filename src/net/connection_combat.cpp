@@ -56,8 +56,16 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
         if (context_.hub != nullptr) {
             context_.hub->broadcast(player_id_, proto::play_cb::kAnimation, anim.data());
         }
-        // 伤害：手持攻击力（徒手 1.0）；生物掉血/击退/死亡掉落
-        const float damage = item::attack_damage(inventory_.hotbar_item(selected_slot_).id);
+        // EntityPlayer.attackTargetEntityWithCurrentItem：
+        //   f2 = getCooledAttackStrength(0.5)；damage *= 0.2 + f2^2 * 0.8；随后 resetCooldown
+        //   getCooldownPeriod = 20 / ATTACK_SPEED（空手 5 tick、剑 12.5 tick）
+        const std::int16_t held_id = inventory_.hotbar_item(selected_slot_).id;
+        const float cooldown_period = 20.0f / item::attack_speed(held_id);
+        const float cooled = std::clamp(
+            (static_cast<float>(ticks_since_last_swing_) + 0.5f) / cooldown_period, 0.0f, 1.0f);
+        ticks_since_last_swing_ = 0;
+        const float damage =
+            item::attack_damage(held_id) * (0.2f + cooled * cooled * 0.8f);
         const auto hurt = context_.mobs->damage(static_cast<std::uint32_t>(*target), damage,
                                                 player_pos_.x, player_pos_.z);
         if (!hurt.found) {

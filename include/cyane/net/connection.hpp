@@ -349,6 +349,8 @@ private:
     std::int32_t hurt_resistant_ticks_{0};
     float last_damage_{0.0f};
     static constexpr std::int32_t kMaxHurtResistantTicks = 20;
+    // EntityLivingBase.ticksSinceLastSwing：攻击冷却计数
+    std::int32_t ticks_since_last_swing_{0};
     // Container.slotClick 的 QUICK_CRAFT 拖拽事务状态（窗口间共享）
     DragState drag_state_;
 
