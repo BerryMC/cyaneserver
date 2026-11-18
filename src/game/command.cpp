@@ -444,10 +444,9 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
         }
         if (args[0] == "set" && args.size() >= 2) {
             std::int64_t target_time = 0;
+            // 1.12.2 只有 day / night 两个关键字（CommandTime#execute）
             if (args[1] == "day") target_time = 1000;
-            else if (args[1] == "noon") target_time = 6000;
             else if (args[1] == "night") target_time = 13000;
-            else if (args[1] == "midnight") target_time = 18000;
             else if (auto parsed = parse_int64(args[1])) target_time = *parsed;
             else {
                 sender.send_feedback(std::format("Unknown time: '{}'", args[1]), true);
@@ -469,13 +468,15 @@ bool CommandDispatcher::execute(CommandSender& sender, Server& server, std::stri
             return true;
         }
         if (args[0] == "query" && args.size() >= 2) {
+            // 原版查询结果：daytime = worldTime % 24000，day = worldTime / 24000 % INT_MAX，
+            // gametime = totalWorldTime % INT_MAX（CommandTime#execute）
             if (args[1] == "daytime") {
-                // commands.time.query = Time is %s
-                sender.send_feedback(std::format("Time is {}", server.time_of_day()));
+                const auto phase = server.time_of_day() >= 0 ? server.time_of_day() % 24000 : 24000;
+                sender.send_feedback(std::format("Time is {}", phase));
             } else if (args[1] == "gametime") {
-                sender.send_feedback(std::format("Time is {}", server.world_age()));
+                sender.send_feedback(std::format("Time is {}", server.world_age() % 2147483647LL));
             } else if (args[1] == "day") {
-                sender.send_feedback(std::format("Day is {}", server.world_age() / 24000));
+                sender.send_feedback(std::format("Day is {}", server.time_of_day() / 24000 % 2147483647LL));
             }
             return true;
         }

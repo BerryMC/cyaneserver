@@ -31,9 +31,10 @@ enum class WorldType : std::uint8_t {
     return "default";
 }
 
-// 生成器版本：level.dat 的 generatorVersion，1.1 旧图为 0，其余为 1
+// 生成器版本：原版只有 DEFAULT 是 1（new WorldType(0,"default",1)），
+// 其余构造器都走 WorldType(id,name) → version 0（含 FLAT/AMPLIFIED/DEFAULT_1_1）。
 [[nodiscard]] constexpr int world_type_version(WorldType type) noexcept {
-    return type == WorldType::Default1_1 ? 0 : 1;
+    return type == WorldType::Default ? 1 : 0;
 }
 
 // 是否允许在单人创建界面选择（1.1 旧图不允许新建）

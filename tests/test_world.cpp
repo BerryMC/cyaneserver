@@ -1,3 +1,5 @@
+#include <array>
+#include <bit>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -664,6 +666,28 @@ CYANE_TEST(button_release_is_world_level) {
     CYANE_CHECK_EQ(world.block_at(-3, 70, 5), kReleased);
 }
 
+CYANE_TEST(java_random_matches_java_8_oracle_vectors) {
+    struct Vector {
+        std::int64_t seed;
+        std::uint64_t first;
+        std::uint64_t second;
+        int bounded;
+    };
+    constexpr std::array vectors{
+        Vector{0, 0xbb20b45fd4d95138ULL, 0x3d93cb799b3970beULL, 368843508},
+        Vector{1, 0xbb1ad57319b89cd8ULL, 0x68fb0e6f684df992ULL, 446064254},
+        Vector{-1, 0x44d96cb3708722c3ULL, 0x032420168c4bff9eULL, 421815597},
+        Vector{12345, 0x5c9f20d58361b331ULL, 0xeed8a921eac80778ULL, 789050048},
+        Vector{987654321, 0x4e5210afec7d68ffULL, 0xd19b620532582ff3ULL, 98087148},
+    };
+    for (const auto& vector : vectors) {
+        world::gen::JavaRandom random{static_cast<std::uint64_t>(vector.seed)};
+        CYANE_CHECK_EQ(random.next_long(), vector.first);
+        CYANE_CHECK_EQ(random.next_long(), vector.second);
+        CYANE_CHECK_EQ(random.next_int(1000000007), vector.bounded);
+    }
+}
+
 CYANE_TEST(overworld_generator_produces_deterministic_terrain) {
     world::gen::ChunkGeneratorOverworld gen1{123456789ULL};
     world::gen::ChunkGeneratorOverworld gen2{123456789ULL};
@@ -1277,6 +1301,72 @@ CYANE_TEST(map_data_round_trips_through_nbt) {
     CYANE_CHECK_EQ(other.next_map_id(), 2);
 }
 
+CYANE_TEST(world_info_preserves_legacy_generator_and_dimension_data) {
+    world::nbt::Compound data;
+    data.emplace_back("generatorName", world::nbt::make_string("default"));
+    data.emplace_back("generatorVersion", world::nbt::make_i32(0));
+    data.emplace_back("DayTime", world::nbt::make_i64(-1));
+    data.emplace_back("GameRules", world::nbt::make_compound({}));
+    world::nbt::Compound dimension;
+    dimension.emplace_back("Custom", world::nbt::make_string("kept"));
+    world::nbt::Compound dimensions;
+    dimensions.emplace_back("1", world::nbt::make_compound(std::move(dimension)));
+    data.emplace_back("DimensionData", world::nbt::make_compound(std::move(dimensions)));
+    data.emplace_back("Bukkit.Version", world::nbt::make_string("git-Spigot-fixture"));
+
+    world::storage::WorldInfo info;
+    info.read_from_nbt(world::nbt::make_compound(std::move(data)));
+    CYANE_CHECK(info.terrain_type == world::WorldType::Default1_1);
+    CYANE_CHECK_EQ(info.day_time, -1);
+    CYANE_CHECK(info.game_rules.get_rules().empty());
+    const auto* custom = info.dimension_data().find("1");
+    CYANE_CHECK(custom != nullptr);
+    if (custom != nullptr) {
+        CYANE_CHECK_EQ(custom->find("Custom")->text().value_or(""), "kept");
+    }
+    auto written = info.write_to_nbt();
+    const auto* output = written.find("Data");
+    CYANE_CHECK(output != nullptr);
+    if (output != nullptr) {
+        // WorldType.getName() 为 "default_1_1"（原版 updateTagCompound 直接写它）
+        CYANE_CHECK_EQ(output->find("generatorName")->text().value_or(""), "default_1_1");
+        const auto* version = output->find("generatorVersion");
+        CYANE_CHECK(version != nullptr);
+        if (version != nullptr) CYANE_CHECK_EQ(version->scalar().value_or(-1), 0);
+        CYANE_CHECK_EQ(output->find("Bukkit.Version")->text().value_or(""),
+                       "git-Spigot-fixture");
+        const auto* day = output->find("DayTime");
+        CYANE_CHECK(day != nullptr);
+        if (day != nullptr) CYANE_CHECK_EQ(day->scalar().value_or(0), -1);
+        // 维度数据必须回写（原版 updateTagCompound 写 DimensionData）
+        const auto* dims = output->find("DimensionData");
+        CYANE_CHECK(dims != nullptr);
+        if (dims != nullptr) {
+            const auto* kept = dims->find("1");
+            CYANE_CHECK(kept != nullptr);
+            if (kept != nullptr) {
+                CYANE_CHECK_EQ(kept->find("Custom")->text().value_or(""), "kept");
+            }
+        }
+    }
+    // set_dimension_data 写入的条目也要落盘
+    info.set_dimension_data(-1, world::nbt::make_compound({}));
+    const auto with_dimension = info.write_to_nbt();
+    const auto* after_set = with_dimension.find("Data");
+    CYANE_CHECK(after_set != nullptr);
+    if (after_set != nullptr) {
+        CYANE_CHECK(after_set->find("DimensionData")->find("-1") != nullptr);
+    }
+
+    const world::WorldSettings settings{999, 1, true, false, world::WorldType::Flat};
+    const world::storage::WorldInfo created{settings, "Flat"};
+    CYANE_CHECK_EQ(created.random_seed, 999);
+    CYANE_CHECK_EQ(static_cast<int>(created.game_type), 1);
+    CYANE_CHECK(created.terrain_type == world::WorldType::Flat);
+    CYANE_CHECK(!created.initialized);
+    CYANE_CHECK(!created.allow_commands);
+}
+
 CYANE_TEST(world_info_round_trips_full_vanilla_fields) {
     const auto dir = std::filesystem::temp_directory_path() / "cyane_test_world_info";
     std::filesystem::remove_all(dir);
@@ -1328,6 +1418,7 @@ CYANE_TEST(world_info_round_trips_full_vanilla_fields) {
     CYANE_CHECK(restored.game_rules.get_bool("keepInventory"));
     CYANE_CHECK_EQ(restored.game_rules.get_int("randomTickSpeed"), 7);
     CYANE_CHECK_EQ(restored.border_warning_distance, 12);
+    CYANE_CHECK(restored.dimension_data().find("0") == nullptr);
 
     // 存档摘要（WorldSummary）
     const auto summary = world::storage::WorldSummary::from_root(*reparsed);

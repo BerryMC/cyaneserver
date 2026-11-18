@@ -45,24 +45,22 @@ Result<LevelInfo> load_level_dat(const std::filesystem::path& world_dir) {
 }
 
 Result<storage::WorldInfo> load_world_info(const std::filesystem::path& world_dir) {
-    storage::WorldInfo info;
-    const auto path = world_dir / "level.dat";
-    std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
+    auto read = [](const std::filesystem::path& path) -> Result<storage::WorldInfo> {
+        std::ifstream in{path, std::ios::binary};
+        if (!in) return make_error(ErrorCode::io, "cannot open level.dat: " + path.string());
+        const std::string raw{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+        auto root = nbt::parse_compressed(
+            ByteSpan{reinterpret_cast<const std::byte*>(raw.data()), raw.size()});
+        if (!root) return std::unexpected{std::move(root.error())};
+        storage::WorldInfo info;
+        info.read_root(*root);
         return info;
+    };
+    if (auto info = read(world_dir / "level.dat"); info) return info;
+    if (std::filesystem::exists(world_dir / "level.dat_old")) {
+        return read(world_dir / "level.dat_old");
     }
-    std::ifstream in{path, std::ios::binary};
-    if (!in) {
-        return make_error(ErrorCode::io, "cannot open level.dat: " + path.string());
-    }
-    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    auto root = nbt::parse_compressed(
-        ByteSpan{reinterpret_cast<const std::byte*>(raw.data()), raw.size()});
-    if (!root) {
-        return std::unexpected{std::move(root.error())};
-    }
-    info.read_root(*root);
-    return info;
+    return make_error(ErrorCode::io, "cannot read level.dat or level.dat_old");
 }
 
 Result<bool> ensure_level_dat(const std::filesystem::path& world_dir, std::int32_t game_type,
@@ -76,11 +74,9 @@ Result<bool> ensure_level_dat(const std::filesystem::path& world_dir, std::int32
     // 原版 level.dat 的完整常用字段集（WorldInfo 逐字段转写）。
     // 只写最小集时 Spigot/vanilla 会用默认值补，但 LevelName/Hardcore/Difficulty/
     // GameRules/Weather/LastPlayed 等会丢失，故按原版结构一次写全。
-    storage::WorldInfo info;
-    info.random_seed = seed;
-    info.game_type = static_cast<std::uint8_t>(game_type);
-    info.level_name = world_dir.filename().string();
-    if (info.level_name.empty()) info.level_name = "world";
+    storage::WorldInfo info{WorldSettings{
+        seed, static_cast<std::uint8_t>(game_type), true, false, WorldType::Default},
+        world_dir.filename().empty() ? "world" : world_dir.filename().string()};
     info.spawn_x = 0;
     info.spawn_y = 64;
     info.spawn_z = 0;

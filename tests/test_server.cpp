@@ -114,12 +114,29 @@ CYANE_TEST(command_dispatcher_executes_unified_commands) {
     CYANE_CHECK_EQ(srv->time_of_day(), 1000);
     CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "/time add 500"));
     CYANE_CHECK_EQ(srv->time_of_day(), 1500);
+    console.messages.clear();
+
+    // 原版 CommandTime：query daytime 返回 worldTime % 24000
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "time set 25000"));
+    CYANE_CHECK_EQ(srv->time_of_day(), 25000);  // setWorldTime 存原始值
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "time query daytime"));
+    CYANE_CHECK_EQ(console.messages.at(0), std::string{"Time is 1000"});
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "time query day"));
+    CYANE_CHECK_EQ(console.messages.at(0), std::string{"Day is 1"});
+    console.messages.clear();
+    // 1.12.2 没有 noon / midnight 关键字
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "time set noon"));
+    CYANE_CHECK_EQ(console.messages.at(0), std::string{"Unknown time: 'noon'"});
+    console.messages.clear();
+    CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "time set day"));
 
     // 3. 权限门控：非 OP 玩家执行管理员命令应被拒绝
     TestSender player{0, true, "Alice"};
     CYANE_CHECK(cyane::game::CommandDispatcher::execute(player, *srv, "/time set night"));
     CYANE_CHECK(!player.errors.empty()); // 报权限不足
-    CYANE_CHECK_EQ(srv->time_of_day(), 1500); // 时间未被篡改
+    CYANE_CHECK_EQ(srv->time_of_day(), 1000); // 时间未被篡改（上一条已设回 day）
 
     // 4. Tab 补全：命令名
     const auto matches = cyane::game::CommandDispatcher::tab_complete(console, *srv, "/ti");

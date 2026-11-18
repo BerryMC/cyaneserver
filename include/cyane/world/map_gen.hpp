@@ -18,14 +18,14 @@ public:
 
     void generate(std::uint64_t world_seed, int x, int z, Chunk& chunk) {
         JavaRandom rng(world_seed);
-        const long long j = static_cast<long long>(rng.next_long());
-        const long long k = static_cast<long long>(rng.next_long());
+        const std::uint64_t j = rng.next_long();
+        const std::uint64_t k = rng.next_long();
 
         for (int l = x - range; l <= x + range; ++l) {
             for (int i1 = z - range; i1 <= z + range; ++i1) {
-                const long long j1 = static_cast<long long>(l) * j;
-                const long long k1 = static_cast<long long>(i1) * k;
-                JavaRandom chunk_rng(static_cast<std::uint64_t>(j1 ^ k1 ^ static_cast<long long>(world_seed)));
+                const auto j1 = static_cast<std::uint64_t>(static_cast<std::int64_t>(l)) * j;
+                const auto k1 = static_cast<std::uint64_t>(static_cast<std::int64_t>(i1)) * k;
+                JavaRandom chunk_rng(j1 ^ k1 ^ world_seed);
                 recursive_generate(chunk_rng, l, i1, x, z, chunk);
             }
         }

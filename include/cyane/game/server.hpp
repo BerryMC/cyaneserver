@@ -15,6 +15,7 @@
 #include "cyane/game/op_manager.hpp"
 #include "cyane/game/player_data.hpp"
 #include "cyane/game/world_persistence.hpp"
+#include "cyane/world/save_handler.hpp"
 #include "cyane/item/crafting.hpp"
 #include "cyane/net/block_ticks.hpp"
 #include "cyane/net/projectile_manager.hpp"
@@ -150,6 +151,8 @@ private:
     std::unique_ptr<item::CraftingRegistry> crafting_;
     std::unique_ptr<world::World> world_;
     std::unique_ptr<game::WorldPersistence> persistence_;
+    world::storage::SaveHandler save_handler_;
+    world::storage::WorldInfo world_info_;
     std::unique_ptr<net::NetService> network_;
     std::unique_ptr<ThreadPool> workers_;
     TickStats stats_;

@@ -12,6 +12,7 @@
 #include "cyane/net/item_drop.hpp"
 #include "cyane/net/mob_manager.hpp"
 #include "cyane/world/region.hpp"
+#include "cyane/world/save_handler.hpp"
 #include "cyane/world/world.hpp"
 
 namespace cyane::game {
@@ -24,9 +25,10 @@ class WorldPersistence {
 public:
     WorldPersistence(world::World& world, net::ContainerStore& containers,
                      net::FurnaceStore& furnaces, net::ItemDropManager& item_drops,
-                     net::MobManager& mobs, std::string world_dir)
+                     net::MobManager& mobs, std::string world_dir,
+                     const world::storage::SaveHandler* save_handler = nullptr)
         : world_{world}, containers_{containers}, furnaces_{furnaces},
-          item_drops_{item_drops}, mobs_{mobs}, world_dir_{std::move(world_dir)} {}
+          item_drops_{item_drops}, mobs_{mobs}, world_dir_{std::move(world_dir)}, save_handler_{save_handler} {}
 
     // 读取 world_dir/region/*.mca；返回载入的区块数。目录不存在视为空世界。
     // 启动预加载全部区块至 World 内存（按需 loader 释放后可重入）。
@@ -53,6 +55,7 @@ private:
     net::ItemDropManager& item_drops_;
     net::MobManager& mobs_;
     std::string world_dir_;
+    const world::storage::SaveHandler* save_handler_;
     // regions_ 会被 load（启动）、save（tick/停机线程）、按需 loader（reactor
     // 线程）并发触碰，统一走 cache_mutex_。
     mutable std::mutex cache_mutex_;

@@ -186,7 +186,8 @@ std::vector<std::string> CommandDispatcher::tab_complete(const CommandSender& se
                 ? text.substr(first_space + 1)
                 : text.substr(first_space + 1, second_space - first_space - 1);
             if (sub == "set") {
-                for (const auto t : {"day", "night", "noon", "midnight", "0", "1000", "6000", "13000", "18000"}) {
+                // 原版 getTabCompletions 只提示 day / night
+                for (const auto t : {"day", "night"}) {
                     if (std::string_view(t).starts_with(prefix)) {
                         matches.push_back(t);
                     }

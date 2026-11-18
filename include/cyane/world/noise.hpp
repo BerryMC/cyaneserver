@@ -19,10 +19,13 @@ public:
             return static_cast<int>((static_cast<std::uint64_t>(next(31)) * static_cast<std::uint64_t>(bound)) >> 31);
         }
         int bits;
+        int value;
         do {
             bits = next(31);
-        } while (bits - (bits % bound) + (bound - 1) < 0);
-        return bits % bound;
+            value = bits % bound;
+            // Java int 在该表达式溢出后为负；用 64 位判界避免 C++ UB。
+        } while (static_cast<std::int64_t>(bits) - value + (bound - 1LL) > INT32_MAX);
+        return value;
     }
 
     [[nodiscard]] double next_double() {
@@ -36,8 +39,12 @@ public:
     }
 
     [[nodiscard]] std::uint64_t next_long() {
-        return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(next(32))) << 32) |
-               static_cast<std::uint64_t>(static_cast<std::uint32_t>(next(32)));
+        // java.util.Random: ((long)next(32) << 32) + next(32)。第二个 next(32)
+        // 是有符号 int，不能简单按无符号 OR；在 uint64_t 中做模 2^64 加法。
+        const auto high = static_cast<std::uint32_t>(next(32));
+        const auto low = static_cast<std::int32_t>(static_cast<std::uint32_t>(next(32)));
+        return (static_cast<std::uint64_t>(high) << 32) +
+               static_cast<std::uint64_t>(static_cast<std::int64_t>(low));
     }
 
 private:

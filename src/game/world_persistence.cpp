@@ -267,6 +267,11 @@ bool WorldPersistence::needs_save() const {
 }
 
 Result<std::size_t> WorldPersistence::save() {
+    if (save_handler_ != nullptr) {
+        if (auto checked = save_handler_->check_session_lock(); !checked) {
+            return std::unexpected{std::move(checked.error())};
+        }
+    }
     // 写出集合 = 脏区块 ∪ 有方块实体的区块（箱子内容变更不一定伴随方块编辑）
     struct ChunkData {
         world::ChunkEntities entities;

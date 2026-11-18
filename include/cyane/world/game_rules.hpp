@@ -73,6 +73,8 @@ public:
         }
     }
 
+    void clear() noexcept { rules_.clear(); }
+
     [[nodiscard]] bool get_bool(std::string_view key) const noexcept {
         auto it = rules_.find(std::string(key));
         if (it != rules_.end()) {

@@ -221,6 +221,9 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         config.worker_threads = hardware > 1 ? hardware - 1 : 1;
     }
     auto server = std::unique_ptr<Server>{new Server{std::move(config)}};
+    if (auto opened = server->save_handler_.open(server->config_.world_dir); !opened) {
+        return std::unexpected{std::move(opened.error())};
+    }
     server->workers_ = std::make_unique<ThreadPool>("chunk", server->config_.worker_threads);
 
     server->status_ = std::make_unique<game::ServerStatus>(
@@ -297,24 +300,27 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
 
     const std::int64_t parsed_seed = parse_seed(server->config_.seed);
 
-    // 世界元数据：level.dat 出生点与种子（首启缺失时建档最小集）
+    // 世界元数据：level.dat 出生点与种子（首启缺失时建档）
     if (auto created = world::ensure_level_dat(server->config_.world_dir,
                                                 static_cast<std::int32_t>(context.game_mode),
                                                 parsed_seed);
         !created) {
-        log::warn("cannot ensure level.dat: {}", created.error().message);
+        return std::unexpected{std::move(created.error())};
     } else if (*created) {
-        log::info("created {} with minimal level.dat (seed: {})", server->config_.world_dir, parsed_seed);
+        log::info("created {} level.dat (seed: {})", server->config_.world_dir, parsed_seed);
     }
-    if (auto level = world::load_level_dat(server->config_.world_dir); !level) {
-        log::warn("cannot read level.dat: {}", level.error().message);
+    if (auto level = server->save_handler_.load_world_info(); !level) {
+        return std::unexpected{std::move(level.error())};
     } else {
+        server->world_info_ = *level;
         context.spawn_x = level->spawn_x;
         context.spawn_y = level->spawn_y;
         context.spawn_z = level->spawn_z;
+        server->world_age_ = level->world_time;
+        server->time_of_day_ = level->day_time;
         log::info("world spawn at ({}, {}, {})", level->spawn_x, level->spawn_y, level->spawn_z);
         // 如果 level.dat 中没有种子且配置了种子，优先使用配置种子；否则使用 level.dat 的种子
-        std::int64_t actual_seed = level->seed;
+        std::int64_t actual_seed = level->random_seed;
         if (actual_seed == 0 && !server->config_.seed.empty()) {
             actual_seed = parsed_seed;
         }
@@ -328,7 +334,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     // 并注入按需加载（被视距释放的区块回归时从磁盘重读真实地形）
     server->persistence_ = std::make_unique<game::WorldPersistence>(
         *server->world_, *server->containers_, *server->furnaces_, *server->item_drops_,
-        *server->mobs_, server->config_.world_dir);
+        *server->mobs_, server->config_.world_dir, &server->save_handler_);
     server->persistence_->attach_loader();
     if (auto loaded = server->persistence_->load(); !loaded) {
         log::warn("world load failed: {}", loaded.error().message);
@@ -403,6 +409,13 @@ void Server::save_world_now() {
     if (auto saved = persistence_->save(); !saved) {
         log::warn("world save failed: {}", saved.error().message);
     } else {
+        world_info_.random_seed = seed_;
+        world_info_.world_time = world_age_;
+        world_info_.day_time = time_of_day_;
+        if (auto metadata = save_handler_.save_world_info(world_info_); !metadata) {
+            log::warn("level.dat save failed: {}", metadata.error().message);
+            return;
+        }
         log::info("saved {} chunks to {}", *saved, config_.world_dir);
     }
 }
@@ -532,14 +545,16 @@ void Server::tick() {
         // 目标选择用玩家快照（本 tick 取一次，避免每个生物各扫一遍）
         const auto players = hub_->others(net::kNoExclude);
         ++world_age_;
-        time_of_day_ = (time_of_day_ + 1) % 24000;
+        if (world_info_.game_rules.get_bool("doDaylightCycle")) ++time_of_day_;
         if (world_age_ % 20 == 0 && hub_ != nullptr) {
             ByteWriter time_pkt;
             time_pkt.i64(world_age_);
             time_pkt.i64(time_of_day_);
             hub_->broadcast_all(proto::play_cb::kTimeUpdate, time_pkt.data());
         }
-        const bool daytime = time_of_day_ < 12000;
+        // 原版 World.getWorldTime 存绝对值；昼夜相位按 % 24000 判定（负值视为冻结的夜晚）
+        const auto day_phase = time_of_day_ >= 0 ? time_of_day_ % 24000 : 24000;
+        const bool daytime = day_phase < 12000;
         const auto mob_events = mobs_->tick(*world_, players, daytime);
         for (const auto& mob : mob_events.moved) {
             const auto old_cpos = world::ChunkPos::from_world(mob.old_x, mob.old_z);
@@ -1273,8 +1288,7 @@ std::vector<std::string> Server::player_names() const {
 }
 
 void Server::set_time_of_day(std::int64_t time) {
-    time_of_day_ = time % 24000;
-    if (time_of_day_ < 0) time_of_day_ += 24000;
+    time_of_day_ = time;
     if (hub_ != nullptr) {
         ByteWriter time_pkt;
         time_pkt.i64(world_age_);
