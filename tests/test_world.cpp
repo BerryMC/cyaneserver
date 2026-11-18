@@ -18,6 +18,7 @@
 #include "cyane/world/level_dat.hpp"
 #include "cyane/world/nbt.hpp"
 #include "cyane/world/anvil.hpp"
+#include "cyane/world/gen_layer.hpp"
 #include "cyane/world/world.hpp"
 #include "cyane/world/structure.hpp"
 #include "cyane/world/flat_generator_info.hpp"
@@ -1520,4 +1521,42 @@ CYANE_TEST(world_info_round_trips_full_vanilla_fields) {
     CYANE_CHECK(!summary.requires_conversion);
 
     std::filesystem::remove_all(dir);
+}
+
+CYANE_TEST(gen_layer_seed_matches_vanilla_lcg) {
+    // 参考向量由独立的 Python 实现（任意精度 + 显式 mod 2^64）按 Java long 语义算出，
+    // 用于校验 C++ 侧的 LCG 转录（乘法回绕、加法顺序）。
+    using cyane::world::layer::LayerSeed;
+
+    // GenLayer(long)：baseSeed 自身回绕三次
+    CYANE_CHECK_EQ(LayerSeed{1}.base_seed(), 3107951898966440229ULL);
+    CYANE_CHECK_EQ(LayerSeed{2}.base_seed(), 13432066074785117656ULL);
+    CYANE_CHECK_EQ(LayerSeed{100}.base_seed(), 5723240131506253216ULL);
+    CYANE_CHECK_EQ(LayerSeed{2000}.base_seed(), 9672642253349399552ULL);
+
+    // initWorldGenSeed(12345) → 回绕两次加 baseSeed
+    LayerSeed layer{1};
+    layer.init_world_gen_seed(12345);
+    CYANE_CHECK_EQ(layer.world_gen_seed(), 2045757533502615161ULL);
+
+    // initChunkSeed(0,0) → 回绕四次交替加 x/z
+    layer.init_chunk_seed(0, 0);
+    CYANE_CHECK_EQ(layer.chunk_seed(), 14040106546769989532ULL);
+
+    // nextInt 序列（每次取值后推进一次 chunkSeed）
+    const std::array<std::int32_t, 5> expected{8, 8, 9, 0, 5};
+    for (const auto want : expected) {
+        CYANE_CHECK_EQ(layer.next_int(10), want);
+    }
+
+    // 同种子必须完全可复现
+    LayerSeed a{7};
+    LayerSeed b{7};
+    a.init_world_gen_seed(999);
+    b.init_world_gen_seed(999);
+    a.init_chunk_seed(3, -5);
+    b.init_chunk_seed(3, -5);
+    for (int i = 0; i < 32; ++i) {
+        CYANE_CHECK_EQ(a.next_int(1000), b.next_int(1000));
+    }
 }
