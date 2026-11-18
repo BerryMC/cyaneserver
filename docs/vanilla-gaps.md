@@ -6,7 +6,7 @@
 - 严重度：**P0** = 数据丢失/玩家可见的破缺；**P1** = 机制与原版不同；**P2** = 数值/文本差异
 - 状态：`待修` / `进行中` / `已修`
 
-统计：**待修 43 条、已修 33 条、阻塞 1 条**（`python3 tools/vanilla_progress.py` 自动核对）。
+统计：**待修 40 条、已修 33 条、阻塞 1 条**（`python3 tools/vanilla_progress.py` 自动核对）。
 
 ---
 
@@ -47,6 +47,9 @@
 | CONTAINER-10 | THROW 前置（光标须为空）与 -999 右键只丢 1 个 | `b2aa085` |
 | CONTAINER-11 | 熔炉窗口把物品拖到窗外直接删除（同 CONTAINER-01 根因） | `b2aa085` |
 | COMBAT-02 | 攻击冷却 `damage *= 0.2 + f2²*0.8` + `item::attack_speed` 表 | `b2aa085` |
+| AI-01 | `door_open` 不再被排除出 seen 集合（可穿过开着的门）+ `can_enter_doors_` 开关 | `d5bb6ac` |
+| AI-02 | 生物上台阶 0.6 + `EntityMoveHelper` 起跳条件与 0.42 初速 | `d5bb6ac` |
+| AI-04 | 苦力怕引信 3 格起爆 / 7 格维持，且不再要求视线 | `d5bb6ac` |
 
 ---
 
@@ -54,10 +57,7 @@
 
 | ID | 区域 | 位置 | 原版参照 | 问题 | 状态 |
 |---|---|---|---|---|---|
-| AI-01 | 寻路 | `pathfinding.hpp:657-659` | `WalkNodeProcessor.java:364-367` | `door_open` 被 `continue` 排除；全落在门洞时返回 `blocked` → 生物无法穿过开着的门 | 待修 |
-| AI-02 | 移动 | `mob_manager.cpp:969` | `EntityLivingBase.java:216` | 上台阶 1.0（应 0.6），无 `velocity_y=0.42` 跳跃 | 待修 |
 | AI-03 | 经验球 | `xp_orb.cpp:100-121` | `EntityXPOrb.java:114-146,168-173` | 无 8 格吸附、无 6000 tick 寿命、无 `xpCooldown` | 待修 |
-| AI-04 | 苦力怕 | `mob_manager.cpp:762` | `EntityAICreeperSwell.java:24-25` | 引信在 7 格就触发（原版 3 格起爆、7 格维持）；且永不近战 | 待修 |
 | LOOT-03 | 战利品 | `loot_table.hpp` 注册表 | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 4 个函数已注册为 Noop + 加载告警；真正生效依赖缺失的附魔表 / ItemStack NBT / 属性修饰符 | 部分（阻塞） |
 | COMBAT-03 | 战斗 | `connection_combat.cpp` | `EntityPlayer.java:1396-1460` | 暴击（下落中、非疾跑、`f2>0.9`，×1.5）与横扫（`flag && !flag2 && !flag1 && onGround`，邻近实体各 1 点 + 0.4 击退）未实现；击退增益也未接 | 待修 |
 | SYS-03e | 规则 | `server.cpp` / `mob_manager.cpp` | `GameRules.java` 各读取点 | 仍未接线：`doMobLoot` `doTileDrops` `doEntityDrops` `showDeathMessages` `naturalRegeneration` `randomTickSpeed` `doFireTick` `mobGriefing` `spawnRadius` `maxEntityCramming` `doLimitedCrafting` `spectatorsGenerateChunks` `logAdminCommands` `commandBlockOutput` `sendCommandFeedback` `announceAdvancements` | 待修 |
