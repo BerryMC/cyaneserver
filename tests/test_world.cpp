@@ -21,6 +21,7 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_layer_rare_biome.hpp"
 #include "cyane/world/gen_layer_biome.hpp"
 #include "cyane/world/gen_layer_voronoi.hpp"
 #include "cyane/world/gen_layer_river.hpp"
@@ -1920,5 +1921,44 @@ CYANE_TEST(gen_layer_biome_bands_match_spigot_arrays) {
         CYANE_CHECK_EQ(out[2], biome_ids::kFrozenOcean);
         CYANE_CHECK_EQ(out[3], biome_ids::kMushroomIsland);
         CYANE_CHECK_EQ(out[4], biome_ids::kMushroomIsland);  // 其它值落到蘑菇岛
+    }
+}
+
+CYANE_TEST(gen_layer_rare_biome_only_replaces_plains) {
+    // 反编译自 v1_12_R1.GenLayerPlains：1/57 且原值为 plains 才换成 mutated_plains。
+    using namespace cyane::world::layer;
+
+    // 父层无论被要多大区域都铺满同一个值（RareBiome 会向父层要 w+2 × h+2）
+    class Solid final : public GenLayer {
+    public:
+        explicit Solid(std::int32_t value) : GenLayer(0), value_(value) {}
+        [[nodiscard]] std::vector<std::int32_t> get_ints(std::int32_t, std::int32_t,
+                                                         std::int32_t width,
+                                                         std::int32_t height) override {
+            return std::vector<std::int32_t>(
+                static_cast<std::size_t>(width) * static_cast<std::size_t>(height), value_);
+        }
+    private:
+        std::int32_t value_;
+    };
+
+    // 大面积 plains：应当出现 mutated_plains，且其他值一律不变
+    auto plains_parent = std::make_shared<Solid>(biome_ids::kPlains);
+    GenLayerRareBiome rare{1001, plains_parent};
+    rare.init_world_gen_seed(12345);
+    const auto out = rare.get_ints(0, 0, 64, 64);
+    int mutated = 0;
+    for (const auto value : out) {
+        CYANE_CHECK(value == biome_ids::kPlains || value == biome_ids::kMutatedPlains);
+        if (value == biome_ids::kMutatedPlains) ++mutated;
+    }
+    CYANE_CHECK(mutated > 0);
+
+    // 非 plains：一个都不能变
+    auto forest_parent = std::make_shared<Solid>(biome_ids::kForest);
+    GenLayerRareBiome rare2{1001, forest_parent};
+    rare2.init_world_gen_seed(12345);
+    for (const auto value : rare2.get_ints(0, 0, 64, 64)) {
+        CYANE_CHECK_EQ(value, biome_ids::kForest);
     }
 }
