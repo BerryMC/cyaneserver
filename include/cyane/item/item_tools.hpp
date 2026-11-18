@@ -30,6 +30,41 @@ struct ToolInfo {
     }
 }
 
+// 物品最大耐久（Item.setMaxDamage）。数值来自原版 ToolMaterial 与
+// ItemArmor.ArmorMaterial：工具五档 59/131/250/1561/32，
+// 护甲 = MAX_DAMAGE_ARRAY{13,15,16,11} × 材质系数（皮革5/锁链15/铁15/金7/钻石33）。
+[[nodiscard]] constexpr int max_damage(std::int16_t item_id) noexcept {
+    switch (item_id) {
+        // 木
+        case 268: case 269: case 270: case 271: case 290: return 59;
+        // 石
+        case 272: case 273: case 274: case 275: case 291: return 131;
+        // 铁
+        case 256: case 257: case 258: case 267: case 292: return 250;
+        // 钻石
+        case 276: case 277: case 278: case 279: case 293: return 1561;
+        // 金
+        case 283: case 284: case 285: case 286: case 294: return 32;
+        // 皮革：头/胸/腿/脚
+        case 298: return 55; case 299: return 80; case 300: return 75; case 301: return 65;
+        // 锁链
+        case 302: return 165; case 303: return 240; case 304: return 225; case 305: return 195;
+        // 铁
+        case 306: return 165; case 307: return 240; case 308: return 225; case 309: return 195;
+        // 钻石
+        case 310: return 363; case 311: return 528; case 312: return 495; case 313: return 429;
+        // 金
+        case 314: return 77; case 315: return 112; case 316: return 105; case 317: return 91;
+        case 261: return 384;   // 弓
+        case 346: return 64;    // 钓鱼竿
+        case 259: return 64;    // 打火石
+        case 359: return 238;   // 剪刀
+        case 442: return 336;   // 盾牌
+        case 443: return 432;   // 鞘翅
+        default: return 0;      // 不可损坏
+    }
+}
+
 // ArmorUtil.getDamageAfterAbsorb：damage×(1 − clamp(armor − damage/(2+tough/4), armor×0.2, 20)/25)
 [[nodiscard]] inline float damage_after_armor(float damage, int armor, float toughness) {
     const float f = 2.0f + toughness / 4.0f;

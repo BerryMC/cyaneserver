@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <fstream>
 #include <functional>
 #include <sstream>
@@ -12,6 +13,7 @@
 #include <unordered_set>
 #include <vector>
 #include "cyane/core/json_parse.hpp"
+#include "cyane/core/log.hpp"
 #include "cyane/item/item_stack.hpp"
 #include "cyane/world/loot/loot_types.hpp"
 #include "cyane/world/noise.hpp"
@@ -225,7 +227,15 @@ inline void LootPool::create_loot_roll(std::vector<item::ItemStack>& out, gen::J
                         if (!test_all_conditions(function.conditions, rand, ctx)) continue;
                         function.apply(stack, rand, ctx);
                     }
-                    if (!stack.empty()) out.push_back(stack);
+                    // LootEntryItem 按堆叠上限拆堆：set_count 允许超过 64
+                    while (!stack.empty()) {
+                        item::ItemStack chunk = stack;
+                        const auto take = static_cast<std::uint8_t>(
+                            std::min<int>(stack.count, static_cast<int>(item::kMaxStack)));
+                        chunk.count = take;
+                        stack.count = static_cast<std::uint8_t>(stack.count - take);
+                        out.push_back(chunk);
+                    }
                     break;
                 }
             }
@@ -289,7 +299,15 @@ namespace detail {
     for (const auto& item : *array) {
         const auto tag = item.get_string("condition");
         const auto* factory = registries.find_condition(tag);
-        if (factory == nullptr) continue; // 未注册条件：跳过（原版对未知条件同样忽略）
+        if (factory == nullptr) {
+            // 原版 LootConditionManager 对未知条件抛异常、整表降级 EMPTY。
+            // 这里退一步：保留一个恒假条件，至少不会把"未知"当成"满足"。
+            log::error("loot: unsupported condition '{}' — treated as never-true", tag);
+            LootCondition never;
+            never.kind = LootCondition::Kind::Unsupported;
+            out.push_back(std::move(never));
+            continue;
+        }
         if (auto condition = (*factory)(item)) out.push_back(std::move(*condition));
     }
     return out;
@@ -332,9 +350,36 @@ namespace detail {
         return condition;
     });
 
-    registries.add_condition("killed_by_player", [](const core::JsonValue&) -> std::optional<LootCondition> {
+    registries.add_condition("killed_by_player", [](const core::JsonValue& json) -> std::optional<LootCondition> {
         LootCondition condition;
         condition.kind = LootCondition::Kind::KilledByPlayer;
+        condition.inverse = json.get_bool("inverse", false);
+        return condition;
+    });
+
+    // entity_properties：当前只支持 {"entity":"this","properties":{"on_fire":bool}}，
+    // 其余属性同样按"未实现 → 恒假"处理，避免误判。
+    registries.add_condition("entity_properties", [](const core::JsonValue& json) -> std::optional<LootCondition> {
+        const auto entity = json.get_string("entity", "this");
+        const auto* properties = json.find("properties");
+        LootCondition condition;
+        if (entity != "this" || properties == nullptr || !properties->is_object()) {
+            condition.kind = LootCondition::Kind::Unsupported;
+            return condition;
+        }
+        bool saw_on_fire = false;
+        for (const auto& [key, value] : properties->as_object()) {
+            if (key == "on_fire") {
+                condition.kind = LootCondition::Kind::EntityOnFire;
+                condition.inverse = !value.get_bool("", true);
+                saw_on_fire = true;
+            } else {
+                log::error("loot: unsupported entity property '{}' — treated as never-true", key);
+                condition.kind = LootCondition::Kind::Unsupported;
+                return condition;
+            }
+        }
+        if (!saw_on_fire) condition.kind = LootCondition::Kind::Unsupported;
         return condition;
     });
 
@@ -360,7 +405,8 @@ namespace detail {
         const auto* damage = json.find("damage");
         if (damage == nullptr) return std::nullopt;
         LootFunction function;
-        function.kind = LootFunction::Kind::SetData;
+        // SetDamage.apply 用 generateFloat，不是整数区间
+        function.kind = LootFunction::Kind::SetDamage;
         function.count = read_range(*damage);
         return function;
     });
@@ -372,6 +418,22 @@ namespace detail {
         function.limit = static_cast<int>(json.get_int("limit", 0));
         return function;
     });
+
+    // 依赖未实现子系统（附魔表 / ItemStack NBT / 属性修饰符）：
+    // 注册为 Noop 以免被当成"未知函数"丢弃，同时在加载期告警。
+    for (const auto* tag : {"enchant_randomly", "enchant_with_levels", "set_nbt",
+                            "set_attributes"}) {
+        registries.add_function(tag, [tag](const core::JsonValue&) -> std::optional<LootFunction> {
+            static std::once_flag warned;
+            std::call_once(warned, [tag] {
+                log::warn("loot: function '{}' needs the missing enchantment/NBT subsystem — no-op",
+                          tag);
+            });
+            LootFunction function;
+            function.kind = LootFunction::Kind::Noop;
+            return function;
+        });
+    }
 
     // furnace_smelt：加载期把配方解析成产物 id（熔炉配方静态，等价于 apply 期查询）
     registries.add_function("furnace_smelt", [smelt](const core::JsonValue&) -> std::optional<LootFunction> {
@@ -443,7 +505,9 @@ inline bool LootTable::load(const core::JsonValue& json, const ItemResolver& res
             pool.entries.push_back(std::move(entry));
         }
 
-        if (!pool.entries.empty()) pools.push_back(std::move(pool));
+        // 空池同样保留：原版 LootPool.generate_loot 无条件执行 rolls.generateInt(rand)，
+        // 提前丢弃会让后续池的随机序列与原版错开。
+        pools.push_back(std::move(pool));
     }
     return true;
 }

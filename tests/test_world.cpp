@@ -1172,6 +1172,94 @@ CYANE_TEST(loot_table_loads_and_generates_like_vanilla) {
     by_player.killer_is_player = true;
     CYANE_CHECK(!killer_only.generate("minecraft:test/killer", rand, by_player).empty());
 
+    // set_damage：按比例产生磨损（SetDamage.apply），不是整数区间
+    const auto tool_resolver = [](std::string_view name) -> std::optional<std::int16_t> {
+        if (name == "minecraft:diamond_sword") return 276;
+        if (name == "minecraft:diamond") return 264;
+        if (name == "minecraft:bread") return 297;
+        return std::nullopt;
+    };
+    world::loot::LootTableManager damage_table{tool_resolver};
+    CYANE_CHECK(damage_table.add_table_json("minecraft:test/damage", R"({
+        "pools": [{"rolls": 1, "entries": [{"type": "item", "name": "minecraft:diamond_sword",
+            "functions": [{"function": "set_damage", "damage": {"min": 0.0, "max": 0.9}}]}]}]
+    })"));
+    bool saw_worn = false;
+    for (int i = 0; i < 32; ++i) {
+        const auto items = damage_table.generate("minecraft:test/damage", rand, ctx);
+        CYANE_CHECK_EQ(items.size(), 1ULL);
+        if (items.empty()) continue;
+        // 钻石剑 maxDamage 1561，磨损 = floor((1-x)*1561)，x∈[0,0.9] → [156,1561]
+        CYANE_CHECK(items[0].damage >= 0 && items[0].damage <= 1561);
+        if (items[0].damage > 0) saw_worn = true;
+    }
+    CYANE_CHECK(saw_worn);
+
+    // 不可损坏物品（钻石）不受 set_damage 影响
+    world::loot::LootTableManager no_durability{tool_resolver};
+    CYANE_CHECK(no_durability.add_table_json("minecraft:test/nodur", R"({
+        "pools": [{"rolls": 1, "entries": [{"type": "item", "name": "minecraft:diamond",
+            "functions": [{"function": "set_damage", "damage": {"min": 0.0, "max": 0.9}}]}]}]
+    })"));
+    const auto plain = no_durability.generate("minecraft:test/nodur", rand, ctx);
+    CYANE_CHECK_EQ(plain.size(), 1ULL);
+    if (!plain.empty()) CYANE_CHECK_EQ(plain[0].damage, 0);
+
+    // entity_properties(on_fire)：着火才掉；这是牛/鸡/猪"熟肉"的条件来源
+    world::loot::LootTableManager on_fire{resolver};
+    CYANE_CHECK(on_fire.add_table_json("minecraft:test/onfire", R"({
+        "pools": [{"rolls": 1, "entries": [{"type": "item", "name": "minecraft:bread",
+            "conditions": [{"condition": "entity_properties", "entity": "this",
+                            "properties": {"on_fire": true}}]}]}]
+    })"));
+    world::loot::LootContext cold{};
+    CYANE_CHECK(on_fire.generate("minecraft:test/onfire", rand, cold).empty());
+    world::loot::LootContext hot{};
+    hot.entity_on_fire = true;
+    CYANE_CHECK(!on_fire.generate("minecraft:test/onfire", rand, hot).empty());
+
+    // killed_by_player 的 inverse：非玩家击杀才产出
+    world::loot::LootTableManager inverse_killer{resolver};
+    CYANE_CHECK(inverse_killer.add_table_json("minecraft:test/inverse", R"({
+        "pools": [{"rolls": 1, "entries": [{"type": "item", "name": "minecraft:bread",
+            "conditions": [{"condition": "killed_by_player", "inverse": true}]}]}]
+    })"));
+    CYANE_CHECK(!inverse_killer.generate("minecraft:test/inverse", rand, not_player).empty());
+    CYANE_CHECK(inverse_killer.generate("minecraft:test/inverse", rand, by_player).empty());
+
+    // 未知条件一律恒假，绝不当作满足
+    world::loot::LootTableManager unknown_cond{resolver};
+    CYANE_CHECK(unknown_cond.add_table_json("minecraft:test/unknown", R"({
+        "pools": [{"rolls": 1, "entries": [{"type": "item", "name": "minecraft:bread",
+            "conditions": [{"condition": "some_future_condition"}]}]}]
+    })"));
+    CYANE_CHECK(unknown_cond.generate("minecraft:test/unknown", rand, ctx).empty());
+
+    // set_count 超过 64：按堆叠上限拆成多堆（LootEntryItem 同）
+    world::loot::LootTableManager big_count{resolver};
+    CYANE_CHECK(big_count.add_table_json("minecraft:test/big", R"({
+        "pools": [{"rolls": 1, "entries": [{"type": "item", "name": "minecraft:bread",
+            "functions": [{"function": "set_count", "count": 100}]}]}]
+    })"));
+    const auto big = big_count.generate("minecraft:test/big", rand, ctx);
+    CYANE_CHECK_EQ(big.size(), 2ULL);
+    if (big.size() == 2) {
+        CYANE_CHECK_EQ(static_cast<int>(big[0].count), 64);
+        CYANE_CHECK_EQ(static_cast<int>(big[1].count), 36);
+    }
+
+    // 空池保留：保证 rolls 随机数被消耗，序列与原版一致
+    world::loot::LootTableManager empty_pool{resolver};
+    CYANE_CHECK(empty_pool.add_table_json("minecraft:test/emptypool", R"({
+        "pools": [
+            {"rolls": {"min": 1, "max": 5}, "entries": []},
+            {"rolls": 1, "entries": [{"type": "item", "name": "minecraft:bread"}]}
+        ]
+    })"));
+    const auto* empty_table = empty_pool.find("minecraft:test/emptypool");
+    CYANE_CHECK(empty_table != nullptr);
+    if (empty_table != nullptr) CYANE_CHECK_EQ(empty_table->pools.size(), 2ULL);
+
     // 自引用 loot_table 条目必须被 active 集合拦住（不会无限递归）
     world::loot::LootTableManager recursive{resolver};
     CYANE_CHECK(recursive.add_table_json("minecraft:test/loop", R"({

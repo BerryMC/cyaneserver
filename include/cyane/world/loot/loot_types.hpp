@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include "cyane/item/item_stack.hpp"
+#include "cyane/item/item_tools.hpp"
 #include "cyane/world/noise.hpp"
 
 namespace cyane::world::loot {
@@ -42,6 +43,8 @@ struct LootContext {
     int looting_modifier{0};   // EntityLivingBase.getLootingModifier
     bool killer_is_player{false};
     bool has_living_killer{false};
+    // entity_properties 用：被掉落实体（"this"）的状态
+    bool entity_on_fire{false};
 };
 
 // 1.12.2 原版掉落条件（LootCondition 的已实现子类，按 tag 分派）
@@ -51,11 +54,16 @@ public:
         RandomChance,
         RandomChanceWithLooting,
         KilledByPlayer,
+        EntityOnFire,
+        // 未实现的 tag：一律判定失败，绝不当作"恒真"
+        Unsupported,
     };
 
     Kind kind{Kind::RandomChance};
     float chance{0.0f};
     float looting_multiplier{0.0f};
+    // KilledByPlayer.inverse：EntityHasProperty 同款取反语义
+    bool inverse{false};
 
     [[nodiscard]] bool test(gen::JavaRandom& rand, const LootContext& ctx) const noexcept {
         switch (kind) {
@@ -64,7 +72,11 @@ public:
             case Kind::RandomChanceWithLooting:
                 return rand.next_float() < chance + static_cast<float>(ctx.looting_modifier) * looting_multiplier;
             case Kind::KilledByPlayer:
-                return ctx.killer_is_player;
+                return ctx.killer_is_player != inverse;
+            case Kind::EntityOnFire:
+                return ctx.entity_on_fire != inverse;
+            case Kind::Unsupported:
+                return false;
         }
         return false;
     }
@@ -74,10 +86,12 @@ public:
 class LootFunction {
 public:
     enum class Kind : std::uint8_t {
-        SetCount,
-        SetData,        // set_data / set_damage 同语义：写 damage
+        SetCount,       // set_count
+        SetData,        // set_data：直接写 metadata
+        SetDamage,      // set_damage：按比例产生磨损（floor((1-x) * maxDamage)）
         LootingEnchant, // looting_enchant
         Smelt,          // furnace_smelt：掉落物替换为熔炼产物
+        Noop,           // 已识别但依赖未实现的子系统（附魔/NBT/属性）
     };
 
     Kind kind{Kind::SetCount};
@@ -90,12 +104,23 @@ public:
     void apply(item::ItemStack& stack, gen::JavaRandom& rand, const LootContext& ctx) const noexcept {
         switch (kind) {
             case Kind::SetCount: {
+                // SetCount 不截断到 64；超过堆叠上限由调用方拆堆（LootEntryItem 同）
                 const int value = count.generate_int(rand);
-                stack.count = static_cast<std::uint8_t>(value < 0 ? 0 : (value > 64 ? 64 : value));
+                stack.count = static_cast<std::uint8_t>(value < 0 ? 0 : (value > 255 ? 255 : value));
                 break;
             }
             case Kind::SetData:
                 stack.damage = static_cast<std::int16_t>(count.generate_int(rand));
+                break;
+            case Kind::SetDamage: {
+                // SetDamage.apply：f = 1 - generateFloat；damage = floor(f * maxDamage)
+                const int max = item::max_damage(stack.id);
+                if (max <= 0) break;  // 不可损坏物品原样返回
+                const float f = 1.0f - count.generate_float(rand);
+                stack.damage = static_cast<std::int16_t>(std::floor(f * static_cast<float>(max)));
+                break;
+            }
+            case Kind::Noop:
                 break;
             case Kind::Smelt: {
                 // vanilla Smelt.apply：换成熔炼产物并保留数量；无配方则原样返回
