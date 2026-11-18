@@ -101,13 +101,23 @@ C++23（clang）· CMake 3.25+ · lld · zlib-ng · OpenSSL · liburing · 内�
 
 ## 原版燃尽跟踪
 
-`vanilla/` 下按原版 1.12.2 源码目录保存 2185 个零字节占位文件，**每个机制先实现 C++ 等价物、加单元测试，再 `git rm` 核销对应占位文件**。当前进度 310/2185（14.2%）：
+`vanilla/` 下按原版 1.12.2 源码目录保存 2185 个零字节占位文件，**每个机制先实现 C++ 等价物、加单元测试，再 `git rm` 核销对应占位文件**。
 
 ```bash
-python3 tools/vanilla_progress.py
+python3 tools/vanilla_progress.py          # 人读报告
+python3 tools/vanilla_progress.py --json   # 机器可读
+python3 tools/vanilla_progress.py --strict # 有 P0 待修时退出码 1（CI 用）
 ```
 
-按包分布剩余大头：client 643 / entity 236 / block 205 / util 145 / world 105，详见输出。
+工具给出三个口径：
+
+1. **服务端源码燃尽** —— 分母 1520（2185 中剔除 `client` 643 与 `realms` 22，这两个是纯客户端包，服务端永远不实现，计入会让进度卡在 15%）。已完成 310（20.4%）。
+2. **缺口清单燃尽** —— 解析 [`docs/vanilla-gaps.md`](docs/vanilla-gaps.md)，给出 P0/P1/P2 的待修、已修、阻塞条目，**这是"还差什么"的权威数字**。
+3. **分模块燃尽** —— 按顶层包给出 已实现/总数 与进度条。
+
+基线由 [`tools/vanilla_baseline.txt`](tools/vanilla_baseline.txt)（2185 条，由 git 历史里出现过、现已删除的文件并上现存文件生成）提供；文件缺失时回退到用 git 现算。
+
+> ⚠️ 文件计数口径有局限：cyane 的生物/方块/物品是数据驱动实现（`mob_types`/`blocks` 表），`entity`/`block`/`item` 等包的按文件计数会显著低估实际覆盖度。**服务端进度以缺口清单为准**，文件燃尽只反映结构对齐程度。
 
 ## 文档索引
 
