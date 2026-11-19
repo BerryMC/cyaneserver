@@ -99,6 +99,27 @@ C++23（clang）· CMake 3.25+ · lld · zlib-ng · OpenSSL · liburing · 内�
 - **合成**：数据驱动配方（shaped/shapeless），结果槽实时刷新。
 - **生物（M6 核心）**：僵尸近战、苦力怕引信自爆、骷髅举弓走位射箭、动物繁殖/剪毛/挤奶；原版 A* 寻路（`WalkNodeProcessor`）、无敌窗与护甲减伤、经验球与升级公式、死亡掉落。
 
+## 构建
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCYANE_LTO=OFF
+cmake --build build -j2
+./build/cyane_tests
+```
+
+构建速度默认已开三样（都能用选项关掉）：
+
+| 机制 | 说明 | 关闭方式 |
+|---|---|---|
+| ccache | 编译结果缓存，切换分支/重复编译几乎全命中 | `CYANE_NO_CCACHE=1` 环境变量 |
+| lld | 链接器，比 BFD ld 快数倍 | `-DCYANE_FAST_LINK=OFF` |
+| `-g1` | 只保留行号调试信息，编译与链接都更快 | `-DCYANE_FULL_DEBUG=ON` |
+
+另外建议装 `ninja` 后改用 `-G Ninja`，比 Make 并行调度更高效。
+
+**发布构建**：`-DCMAKE_BUILD_TYPE=Release -DCYANE_LTO=ON`。LTO 在开发期关闭，
+因为它会显著拖慢每次链接。
+
 ## 首次启动
 
 空目录直接运行即可，缺失的配置会自动生成，不需要手工准备：
