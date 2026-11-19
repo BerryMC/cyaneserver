@@ -2274,3 +2274,37 @@ CYANE_TEST(structure_seed_matches_world_set_random_seed) {
     }
     CYANE_CHECK(differs);
 }
+
+CYANE_TEST(structure_scattered_placement_one_start_per_cell) {
+    using cyane::world::structure::is_scattered_start;
+    constexpr std::int32_t kSpacing = 32;
+    constexpr std::int32_t kSalt = 14357617;
+
+    // 每个 32×32 的网格单元里恰好有一个起始区块（含负坐标单元）
+    for (std::int32_t cell_x = -2; cell_x <= 2; ++cell_x) {
+        for (std::int32_t cell_z = -2; cell_z <= 2; ++cell_z) {
+            int starts = 0;
+            for (std::int32_t dx = 0; dx < kSpacing; ++dx) {
+                for (std::int32_t dz = 0; dz < kSpacing; ++dz) {
+                    const std::int32_t cx = cell_x * kSpacing + dx;
+                    const std::int32_t cz = cell_z * kSpacing + dz;
+                    if (is_scattered_start(12345, cx, cz, kSpacing, kSalt)) {
+                        ++starts;
+                    }
+                }
+            }
+            CYANE_CHECK_EQ(starts, 1);
+        }
+    }
+
+    // 不同 salt 给出不同的起始点
+    int different = 0;
+    for (std::int32_t dx = 0; dx < kSpacing; ++dx) {
+        for (std::int32_t dz = 0; dz < kSpacing; ++dz) {
+            if (is_scattered_start(12345, dx, dz, kSpacing, kSalt + 1)) {
+                ++different;
+            }
+        }
+    }
+    CYANE_CHECK_EQ(different, 1);
+}

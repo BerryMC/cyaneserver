@@ -23,4 +23,33 @@ inline void set_structure_seed(gen::JavaRandom& rand, std::int64_t world_seed,
     rand = gen::JavaRandom{x + y + world + z};
 }
 
+
+// MapGenScatteredFeature.canSpawnStructureAtCoords 的通用形式：
+// 每个 max_distance × max_distance 的"网格单元"里恰好有一个起始区块，
+// 偏移量由 nextInt(max_distance - 8) 决定。负坐标先做 -(max_distance-1) 修正，
+// 再按 Java 的向零截断做整除。
+[[nodiscard]] inline bool is_scattered_start(std::int64_t world_seed, std::int32_t chunk_x,
+                                             std::int32_t chunk_z, std::int32_t max_distance,
+                                             std::int32_t salt) noexcept {
+    const std::int32_t original_x = chunk_x;
+    const std::int32_t original_z = chunk_z;
+    if (chunk_x < 0) {
+        chunk_x -= max_distance - 1;
+    }
+    if (chunk_z < 0) {
+        chunk_z -= max_distance - 1;
+    }
+    std::int32_t k = chunk_x / max_distance;
+    std::int32_t l = chunk_z / max_distance;
+
+    gen::JavaRandom rand{0};
+    set_structure_seed(rand, world_seed, k, l, salt);
+
+    k *= max_distance;
+    l *= max_distance;
+    k += rand.next_int(max_distance - 8);
+    l += rand.next_int(max_distance - 8);
+    return original_x == k && original_z == l;
+}
+
 }  // namespace cyane::world::structure
