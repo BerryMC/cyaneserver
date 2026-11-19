@@ -21,6 +21,7 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_layer_hills.hpp"
 #include "cyane/world/biome_table.hpp"
 #include "cyane/world/gen_layer_rare_biome.hpp"
 #include "cyane/world/gen_layer_biome.hpp"
@@ -1993,4 +1994,62 @@ CYANE_TEST(biome_table_matches_vanilla_extraction) {
     CYANE_CHECK(biomes_equal_or_mesa_plateau(155, 156)); // mutated_forest 两兄弟同类
     CYANE_CHECK(biomes_equal_or_mesa_plateau(0, 24));    // ocean / deep_ocean
     CYANE_CHECK(!biomes_equal_or_mesa_plateau(1, 4));
+}
+
+CYANE_TEST(gen_layer_hills_applies_variants_and_mutations) {
+    using namespace cyane::world::layer;
+
+    class Solid final : public GenLayer {
+    public:
+        explicit Solid(std::int32_t value) : GenLayer(0), value_(value) {}
+        [[nodiscard]] std::vector<std::int32_t> get_ints(std::int32_t, std::int32_t,
+                                                         std::int32_t width,
+                                                         std::int32_t height) override {
+            return std::vector<std::int32_t>(
+                static_cast<std::size_t>(width) * static_cast<std::size_t>(height), value_);
+        }
+    private:
+        std::int32_t value_;
+    };
+
+    // 全是 desert：结果只能是 desert 或 desert_hills
+    {
+        auto biomes = std::make_shared<Solid>(biome_ids::kDesert);
+        auto rivers = std::make_shared<Solid>(0);
+        GenLayerHills hills{1000, biomes, rivers};
+        hills.init_world_gen_seed(12345);
+        const auto out = hills.get_ints(0, 0, 32, 32);
+        bool saw_hills = false;
+        for (const auto value : out) {
+            CYANE_CHECK(value == biome_ids::kDesert || value == biome_ids::kDesertHills);
+            if (value == biome_ids::kDesertHills) saw_hills = true;
+        }
+        CYANE_CHECK(saw_hills);
+    }
+
+    // 全是 ocean：nextInt(3)==0 时升为 deep_ocean
+    {
+        auto biomes = std::make_shared<Solid>(biome_ids::kOcean);
+        auto rivers = std::make_shared<Solid>(0);
+        GenLayerHills hills{1000, biomes, rivers};
+        hills.init_world_gen_seed(12345);
+        const auto out = hills.get_ints(0, 0, 32, 32);
+        bool saw_deep = false;
+        for (const auto value : out) {
+            CYANE_CHECK(value == biome_ids::kOcean || value == biome_ids::kDeepOcean);
+            if (value == biome_ids::kDeepOcean) saw_deep = true;
+        }
+        CYANE_CHECK(saw_deep);
+    }
+
+    // 河种值 ≡ 1 (mod 29) 且当前不是变体 → 直接升为变体（plains → mutated_plains）
+    {
+        auto biomes = std::make_shared<Solid>(biome_ids::kPlains);
+        auto rivers = std::make_shared<Solid>(32);  // (32-2) % 29 == 1
+        GenLayerHills hills{1000, biomes, rivers};
+        hills.init_world_gen_seed(12345);
+        for (const auto value : hills.get_ints(0, 0, 16, 16)) {
+            CYANE_CHECK_EQ(value, biome_ids::kMutatedPlains);
+        }
+    }
 }
