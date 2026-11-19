@@ -334,7 +334,38 @@ private:
                 ++spill_written_;
                 (void)self;
             });
-        generator_->populate(stored.chunk.pos().x, stored.chunk.pos().z, stored.chunk);
+        // 地牢跨区块且需要读邻区块，用回调绕开 World 的互斥量（此处在锁内）
+        gen::DungeonTarget dungeon_target{
+            .get = [this](std::int32_t wx, std::int32_t wy, std::int32_t wz) -> std::uint16_t {
+                if (wy < 0 || wy >= kChunkSizeY) {
+                    return kStateAir;
+                }
+                const auto pos = ChunkPos::from_world(wx, wz);
+                if (!pos) {
+                    return kStateAir;
+                }
+                auto* sc = find_locked(*pos);
+                if (sc == nullptr) {
+                    return kStateAir;
+                }
+                return sc->chunk.block_at(static_cast<std::size_t>(wx - pos->world_x()), wy,
+                                          static_cast<std::size_t>(wz - pos->world_z()));
+            },
+            .set = [this](std::int32_t wx, std::int32_t wy, std::int32_t wz,
+                          std::uint16_t state) {
+                const auto pos = ChunkPos::from_world(wx, wz);
+                if (!pos) {
+                    return;
+                }
+                auto* sc = find_locked(*pos);
+                if (sc == nullptr) {
+                    return;
+                }
+                sc->chunk.set_block_state(wx, wy, wz, state);
+                sc->dirty = true;
+            }};
+        generator_->populate(stored.chunk.pos().x, stored.chunk.pos().z, stored.chunk,
+                             &dungeon_target);
         stored.chunk.clear_spill_writer();
         stored.dirty = true;
     }

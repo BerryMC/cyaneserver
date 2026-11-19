@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "cyane/world/biome.hpp"
+#include "cyane/world/gen_dungeon.hpp"
 #include "cyane/world/gen_layer_chain.hpp"
 #include "cyane/world/blocks.hpp"
 #include "cyane/world/chunk.hpp"
@@ -73,7 +74,7 @@ public:
     //   long k = rand.nextLong() / 2L * 2L + 1L;
     //   long l = rand.nextLong() / 2L * 2L + 1L;
     //   rand.setSeed((long)x * k + (long)z * l ^ worldSeed);
-    void populate(int x, int z, Chunk& chunk) {
+    void populate(int x, int z, Chunk& chunk, gen::DungeonTarget* dungeon_target = nullptr) {
         JavaRandom rand{seed_};
         const std::int64_t k = (rand.next_long() / 2LL) * 2LL + 1LL;
         const std::int64_t l = (rand.next_long() / 2LL) * 2LL + 1LL;
@@ -83,6 +84,16 @@ public:
         const auto zl = static_cast<std::uint64_t>(static_cast<std::int64_t>(z)) *
                         static_cast<std::uint64_t>(l);
         rand = JavaRandom{(xk + zl) ^ seed_};
+        // 原版顺序：先地牢（dungeonChance=8 次，偏移 +8 使其跨区块边界），
+        // 再矿脉与生物群系装饰。
+        if (dungeon_target != nullptr) {
+            for (int attempt = 0; attempt < kDungeonChance; ++attempt) {
+                const int dx = rand.next_int(16) + 8;
+                const int dy = rand.next_int(256);
+                const int dz = rand.next_int(16) + 8;
+                (void)gen::generate_dungeon(*dungeon_target, rand, x * 16 + dx, dy, z * 16 + dz);
+            }
+        }
         generate_ores(x, z, chunk, rand);
         generate_decorations(x, z, chunk, rand);
     }
@@ -109,6 +120,7 @@ public:
     }
 
 private:
+    static constexpr int kDungeonChance = 8;  // settings.dungeonChance
     std::uint64_t seed_{0};
     layer::BiomeChain biome_chain_;
     std::mutex biome_mutex_;

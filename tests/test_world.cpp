@@ -1,4 +1,5 @@
 #include <array>
+#include <map>
 #include <bit>
 #include <cstring>
 #include <filesystem>
@@ -2333,35 +2334,42 @@ CYANE_TEST(structure_bounding_box_intersection_matches_vanilla) {
 }
 
 CYANE_TEST(dungeon_carve_matches_vanilla_checks) {
+    using cyane::world::gen::DungeonTarget;
     using cyane::world::kStateAir;
     using cyane::world::kStateCobblestone;
     using cyane::world::kStateMossyCobblestone;
     using cyane::world::kStateStone;
 
-    cyane::world::World world;
+    // 用内存 map 承载方块：地牢在 populate 内运行，不能用 World 的加锁接口
+    std::map<std::array<int, 3>, std::uint16_t> blocks;
+    DungeonTarget target{
+        .get = [&blocks](int x, int y, int z) -> std::uint16_t {
+            const auto it = blocks.find({x, y, z});
+            return it == blocks.end() ? cyane::world::kStateAir : it->second;
+        },
+        .set = [&blocks](int x, int y, int z, std::uint16_t state) { blocks[{x, y, z}] = state; }};
 
     for (int x = -8; x <= 8; ++x) {
         for (int y = 58; y <= 70; ++y) {
             for (int z = -8; z <= 8; ++z) {
-                world.set_block(x, y, z, kStateStone);
+                blocks[{x, y, z}] = kStateStone;
             }
         }
     }
-    // 四壁外侧留出开口（原版要求开口数 1..5）
     for (const int d : {3, 4, -3, -4}) {
-        world.set_block(d, 64, 0, kStateAir);
-        world.set_block(d, 65, 0, kStateAir);
-        world.set_block(0, 64, d, kStateAir);
-        world.set_block(0, 65, d, kStateAir);
+        blocks[{d, 64, 0}] = kStateAir;
+        blocks[{d, 65, 0}] = kStateAir;
+        blocks[{0, 64, d}] = kStateAir;
+        blocks[{0, 65, d}] = kStateAir;
     }
 
     cyane::world::gen::JavaRandom rand{12345};
     bool generated = false;
     for (int attempt = 0; attempt < 32 && !generated; ++attempt) {
-        generated = cyane::world::gen::generate_dungeon(world, rand, 0, 64, 0);
+        generated = cyane::world::gen::generate_dungeon(target, rand, 0, 64, 0);
     }
     CYANE_CHECK(generated);
-    CYANE_CHECK_EQ(world.block_at(0, 66, 0), kStateAir);
-    const auto floor = world.block_at(0, 63, 0);
+    CYANE_CHECK_EQ(target.get(0, 66, 0), kStateAir);
+    const auto floor = target.get(0, 63, 0);
     CYANE_CHECK(floor == kStateCobblestone || floor == kStateMossyCobblestone);
 }
