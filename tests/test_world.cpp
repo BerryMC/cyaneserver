@@ -21,6 +21,8 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_layer_shore.hpp"
+#include "cyane/world/gen_layer_chain.hpp"
 #include "cyane/world/gen_layer_biome_edge.hpp"
 #include "cyane/world/gen_layer_hills.hpp"
 #include "cyane/world/biome_table.hpp"
@@ -2105,4 +2107,78 @@ CYANE_TEST(gen_layer_biome_edge_replaces_harsh_boundaries) {
     CYANE_CHECK_EQ(run(biome_ids::kForest)[0], biome_ids::kForest);
     // extreme_hills：四邻都是同类 → extreme_hills_with_trees
     CYANE_CHECK_EQ(run(biome_ids::kExtremeHills)[0], biome_ids::kExtremeHillsWithTrees);
+}
+
+CYANE_TEST(gen_layer_full_chain_produces_valid_biomes) {
+    using namespace cyane::world::layer;
+
+    const auto chain = make_overworld_biome_chain(12345);
+    CYANE_CHECK(chain.voronoi != nullptr);
+
+    // 取 256x256 方块（Voronoi 单元 4 格 → 64x64 单元）
+    const auto area = chain.voronoi->get_ints(0, 0, 256, 256);
+    CYANE_CHECK_EQ(area.size(), std::size_t{256} * 256);
+
+    int ocean = 0;
+    int land = 0;
+    for (const auto id : area) {
+        // 必须是合法的群系 id
+        CYANE_CHECK(id >= 0);
+        CYANE_CHECK(id < 256);
+        if (id == biome_ids::kOcean || id == biome_ids::kDeepOcean ||
+            id == biome_ids::kFrozenOcean) {
+            ++ocean;
+        } else {
+            ++land;
+        }
+    }
+    // 海洋与陆地都要有——初始 Island 层 1/10 陆地，放大后应明显两极分化
+    CYANE_CHECK(ocean > 0);
+    CYANE_CHECK(land > 0);
+
+    // 同种子必须完全可复现
+    const auto again = make_overworld_biome_chain(12345);
+    CYANE_CHECK(again.voronoi->get_ints(0, 0, 256, 256) == area);
+
+    // 不同种子应给出不同结果
+    const auto other = make_overworld_biome_chain(999);
+    CYANE_CHECK(other.voronoi->get_ints(0, 0, 256, 256) != area);
+
+    // biome_at 与整块读取一致
+    CYANE_CHECK_EQ(chain.biome_at(37, 91), area[static_cast<std::size_t>(91) * 256 + 37]);
+}
+
+CYANE_TEST(gen_layer_shore_makes_beaches_and_edges) {
+    using namespace cyane::world::layer;
+
+    class Solid final : public GenLayer {
+    public:
+        explicit Solid(std::int32_t value) : GenLayer(0), value_(value) {}
+        [[nodiscard]] std::vector<std::int32_t> get_ints(std::int32_t, std::int32_t,
+                                                         std::int32_t width,
+                                                         std::int32_t height) override {
+            return std::vector<std::int32_t>(
+                static_cast<std::size_t>(width) * static_cast<std::size_t>(height), value_);
+        }
+    private:
+        std::int32_t value_;
+    };
+
+    const auto run = [](std::int32_t biome) {
+        auto parent = std::make_shared<Solid>(biome);
+        GenLayerShore shore{1000, parent};
+        shore.init_world_gen_seed(12345);
+        return shore.get_ints(0, 0, 8, 8);
+    };
+
+    // 内陆群系四邻都是自己：保持不变
+    CYANE_CHECK_EQ(run(biome_ids::kForest)[0], biome_ids::kForest);
+    CYANE_CHECK_EQ(run(biome_ids::kPlains)[0], biome_ids::kPlains);
+    // 海洋本身保持不变
+    CYANE_CHECK_EQ(run(biome_ids::kOcean)[0], biome_ids::kOcean);
+    CYANE_CHECK_EQ(run(biome_ids::kDeepOcean)[0], biome_ids::kDeepOcean);
+    // 蘑菇岛四邻无海洋 → 保持；蘑菇岛岸逻辑在整链测试里覆盖
+    CYANE_CHECK_EQ(run(biome_ids::kMushroomIsland)[0], biome_ids::kMushroomIsland);
+    // 台地四邻全为台地 → 不变
+    CYANE_CHECK_EQ(run(biome_ids::kMesa)[0], biome_ids::kMesa);
 }

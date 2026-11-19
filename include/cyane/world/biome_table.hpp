@@ -124,4 +124,17 @@ enum class TempCategory : std::uint8_t { cold, medium, warm };
     return ca == cb || ca == TempCategory::medium || cb == TempCategory::medium;
 }
 
+// Biome.isSnowyBiome = properties.enableSnow，由 setSnowEnabled() 置位。
+// 全部 9 个：frozen_ocean/frozen_river/ice_flats/ice_mountains/cold_beach/
+// taiga_cold/taiga_cold_hills/mutated_ice_flats/mutated_taiga_cold。
+[[nodiscard]] constexpr bool is_snowy_biome(std::int32_t id) noexcept {
+    switch (id) {
+        case 10: case 11: case 12: case 13: case 26: case 30: case 31:
+        case 140: case 158:
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace cyane::world::biome_table
