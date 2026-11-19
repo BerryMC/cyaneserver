@@ -26,6 +26,18 @@ struct StructureBoundingBox {
     constexpr StructureBoundingBox(int x1, int y1, int z1, int x2, int y2, int z2) noexcept
         : min_x(x1), min_y(y1), min_z(z1), max_x(x2), max_y(y2), max_z(z2) {}
 
+    // StructureBoundingBox.intersectsWith：闭区间相交（三轴都含端点）
+    [[nodiscard]] constexpr bool intersects(const StructureBoundingBox& other) const noexcept {
+        return max_x >= other.min_x && min_x <= other.max_x && max_z >= other.min_z &&
+               min_z <= other.max_z && max_y >= other.min_y && min_y <= other.max_y;
+    }
+
+    // StructureBoundingBox.isVecInside：闭区间包含
+    [[nodiscard]] constexpr bool contains(int x, int y, int z) const noexcept {
+        return x >= min_x && x <= max_x && z >= min_z && z <= max_z && y >= min_y &&
+               y <= max_y;
+    }
+
     [[nodiscard]] static constexpr StructureBoundingBox get_new_bounding_box() noexcept {
         return StructureBoundingBox(INT_MAX, INT_MAX, INT_MAX, INT_MIN, INT_MIN, INT_MIN);
     }

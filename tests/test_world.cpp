@@ -2308,3 +2308,25 @@ CYANE_TEST(structure_scattered_placement_one_start_per_cell) {
     }
     CYANE_CHECK_EQ(different, 1);
 }
+
+CYANE_TEST(structure_bounding_box_intersection_matches_vanilla) {
+    using cyane::world::structure::StructureBoundingBox;
+    const StructureBoundingBox a{0, 0, 0, 10, 10, 10};
+
+    // 触碰端点算相交（原版是闭区间比较）
+    CYANE_CHECK(a.intersects(StructureBoundingBox{10, 10, 10, 20, 20, 20}));
+    CYANE_CHECK(a.intersects(StructureBoundingBox{-5, -5, -5, 0, 0, 0}));
+    CYANE_CHECK(a.intersects(StructureBoundingBox{2, 2, 2, 3, 3, 3}));
+    // 任一轴分离即不相交
+    CYANE_CHECK(!a.intersects(StructureBoundingBox{11, 0, 0, 20, 10, 10}));
+    CYANE_CHECK(!a.intersects(StructureBoundingBox{0, 0, 11, 10, 10, 20}));
+    CYANE_CHECK(!a.intersects(StructureBoundingBox{0, 11, 0, 10, 20, 10}));
+
+    // 包含判定同样是闭区间
+    CYANE_CHECK(a.contains(0, 0, 0));
+    CYANE_CHECK(a.contains(10, 10, 10));
+    CYANE_CHECK(a.contains(5, 5, 5));
+    CYANE_CHECK(!a.contains(-1, 5, 5));
+    CYANE_CHECK(!a.contains(5, 11, 5));
+    CYANE_CHECK(!a.contains(5, 5, 11));
+}
