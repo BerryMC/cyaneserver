@@ -156,7 +156,7 @@ void apply_knockback(Mob& mob, double from_x, double from_z, float knockback) {
 }
 
 MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double from_z,
-                           float knockback) {
+                           float knockback, bool from_player) {
     std::lock_guard<std::mutex> lock{mutex_};
     for (std::size_t i = 0; i < mobs_.size(); ++i) {
         Mob& mob = mobs_[i];
@@ -199,6 +199,10 @@ MobHurt MobManager::damage(std::uint32_t id, float amount, double from_x, double
         }
         mob.last_damage = amount;
         mob.hurt_resistant_ticks = 20;
+        // EntityLivingBase.damageEntity：被玩家伤害时 recentlyHit = 100
+        if (from_player) {
+            mob.recently_hit = 100;
+        }
         {
             const auto species2 = world::mob_type(mob.type);
             amount = species2
@@ -308,7 +312,16 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         if (mob.death_timer >= 0) {
             if (mob.death_timer == 20) {
                 // 死亡瞬间：EntityStatus 3 + 死亡音 + 掉落 + 经验球（server 端处理，不销毁实体）
-                const int experience = species ? (species->hostile ? species->xp_value : 1) : 0;
+                // onDeath 门控：recentlyHit > 0 才掉经验（防止岩浆/摔落刷经验）
+                int experience = 0;
+                if (mob.recently_hit > 0) {
+                    if (species->hostile) {
+                        experience = species->xp_value;
+                    } else {
+                        static thread_local std::mt19937 passive_rand{std::random_device{}()};
+                        experience = 1 + std::uniform_int_distribution<int>(0, 2)(passive_rand);
+                    }
+                }
                 result.deaths.push_back(
                     MobDeath{mob.entity_id, mob.type, mob.pos.x, mob.pos.y, mob.pos.z, false, experience});
             }
@@ -345,19 +358,6 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                                  mob.pos.y, mob.pos.z});
                 if (mob.health <= 0.0f) {
                     mob.death_timer = 20;
-                    // 设置经验值
-                    int experience = 0;
-                    if (species) {
-                        if (species->hostile) {
-                            experience = species->xp_value; // 敌对生物固定 5 点经验
-                        } else {
-                            // 被动生物：1 + rand(3) 点经验
-                            static thread_local std::mt19937 passive_rand{std::random_device{}()};
-                            experience = 1 + std::uniform_int_distribution<int>(0, 2)(passive_rand);
-                        }
-                    }
-                    result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
-                                                     mob.pos.y, mob.pos.z, false, experience});
                     continue;
                 }
             }
@@ -449,9 +449,6 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                                  mob.pos.y, mob.pos.z});
                 if (mob.health <= 0.0f) {
                     mob.death_timer = 20;
-                    int experience = species ? (species->hostile ? species->xp_value : 1) : 0;
-                    result.deaths.push_back(MobDeath{mob.entity_id, mob.type, mob.pos.x,
-                                                     mob.pos.y, mob.pos.z, false, experience});
                     continue;
                 }
             }
@@ -503,6 +500,9 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
         }
         if (mob.attack_cooldown > 0) {
             --mob.attack_cooldown;
+        }
+        if (mob.recently_hit > 0) {
+            --mob.recently_hit;
         }
         if (mob.hurt_resistant_ticks > 0) {
             --mob.hurt_resistant_ticks;

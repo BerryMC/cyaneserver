@@ -83,6 +83,9 @@ struct Mob {
     bool sheared{false};     // 羊：被剪毛后不再掉落羊毛
     bool in_love{false};     // 动物：爱心模式（繁殖冷却）
     std::int32_t love_timer{0};  // 爱心模式倒计时
+    // EntityLivingBase.recentlyHit：被玩家伤害时置 100，每 tick 递减；
+    // 只有 > 0 时才掉落经验（原版 onDeath 的门控）
+    std::int32_t recently_hit{0};
 };
 
 // 苦力怕 swell 状态变化：Server 据此播引信音效并广播 metadata（-1 熄灭 / 1 引信中）
@@ -218,7 +221,7 @@ public:
     // 造成伤害（含击退方向）：死亡时从表里移除并回报坐标。
     // 击退强度：近战 0.4（EntityLiving.a(entity, 0.4F, ...)），爆炸传 impact。
     MobHurt damage(std::uint32_t id, float amount, double from_x, double from_z,
-                   float knockback = 0.4f);
+                   float knockback = 0.4f, bool from_player = false);
 
     // 推进 AI 与物理一个 tick；daytime = 世界是否白天（日光燃烧用）
     [[nodiscard]] MobTickResult tick(world::World& world,

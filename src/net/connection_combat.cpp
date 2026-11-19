@@ -67,7 +67,7 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
         const float damage =
             item::attack_damage(held_id) * (0.2f + cooled * cooled * 0.8f);
         const auto hurt = context_.mobs->damage(static_cast<std::uint32_t>(*target), damage,
-                                                player_pos_.x, player_pos_.z);
+                                                player_pos_.x, player_pos_.z, 0.4f, true);
         if (!hurt.found) {
             return true;
         }

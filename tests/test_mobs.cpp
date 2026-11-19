@@ -888,3 +888,34 @@ CYANE_TEST(passive_mobs_do_not_despawn_and_void_player_ignored) {
     CYANE_CHECK(!mobs.by_id(zombie_id).has_value());
     CYANE_CHECK(mobs.by_id(pig_id).has_value());
 }
+
+// 经验掉落门控：只有 recentlyHit > 0（被玩家打过）才掉经验
+CYANE_TEST(mob_xp_only_drops_when_recently_hit) {
+    world::World world;
+    net::MobManager mobs;
+    const std::vector<net::PlayerSnapshot> no_players;
+
+    // 环境伤害（非玩家）：不应掉经验
+    const auto id1 = mobs.spawn(54, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    (void)mobs.damage(id1, 100.0f, 0.0, 0.5, 0.4f, /*from_player=*/false);
+    int xp1 = -1;
+    for (int i = 0; i < 30 && xp1 < 0; ++i) {
+        const auto result = mobs.tick(world, no_players);
+        for (const auto& death : result.deaths) {
+            if (death.mob_id == id1) xp1 = death.experience;
+        }
+    }
+    CYANE_CHECK_EQ(xp1, 0);
+
+    // 玩家伤害：应掉经验
+    const auto id2 = mobs.spawn(54, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    (void)mobs.damage(id2, 100.0f, 0.0, 0.5, 0.4f, /*from_player=*/true);
+    int xp2 = -1;
+    for (int i = 0; i < 30 && xp2 < 0; ++i) {
+        const auto result = mobs.tick(world, no_players);
+        for (const auto& death : result.deaths) {
+            if (death.mob_id == id2) xp2 = death.experience;
+        }
+    }
+    CYANE_CHECK(xp2 > 0);
+}
