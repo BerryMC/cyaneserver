@@ -135,6 +135,7 @@ inline constexpr std::int32_t kRedwoodTaigaHills = 33;
 inline constexpr std::int32_t kExtremeHillsWithTrees = 34;
 inline constexpr std::int32_t kSavannaRock = 36;
 inline constexpr std::int32_t kMesa = 37;
+inline constexpr std::int32_t kJungleEdge = 23;
 }  // namespace biome_ids
 
 // GenLayer 抽象基类。getInts 返回 areaWidth*areaHeight 的层数据（行主序，

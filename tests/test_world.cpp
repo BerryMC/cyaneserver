@@ -21,6 +21,7 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_layer_biome_edge.hpp"
 #include "cyane/world/gen_layer_hills.hpp"
 #include "cyane/world/biome_table.hpp"
 #include "cyane/world/gen_layer_rare_biome.hpp"
@@ -2052,4 +2053,56 @@ CYANE_TEST(gen_layer_hills_applies_variants_and_mutations) {
             CYANE_CHECK_EQ(value, biome_ids::kMutatedPlains);
         }
     }
+}
+
+CYANE_TEST(biome_temp_category_matches_vanilla_thresholds) {
+    using namespace cyane::world::biome_table;
+    using namespace cyane::world::layer;
+    // defaultTemperature < 0.2 → cold；< 1.0 → medium；否则 warm
+    CYANE_CHECK(biome_temp_category(biome_ids::kDesert) == TempCategory::warm);      // 2.0
+    CYANE_CHECK(biome_temp_category(biome_ids::kIceFlats) == TempCategory::cold);    // 0.0
+    CYANE_CHECK(biome_temp_category(26) == TempCategory::cold);   // 0.05
+    CYANE_CHECK(biome_temp_category(biome_ids::kSavannaRock) == TempCategory::warm); // 1.0
+    CYANE_CHECK(biome_temp_category(biome_ids::kForest) == TempCategory::medium);    // 0.7
+    CYANE_CHECK(biome_temp_category(biome_ids::kPlains) == TempCategory::medium);    // 0.8
+
+    // 温度感知谓词：同类→真；MEDIUM 与任何类别→真；warm 与 cold→假
+    CYANE_CHECK(same_biome_or_temperature(biome_ids::kDesert, biome_ids::kMesa));
+    CYANE_CHECK(same_biome_or_temperature(biome_ids::kDesert, biome_ids::kForest));  // medium 搭桥
+    CYANE_CHECK(same_biome_or_temperature(biome_ids::kIceFlats, biome_ids::kForest)); // medium 搭桥
+    CYANE_CHECK(!same_biome_or_temperature(biome_ids::kDesert, biome_ids::kIceFlats));
+}
+
+CYANE_TEST(gen_layer_biome_edge_replaces_harsh_boundaries) {
+    using namespace cyane::world::layer;
+
+    class Solid final : public GenLayer {
+    public:
+        explicit Solid(std::int32_t value) : GenLayer(0), value_(value) {}
+        [[nodiscard]] std::vector<std::int32_t> get_ints(std::int32_t, std::int32_t,
+                                                         std::int32_t width,
+                                                         std::int32_t height) override {
+            return std::vector<std::int32_t>(
+                static_cast<std::size_t>(width) * static_cast<std::size_t>(height), value_);
+        }
+    private:
+        std::int32_t value_;
+    };
+
+    const auto run = [](std::int32_t biome) {
+        auto parent = std::make_shared<Solid>(biome);
+        GenLayerBiomeEdge edge{1000, parent};
+        edge.init_world_gen_seed(12345);
+        return edge.get_ints(0, 0, 8, 8);
+    };
+
+    // 四邻都是同类 → 保持原样
+    CYANE_CHECK_EQ(run(biome_ids::kDesert)[0], biome_ids::kDesert);
+    CYANE_CHECK_EQ(run(biome_ids::kSwampland)[0], biome_ids::kSwampland);
+    CYANE_CHECK_EQ(run(biome_ids::kMesaRock)[0], biome_ids::kMesaRock);
+    CYANE_CHECK_EQ(run(biome_ids::kMesaClearRock)[0], biome_ids::kMesaClearRock);
+    CYANE_CHECK_EQ(run(biome_ids::kRedwoodTaiga)[0], biome_ids::kRedwoodTaiga);
+    CYANE_CHECK_EQ(run(biome_ids::kForest)[0], biome_ids::kForest);
+    // extreme_hills：四邻都是同类 → extreme_hills_with_trees
+    CYANE_CHECK_EQ(run(biome_ids::kExtremeHills)[0], biome_ids::kExtremeHillsWithTrees);
 }

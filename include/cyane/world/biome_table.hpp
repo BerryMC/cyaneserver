@@ -98,4 +98,30 @@ enum class BiomeClass : std::uint8_t {
     return ca != BiomeClass::unknown && ca == biome_class(b);
 }
 
+// 温度类别（Biome.getTempCategory）：defaultTemperature < 0.2 → COLD，
+// < 1.0 → MEDIUM，否则 WARM。数值由 Biome.java 的 setTemperature 抽取。
+enum class TempCategory : std::uint8_t { cold, medium, warm };
+
+[[nodiscard]] constexpr TempCategory biome_temp_category(std::int32_t id) noexcept {
+    switch (id) {
+        case 10: case 11: case 12: case 13: case 26: case 140:
+            return TempCategory::cold;
+        case 2: case 8: case 17: case 35: case 36: case 37: case 38: case 39:
+        case 130: case 163: case 164: case 165: case 166: case 167:
+            return TempCategory::warm;
+        default:
+            return TempCategory::medium;
+    }
+}
+
+// GenLayerBiomeEdge 的邻居谓词 b(a,b)：群系类等价，或温度类别相同，
+// 或任一方是 MEDIUM（MEDIUM 与任何类别都算匹配）。
+[[nodiscard]] constexpr bool same_biome_or_temperature(std::int32_t a,
+                                                       std::int32_t b) noexcept {
+    if (biomes_equal_or_mesa_plateau(a, b)) return true;
+    const auto ca = biome_temp_category(a);
+    const auto cb = biome_temp_category(b);
+    return ca == cb || ca == TempCategory::medium || cb == TempCategory::medium;
+}
+
 }  // namespace cyane::world::biome_table
