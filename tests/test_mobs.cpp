@@ -919,3 +919,31 @@ CYANE_TEST(mob_xp_only_drops_when_recently_hit) {
     }
     CYANE_CHECK(xp2 > 0);
 }
+
+// 原版 canEntityBeSeen：隔墙看不见玩家时不应索敌/追击
+CYANE_TEST(hostile_mob_ignores_player_behind_wall) {
+    world::World world;
+    net::MobManager mobs;
+    // 在 x=3 处砌一道 1×3×16 的墙（覆盖整条通道）
+    for (int y = -1; y <= 4; ++y) {
+        // 覆盖足够宽的 z 区间，避免生物绕到墙的另一端
+        for (int z = -48; z <= 48; ++z) {
+            world.set_block(3, kGroundY + y, z, world::kStateStone);
+        }
+    }
+    CYANE_CHECK_EQ(world.block_at(3, kGroundY + 1, 0), world::kStateStone);
+    const auto id = mobs.spawn(54, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+    const std::vector<net::PlayerSnapshot> players = {player_at(7, 8.5, kGroundY, 0.5)};
+
+    bool attacked = false;
+    for (int i = 0; i < 120; ++i) {
+        const auto result = mobs.tick(world, players);
+        for (const auto& event : result.attacks) {
+            if (event.target_player == 7) attacked = true;
+        }
+    }
+    CYANE_CHECK(!attacked);
+    const auto zombie = mobs.by_id(id);
+    CYANE_CHECK(zombie.has_value());
+    CYANE_CHECK_EQ(zombie->target_player, 0u);
+}

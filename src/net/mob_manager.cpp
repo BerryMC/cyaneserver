@@ -514,27 +514,36 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                 --mob.scan_ticks;
             } else {
                 mob.scan_ticks = kHostileScanInterval;
-                const auto target =
-                    nearest_hostile_target(players, mob, static_cast<double>(species->follow_range));
-                if (target == 0) {
-                    // EntityAITarget.unseenMemoryTicks = 60：丢视线后目标保留 60 tick
-                    if (mob.target_player != 0) {
-                        ++mob.unseen_ticks;
-                        if (mob.unseen_ticks > 60) {
-                            mob.target_player = 0;
-                            mob.see_ticks = 0;
-                            if (mob.bow_drawing) {
-                                mob.bow_drawing = false;
-                                mob.draw_ticks = 0;
-                                result.draws.push_back(MobDraw{mob.entity_id, mob.pos.x, mob.pos.y,
-                                                               mob.pos.z, false});
-                            }
-                            mob.ai = MobAi::idle;
-                            mob.state_ticks = rand_ticks(20, 60);
+                const double range = static_cast<double>(species->follow_range);
+                const auto target = nearest_hostile_target(players, mob, range);
+                const auto find_player = [&players](std::uint32_t id) -> const PlayerSnapshot* {
+                    for (const auto& p : players) {
+                        if (p.entity_id == id) {
+                            return &p;
                         }
                     }
-                } else {
-                    if (target != mob.target_player) {
+                    return nullptr;
+                };
+                const auto visible_to = [&world, &mob, species](const PlayerSnapshot& p) {
+                    return line_clear(world, mob.pos.x,
+                                      mob.pos.y + static_cast<double>(species->height) * 0.85,
+                                      mob.pos.z, p.x, p.y + 1.62, p.z);
+                };
+                const auto drop_target = [&] {
+                    mob.target_player = 0;
+                    mob.see_ticks = 0;
+                    mob.unseen_ticks = 0;
+                    if (mob.bow_drawing) {
+                        mob.bow_drawing = false;
+                        mob.draw_ticks = 0;
+                        result.draws.push_back(MobDraw{mob.entity_id, mob.pos.x, mob.pos.y,
+                                                       mob.pos.z, false});
+                    }
+                    mob.ai = MobAi::idle;
+                    mob.state_ticks = rand_ticks(20, 60);
+                };
+                const auto acquire = [&](std::uint32_t id) {
+                    if (id != mob.target_player) {
                         mob.see_ticks = 0;
                         mob.unseen_ticks = 0;
                         if (mob.bow_drawing) {
@@ -544,8 +553,40 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                                                            mob.pos.z, false});
                         }
                     }
-                    mob.target_player = target;
+                    mob.target_player = id;
                     mob.ai = MobAi::chase;
+                };
+
+                // EntityAITarget.shouldContinueExecuting：超距立即放弃；
+                // 在范围内看不见则累计 unseenTicks（>60 放弃）；看得见则清零
+                if (mob.target_player != 0) {
+                    const auto* seen = find_player(mob.target_player);
+                    bool drop = seen == nullptr;
+                    if (!drop) {
+                        const double dx = seen->x - mob.pos.x;
+                        const double dy = seen->y - mob.pos.y;
+                        const double dz = seen->z - mob.pos.z;
+                        if (dx * dx + dy * dy + dz * dz > range * range) {
+                            drop = true;
+                        } else if (visible_to(*seen)) {
+                            mob.unseen_ticks = 0;
+                        } else if (++mob.unseen_ticks > 60) {
+                            drop = true;
+                        }
+                    }
+                    if (drop) {
+                        drop_target();
+                    }
+                }
+
+                // EntityAITarget.isSuitableTarget：选择新目标要求视线可见
+                if (target != 0) {
+                    const auto* candidate = find_player(target);
+                    if (candidate != nullptr && visible_to(*candidate)) {
+                        if (mob.target_player == 0 || target != mob.target_player) {
+                            acquire(target);
+                        }
+                    }
                 }
             }
         }
