@@ -91,6 +91,11 @@ public:
 
     // 生物群系：256 字节（原版 Level.Biomes / 区块数据包末尾的 biome 数组）
     // 默认平原（1），生成器在 replaceBiomeBlocks 阶段按列写入
+    // 装饰（populate）是否已执行过。对应原版 Chunk.isTerrainPopulated，
+    // 保证每个区块的矿脉/装饰只跑一次。
+    [[nodiscard]] bool terrain_populated() const noexcept { return terrain_populated_; }
+    void set_terrain_populated(bool value) noexcept { terrain_populated_ = value; }
+
     [[nodiscard]] const std::array<std::uint8_t, 256>& biomes() const noexcept { return biomes_; }
 
     [[nodiscard]] std::uint8_t biome_at(std::size_t x, std::size_t z) const noexcept {
@@ -169,6 +174,7 @@ private:
     ChunkPos pos_;
     std::array<Section, kSectionCount> sections_{};
     std::array<std::uint8_t, 256> biomes_{};
+    bool terrain_populated_{false};
 };
 
 }

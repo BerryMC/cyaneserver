@@ -766,7 +766,9 @@ CYANE_TEST(world_with_generator_materializes_terrain) {
 CYANE_TEST(overworld_generator_generates_ores_and_trees) {
     // 1. 验证生成器产出原版矿石
     world::gen::ChunkGeneratorOverworld gen{42ULL};
-    const auto chunk = gen.generate(0, 0);
+    auto chunk = gen.generate(0, 0);
+    // 矿脉已按原版移入 populate 阶段
+    gen.populate(0, 0, chunk);
 
     bool has_coal = false;
     bool has_iron = false;
@@ -856,7 +858,9 @@ CYANE_TEST(vanilla_biomes_and_ore_abundance) {
 
     // 2. 验证修复 +8 偏移后矿物丰富度（单区块生成矿石总数达 150 以上）
     world::gen::ChunkGeneratorOverworld gen{9999ULL};
-    const auto chunk = gen.generate(1, 1);
+    auto chunk = gen.generate(1, 1);
+    // 矿脉已按原版移入 populate 阶段
+    gen.populate(1, 1, chunk);
     int ore_count = 0;
     for (std::size_t x = 0; x < 16; ++x) {
         for (std::size_t z = 0; z < 16; ++z) {
@@ -2199,4 +2203,29 @@ CYANE_TEST(chunk_generator_uses_the_gen_layer_chain) {
     const auto& info = generator.biome_at_block(3 * 16 + 8, -7 * 16 + 8);
     CYANE_CHECK_EQ(static_cast<int>(info.id),
                    static_cast<int>(sampled[8 + 8 * 16]));
+}
+
+CYANE_TEST(world_populate_cascade_waits_for_neighbours) {
+    // 原版 Chunk.populate：必须等"正邻 + 斜邻"都就绪才允许装饰，
+    // 否则特征无处可写。这里验证门控与"只跑一次"。
+    cyane::world::World world;
+    world.set_generator(12345);
+
+    // 只生成 (0,0)：东/南/东南都不存在 → 不该被装饰
+    auto first = world.chunk_at(cyane::world::ChunkPos{0, 0});
+    CYANE_CHECK(!first.terrain_populated());
+
+    // 补上东邻与南邻，仍缺东南邻
+    (void)world.chunk_at(cyane::world::ChunkPos{1, 0});
+    (void)world.chunk_at(cyane::world::ChunkPos{0, 1});
+    CYANE_CHECK(!world.chunk_at(cyane::world::ChunkPos{0, 0}).terrain_populated());
+
+    // 生成东南邻 → 级联此时满足条件，(0,0) 被装饰
+    (void)world.chunk_at(cyane::world::ChunkPos{1, 1});
+    CYANE_CHECK(world.chunk_at(cyane::world::ChunkPos{0, 0}).terrain_populated());
+
+    // 只跑一次：再次取用不会改变已装饰的状态
+    const auto before = world.chunk_at(cyane::world::ChunkPos{0, 0}).block_at(8, 64, 8);
+    CYANE_CHECK(world.chunk_at(cyane::world::ChunkPos{0, 0}).terrain_populated());
+    CYANE_CHECK_EQ(world.chunk_at(cyane::world::ChunkPos{0, 0}).block_at(8, 64, 8), before);
 }

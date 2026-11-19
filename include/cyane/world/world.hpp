@@ -306,6 +306,45 @@ private:
         return it != chunks_.end() ? it->second : nullptr;
     }
 
+    // 单个区块的装饰，带"只跑一次"门闸（原版 Chunk.isTerrainPopulated）
+    void populate_one_locked(StoredChunk& stored) {
+        if (!generator_ || stored.chunk.terrain_populated()) {
+            return;
+        }
+        stored.chunk.set_terrain_populated(true);
+        generator_->populate(stored.chunk.pos().x, stored.chunk.pos().z, stored.chunk);
+        stored.dirty = true;
+    }
+
+    // Chunk.populate(IChunkProvider, IChunkGenerator)：四向级联。
+    // 每个方向都要求"正邻 + 对应斜邻"都在，才允许那一块的装饰执行。
+    void populate_cascade_locked(ChunkPos pos) {
+        auto* north = find_locked(ChunkPos{pos.x, pos.z - 1});
+        auto* east = find_locked(ChunkPos{pos.x + 1, pos.z});
+        auto* south = find_locked(ChunkPos{pos.x, pos.z + 1});
+        auto* west = find_locked(ChunkPos{pos.x - 1, pos.z});
+        if (east != nullptr && south != nullptr &&
+            find_locked(ChunkPos{pos.x + 1, pos.z + 1}) != nullptr) {
+            if (auto* self = find_locked(pos); self != nullptr) {
+                populate_one_locked(*self);
+            }
+        }
+        if (west != nullptr && south != nullptr &&
+            find_locked(ChunkPos{pos.x - 1, pos.z + 1}) != nullptr) {
+            populate_one_locked(*west);
+        }
+        if (north != nullptr && east != nullptr &&
+            find_locked(ChunkPos{pos.x + 1, pos.z - 1}) != nullptr) {
+            populate_one_locked(*north);
+        }
+        if (north != nullptr && west != nullptr) {
+            if (auto* north_west = find_locked(ChunkPos{pos.x - 1, pos.z - 1});
+                north_west != nullptr) {
+                populate_one_locked(*north_west);
+            }
+        }
+    }
+
     [[nodiscard]] StoredChunk& ensure_locked(ChunkPos pos) {
         const auto key = chunk_key(pos);
         if (auto it = chunks_.find(key); it != chunks_.end()) {
@@ -318,16 +357,22 @@ private:
             if (loader_(pos, loaded, source)) {
                 auto sc = std::make_shared<StoredChunk>();
                 sc->chunk = std::move(loaded);
+                // 磁盘上的区块已装饰过（NBT 里 TerrainPopulated=1），不再重复
+                sc->chunk.set_terrain_populated(true);
                 sc->source_nbt = std::move(source);
                 sc->dirty = false;
-                return *chunks_.emplace(key, std::move(sc)).first->second;
+                auto& stored = *chunks_.emplace(key, std::move(sc)).first->second;
+                populate_cascade_locked(pos);
+                return stored;
             }
         }
         if (generator_) {
             auto sc = std::make_shared<StoredChunk>();
             sc->chunk = generator_->generate(pos.x, pos.z);
             sc->dirty = true;
-            return *chunks_.emplace(key, std::move(sc)).first->second;
+            auto& stored = *chunks_.emplace(key, std::move(sc)).first->second;
+            populate_cascade_locked(pos);
+            return stored;
         }
         auto sc = std::make_shared<StoredChunk>();
         sc->chunk = materialize_flat(pos);

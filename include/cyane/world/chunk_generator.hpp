@@ -55,7 +55,8 @@ public:
         height_map_.assign(825, 0.0);
     }
 
-    // 生成一个 16×256×16 的区块（逐行转写 generateHeightmap + setBlocksInChunk + caves + ores + decorations）
+    // 地形阶段：对应 vanilla ChunkGeneratorOverworld.generateChunk。
+    // 只做方块/群系地表/洞穴；矿脉与装饰属于 populate 阶段。
     [[nodiscard]] Chunk generate(int x, int z) {
         Chunk chunk{ChunkPos{x, z}};
         set_blocks_in_chunk(x, z, chunk);
@@ -63,11 +64,27 @@ public:
         if (settings_.use_caves) {
             cave_generator_.generate(seed_, x, z, chunk);
         }
-        JavaRandom rand(seed_ ^ (static_cast<std::uint64_t>(x) * 341873128712ULL +
-                                 static_cast<std::uint64_t>(z) * 132897987541ULL));
+        return chunk;
+    }
+
+    // 装饰阶段：对应 vanilla ChunkGeneratorOverworld.populate。
+    // 种子派生逐行照抄：
+    //   rand.setSeed(worldSeed);
+    //   long k = rand.nextLong() / 2L * 2L + 1L;
+    //   long l = rand.nextLong() / 2L * 2L + 1L;
+    //   rand.setSeed((long)x * k + (long)z * l ^ worldSeed);
+    void populate(int x, int z, Chunk& chunk) {
+        JavaRandom rand{seed_};
+        const std::int64_t k = (rand.next_long() / 2LL) * 2LL + 1LL;
+        const std::int64_t l = (rand.next_long() / 2LL) * 2LL + 1LL;
+        // Java 的 long 乘法是 64 位回绕，C++ 侧必须用无符号承载，否则是有符号溢出 UB
+        const auto xk = static_cast<std::uint64_t>(static_cast<std::int64_t>(x)) *
+                        static_cast<std::uint64_t>(k);
+        const auto zl = static_cast<std::uint64_t>(static_cast<std::int64_t>(z)) *
+                        static_cast<std::uint64_t>(l);
+        rand = JavaRandom{(xk + zl) ^ seed_};
         generate_ores(x, z, chunk, rand);
         generate_decorations(x, z, chunk, rand);
-        return chunk;
     }
 
     [[nodiscard]] std::uint64_t seed() const noexcept { return seed_; }

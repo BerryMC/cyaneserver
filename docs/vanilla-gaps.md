@@ -72,7 +72,7 @@
   · BiomeEdge 还需要**温度类别表**：邻居谓词 `b(a,b)` 在群系类不等价时，
     退化为比较 `getTempCategory()`，且 MEDIUM 与任何类别都算匹配
   · Shore 另需 `c(int)`/`d(int)` 两个谓词与丛林特例、`Biome.getBiome` 映射、WorldType 分支，以及把生成器从自创 sin/cos 气候函数切到 GenLayer 链 | 进行中 |
-| GEN-02 | 装饰 | `chunk_generator.hpp:55-67` | `ChunkGeneratorOverworld.java:390-503` | 无 populate 阶段，特征全裁在本区块 → 树/湖/矿脉在区块边界硬切 | 待修 |
+| GEN-02 | 装饰 | `world.hpp` populate 级联 | `Chunk.java:1041-1070`、`ChunkGeneratorOverworld.populate` | **第 1 步已完成**：`terrain_populated` 标志 + 四向级联 + 矿脉/装饰移入 populate + 原版种子派生。**剩余**：装饰改为写穿世界（跨区块特征），并解决按需生成下的递归约束 | 进行中 |
 | GEN-03 | 结构 | `structure.hpp` 仅 136 行 | `MapGenStructure` 全家族 | 矿井/村庄/要塞/神殿/海底神殿/府邸/下界要塞/末地城全部缺失；地牢/水井/化石写好但未接线 | 待修 |
 
 ---
