@@ -2452,3 +2452,29 @@ CYANE_TEST(dungeons_generate_in_populate) {
     }
     CYANE_CHECK(world.dungeon_success() >= 1);
 }
+
+CYANE_TEST(cave_replace_block_matches_vanilla) {
+    using cyane::world::kStateAir;
+    using cyane::world::kStateDirt;
+    using cyane::world::kStateGravel;
+    using cyane::world::kStateSand;
+    using cyane::world::kStateStone;
+    using cyane::world::kStateWater;
+
+    using cyane::world::gen::MapGenCaves;
+    // 石/土/草/砂岩类：无条件可替换
+    CYANE_CHECK(MapGenCaves::can_replace_block(kStateStone, kStateAir));
+    CYANE_CHECK(MapGenCaves::can_replace_block(kStateDirt, kStateAir));
+    // 黏土/菌丝/雪层：原版同样可替换
+    CYANE_CHECK(MapGenCaves::can_replace_block(172 << 4, kStateAir));  // hardened_clay
+    CYANE_CHECK(MapGenCaves::can_replace_block(159 << 4, kStateAir));  // stained_hardened_clay
+    CYANE_CHECK(MapGenCaves::can_replace_block(110 << 4, kStateAir));  // mycelium
+    CYANE_CHECK(MapGenCaves::can_replace_block(78 << 4, kStateAir));   // snow_layer
+    // 沙/砾石：仅当下方不是水
+    CYANE_CHECK(MapGenCaves::can_replace_block(kStateSand, kStateStone));
+    CYANE_CHECK(MapGenCaves::can_replace_block(kStateGravel, kStateStone));
+    CYANE_CHECK(!MapGenCaves::can_replace_block(kStateSand, kStateWater));
+    CYANE_CHECK(!MapGenCaves::can_replace_block(kStateGravel, kStateWater));
+    // 其他方块不替换
+    CYANE_CHECK(!MapGenCaves::can_replace_block(kStateAir, kStateAir));
+}

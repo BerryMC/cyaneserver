@@ -208,26 +208,34 @@ private:
         }
     }
 
-    [[nodiscard]] static bool can_replace_block(std::uint16_t state) noexcept {
-        const auto id = block_id(state);
-        switch (id) {
-            case 1:  // stone
-            case 3:  // dirt
-            case 2:  // grass
-            case 12: // sand
-            case 13: // gravel
-            case 24: // sandstone
-            case 179: // red sandstone
-            case 78: // snow layer
+public:
+    // MapGenCaves.canReplaceBlock：末支的沙/砾石仅在下方不是水时可替换
+    [[nodiscard]] static bool can_replace_block(std::uint16_t state,
+                                                std::uint16_t below) noexcept {
+        switch (block_id(state)) {
+            case 1:    // stone
+            case 3:    // dirt
+            case 2:    // grass
+            case 172:  // hardened_clay
+            case 159:  // stained_hardened_clay
+            case 24:   // sandstone
+            case 179:  // red_sandstone
+            case 110:  // mycelium
+            case 78:   // snow layer
                 return true;
+            case 12:   // sand
+            case 13:   // gravel
+                return block_id(below) != 8 && block_id(below) != 9;  // 下方是水则不替换
             default:
                 return false;
         }
     }
 
+private:
     void dig_block(Chunk& chunk, std::size_t x, int y, std::size_t z) {
         const auto state = chunk.block_at(x, y, z);
-        if (can_replace_block(state)) {
+        const auto below = y > 0 ? chunk.block_at(x, y - 1, z) : kStateAir;
+        if (can_replace_block(state, below)) {
             if (y - 1 < 10) {
                 chunk.set_block(x, y, z, kStateLava);
             } else {
