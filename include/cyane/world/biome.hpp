@@ -56,6 +56,44 @@ inline constexpr BiomeInfo kMutatedSavanna{163, "mutated_savanna",       0.36f, 
 // 默认生物群系：平原
 inline constexpr BiomeInfo kDefault = kPlains;
 
+// 按 id 查群系属性。GenLayer 链产出的 id 可能超出本表（例如变异体 129..167、
+// 未建模的 hills 变体），这些统一回退到默认值——地表方块因此与最近似的群系一致。
+[[nodiscard]] inline const BiomeInfo& by_id(std::int32_t id) noexcept {
+    switch (id) {
+        case 0: return kOcean;
+        case 1: return kPlains;
+        case 2: return kDesert;
+        case 3: return kHills;
+        case 4: return kForest;
+        case 5: return kTaiga;
+        case 6: return kSwamp;
+        case 7: return kRiver;
+        case 8: return kHell;
+        case 9: return kSky;
+        case 12: return kSnow;
+        case 14: return kMushroomIsland;
+        case 15: return kMushroomIslandShore;
+        case 16: return kBeach;
+        case 21: return kJungle;
+        case 24: return kDeepOcean;
+        case 25: return kStoneBeach;
+        case 26: return kColdBeach;
+        case 27: return kBirchForest;
+        case 29: return kRoofedForest;
+        case 30: return kColdTaiga;
+        case 32: return kRedwoodTaiga;
+        case 35: return kSavanna;
+        case 36: return kSavannaPlateau;
+        case 37: return kMesa;
+        case 38: return kMesaPlateau;
+        case 39: return kMesaClearRock;
+        case 127: return kVoid;
+        case 132: return kMutatedForest;
+        case 163: return kMutatedSavanna;
+        default: return kDefault;
+    }
+}
+
 // 气候系统生物群系选择器：基于大陆架与大尺度温湿度分区（对齐原版 1.12.2 气候分带）
 [[nodiscard]] inline BiomeInfo biome_at(std::int32_t wx, std::int32_t wz, double continentalness) noexcept {
     // 1. 大陆架高程分区（宏观大尺度海洋与海岸线）

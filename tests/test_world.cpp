@@ -21,6 +21,7 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/chunk_generator.hpp"
 #include "cyane/world/gen_layer_shore.hpp"
 #include "cyane/world/gen_layer_chain.hpp"
 #include "cyane/world/gen_layer_biome_edge.hpp"
@@ -2181,4 +2182,21 @@ CYANE_TEST(gen_layer_shore_makes_beaches_and_edges) {
     CYANE_CHECK_EQ(run(biome_ids::kMushroomIsland)[0], biome_ids::kMushroomIsland);
     // 台地四邻全为台地 → 不变
     CYANE_CHECK_EQ(run(biome_ids::kMesa)[0], biome_ids::kMesa);
+}
+
+CYANE_TEST(chunk_generator_uses_the_gen_layer_chain) {
+    // 生成器的群系必须与直接跑 GenLayer 链的结果逐格一致
+    cyane::world::gen::ChunkGeneratorOverworld generator{12345};
+    const auto sampled = generator.sample_biomes(3, -7);
+
+    const auto chain = cyane::world::layer::make_overworld_biome_chain(12345);
+    const auto expected = chain.voronoi->get_ints(3 * 16, -7 * 16, 16, 16);
+    for (std::size_t idx = 0; idx < sampled.size() && idx < expected.size(); ++idx) {
+        CYANE_CHECK_EQ(static_cast<int>(sampled[idx]), expected[idx] & 0xFF);
+    }
+
+    // 单点查询与整块采样一致
+    const auto& info = generator.biome_at_block(3 * 16 + 8, -7 * 16 + 8);
+    CYANE_CHECK_EQ(static_cast<int>(info.id),
+                   static_cast<int>(sampled[8 + 8 * 16]));
 }

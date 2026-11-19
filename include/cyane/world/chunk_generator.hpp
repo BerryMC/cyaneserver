@@ -2,11 +2,14 @@
 
 #include <array>
 #include <cmath>
+#include <array>
 #include <cstdint>
+#include <mutex>
 #include <memory>
 #include <vector>
 
 #include "cyane/world/biome.hpp"
+#include "cyane/world/gen_layer_chain.hpp"
 #include "cyane/world/blocks.hpp"
 #include "cyane/world/chunk.hpp"
 #include "cyane/world/feature.hpp"
@@ -41,7 +44,8 @@ struct GeneratorSettings {
 // ChunkGeneratorOverworld（逐行转写 1.12.2 原版）
 class ChunkGeneratorOverworld {
 public:
-    explicit ChunkGeneratorOverworld(std::uint64_t seed) : seed_(seed) {
+    explicit ChunkGeneratorOverworld(std::uint64_t seed)
+        : seed_(seed), biome_chain_(layer::make_overworld_biome_chain(static_cast<std::int64_t>(seed))) {
         JavaRandom rng(seed);
         min_limit_noise_ = std::make_unique<NoiseGeneratorOctaves>(rng, 16);
         max_limit_noise_ = std::make_unique<NoiseGeneratorOctaves>(rng, 16);
@@ -68,8 +72,29 @@ public:
 
     [[nodiscard]] std::uint64_t seed() const noexcept { return seed_; }
 
+    // 单个方块坐标的群系（矿脉/装饰用）
+    [[nodiscard]] const biome::BiomeInfo& biome_at_block(std::int32_t bx, std::int32_t bz) {
+        std::lock_guard<std::mutex> lock(biome_mutex_);
+        return biome::by_id(biome_chain_.voronoi->get_ints(bx, bz, 1, 1).front());
+    }
+
+    // 取一个区块的 16x16 群系 id（GenLayer 链一次性采样，避免逐列走链）。
+    // 链内部有可变种子状态，用互斥量串行化以支持多线程生成。
+    [[nodiscard]] std::array<std::uint8_t, 256> sample_biomes(std::int32_t chunk_x,
+                                                             std::int32_t chunk_z) {
+        std::array<std::uint8_t, 256> out{};
+        std::lock_guard<std::mutex> lock(biome_mutex_);
+        const auto ids = biome_chain_.voronoi->get_ints(chunk_x * 16, chunk_z * 16, 16, 16);
+        for (std::size_t idx = 0; idx < out.size() && idx < ids.size(); ++idx) {
+            out[idx] = static_cast<std::uint8_t>(ids[idx] & 0xFF);
+        }
+        return out;
+    }
+
 private:
     std::uint64_t seed_{0};
+    layer::BiomeChain biome_chain_;
+    std::mutex biome_mutex_;
     std::unique_ptr<NoiseGeneratorOctaves> min_limit_noise_;
     std::unique_ptr<NoiseGeneratorOctaves> max_limit_noise_;
     std::unique_ptr<NoiseGeneratorOctaves> main_noise_;
@@ -118,16 +143,15 @@ private:
         max_limit_region_ = max_limit_noise_->generate_noise_octaves(
             max_limit_region_, x, y, z, 5, 33, 5, f, f1, f);
 
-        // 获取 10×10 的生物群系网格（在 x - 2, z - 2 采样，4 格一个点）
+        // vanilla ChunkGeneratorOverworld.generateHeightmap：
+        //   int[] aint = this.biomes.getInts(x - 2, z - 2, 10, 10)
+        // 即 Voronoi 层按 4 格一点采样 10×10 网格，直接喂给群系高度权重。
         std::array<biome::BiomeInfo, 100> biomes{};
-        for (int i = 0; i < 10; ++i) {
-            for (int j = 0; j < 10; ++j) {
-                const auto b_idx = static_cast<std::size_t>(i + j * 10);
-                const int bx = (x - 2 + i) * 4;
-                const int bz = (z - 2 + j) * 4;
-                const double n = surface_noise_->populate_noise_array_bilinear(
-                    static_cast<double>(bx) * kBiomeNoiseScale, static_cast<double>(bz) * kBiomeNoiseScale);
-                biomes[b_idx] = biome::biome_at(bx, bz, n);
+        {
+            std::lock_guard<std::mutex> lock(biome_mutex_);
+            const auto ids = biome_chain_.voronoi->get_ints(x - 2, z - 2, 10, 10);
+            for (std::size_t idx = 0; idx < biomes.size() && idx < ids.size(); ++idx) {
+                biomes[idx] = biome::by_id(ids[idx]);
             }
         }
 
@@ -267,15 +291,15 @@ private:
                        static_cast<std::uint64_t>(z) * 132897987541ULL);
         const int sea_level = settings_.sea_level;
 
+        const auto column = sample_biomes(x, z);
         for (std::size_t i = 0; i < 16; ++i) {
             for (std::size_t j = 0; j < 16; ++j) {
+                const auto biome_id = column[i + j * 16];
+                const auto& b = biome::by_id(biome_id);
+                chunk.set_biome(i, j, biome_id);
+
                 const int wx = x * 16 + static_cast<int>(i);
                 const int wz = z * 16 + static_cast<int>(j);
-                const double biome_noise = surface_noise_->populate_noise_array_bilinear(
-                    static_cast<double>(wx) * kBiomeNoiseScale, static_cast<double>(wz) * kBiomeNoiseScale);
-                const auto b = biome::biome_at(wx, wz, biome_noise);
-                chunk.set_biome(i, j, static_cast<std::uint8_t>(b.id));
-
                 const double noise_val = surface_noise_->populate_noise_array_bilinear(
                     static_cast<double>(wx) * 0.0625, static_cast<double>(wz) * 0.0625);
 
@@ -321,9 +345,7 @@ private:
     }
 
     void generate_ores(int x, int z, Chunk& chunk, JavaRandom& rand) {
-        const double noise_val = surface_noise_->populate_noise_array_bilinear(
-            static_cast<double>(x * 16 + 8) * 0.0625, static_cast<double>(z * 16 + 8) * 0.0625);
-        const auto b = biome::biome_at(x * 16 + 8, z * 16 + 8, noise_val * 0.5);
+        const auto& b = biome_at_block(x * 16 + 8, z * 16 + 8);
 
         static constexpr WorldGenMinable dirt_gen{kStateDirt, 33};
         static constexpr WorldGenMinable gravel_gen{kStateGravel, 33};
@@ -381,9 +403,7 @@ private:
     }
 
     void generate_decorations(int x, int z, Chunk& chunk, JavaRandom& rand) {
-        const double biome_noise = surface_noise_->populate_noise_array_bilinear(
-            static_cast<double>(x * 16 + 8) * kBiomeNoiseScale, static_cast<double>(z * 16 + 8) * kBiomeNoiseScale);
-        const auto b = biome::biome_at(x * 16 + 8, z * 16 + 8, biome_noise);
+        const auto& b = biome_at_block(x * 16 + 8, z * 16 + 8);
 
         // 1. 水湖 (1/4 几率且非沙漠) 与 地下熔岩湖 (1/80 几率)
         if (b.id != 2 && rand.next_int(4) == 0) {
