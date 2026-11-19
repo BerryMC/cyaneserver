@@ -21,6 +21,7 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/gen_dungeon.hpp"
 #include "cyane/world/structure_seed.hpp"
 #include "cyane/world/chunk_generator.hpp"
 #include "cyane/world/gen_layer_shore.hpp"
@@ -2329,4 +2330,38 @@ CYANE_TEST(structure_bounding_box_intersection_matches_vanilla) {
     CYANE_CHECK(!a.contains(-1, 5, 5));
     CYANE_CHECK(!a.contains(5, 11, 5));
     CYANE_CHECK(!a.contains(5, 5, 11));
+}
+
+CYANE_TEST(dungeon_carve_matches_vanilla_checks) {
+    using cyane::world::kStateAir;
+    using cyane::world::kStateCobblestone;
+    using cyane::world::kStateMossyCobblestone;
+    using cyane::world::kStateStone;
+
+    cyane::world::World world;
+
+    for (int x = -8; x <= 8; ++x) {
+        for (int y = 58; y <= 70; ++y) {
+            for (int z = -8; z <= 8; ++z) {
+                world.set_block(x, y, z, kStateStone);
+            }
+        }
+    }
+    // 四壁外侧留出开口（原版要求开口数 1..5）
+    for (const int d : {3, 4, -3, -4}) {
+        world.set_block(d, 64, 0, kStateAir);
+        world.set_block(d, 65, 0, kStateAir);
+        world.set_block(0, 64, d, kStateAir);
+        world.set_block(0, 65, d, kStateAir);
+    }
+
+    cyane::world::gen::JavaRandom rand{12345};
+    bool generated = false;
+    for (int attempt = 0; attempt < 32 && !generated; ++attempt) {
+        generated = cyane::world::gen::generate_dungeon(world, rand, 0, 64, 0);
+    }
+    CYANE_CHECK(generated);
+    CYANE_CHECK_EQ(world.block_at(0, 66, 0), kStateAir);
+    const auto floor = world.block_at(0, 63, 0);
+    CYANE_CHECK(floor == kStateCobblestone || floor == kStateMossyCobblestone);
 }
