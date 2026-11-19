@@ -246,6 +246,41 @@ Result<Config> Config::parse(std::string_view text, std::string_view source) {
     return config;
 }
 
+Result<Config> Config::load_or_create(const std::filesystem::path& path,
+                                     std::string_view default_text) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        if (path.has_parent_path()) {
+            std::filesystem::create_directories(path.parent_path(), ec);
+            if (ec) {
+                return make_error(ErrorCode::config,
+                                  std::format("cannot create {}: {}",
+                                              path.parent_path().string(), ec.message()));
+            }
+        }
+        // 先写临时文件再改名，避免中途失败留下半个配置
+        const auto temp = path.string() + ".tmp";
+        {
+            std::ofstream file{temp, std::ios::binary | std::ios::trunc};
+            if (!file) {
+                return make_error(ErrorCode::config,
+                                  std::format("cannot create {}", temp));
+            }
+            file.write(default_text.data(), static_cast<std::streamsize>(default_text.size()));
+            if (!file) {
+                return make_error(ErrorCode::config, std::format("cannot write {}", temp));
+            }
+        }
+        std::filesystem::rename(temp, path, ec);
+        if (ec) {
+            std::filesystem::remove(temp, ec);
+            return make_error(ErrorCode::config,
+                              std::format("cannot rename {} to {}", temp, path.string()));
+        }
+    }
+    return load_file(path);
+}
+
 Result<Config> Config::load_file(const std::filesystem::path& path) {
     std::ifstream file{path, std::ios::binary};
     if (!file) {

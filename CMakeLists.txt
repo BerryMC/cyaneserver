@@ -150,6 +150,13 @@ set_target_properties(cyane PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_
 
 add_custom_target(cyane_codegen DEPENDS "${CYANE_REGISTRY_HEADER}")
 
+# 把 config/recipes.toml 嵌入为默认配方表：首次启动且文件缺失时自动写出
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/config/recipes.toml")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/config/recipes.toml" CYANE_DEFAULT_RECIPES)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/default_recipes.hpp.in"
+               "${CYANE_GENERATED_DIR}/cyane/game/default_recipes.hpp" @ONLY)
+
 if(CYANE_BUILD_TESTS)
   enable_testing()
   add_executable(cyane_tests

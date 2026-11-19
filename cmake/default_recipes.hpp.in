@@ -1,0 +1,10 @@
+#pragma once
+
+#include <string_view>
+
+// 由 CMake 在配置期从 config/recipes.toml 嵌入，保证与仓库里那份是同一份内容。
+namespace cyane {
+
+inline constexpr std::string_view kDefaultRecipesToml = R"TOML(@CYANE_DEFAULT_RECIPES@)TOML";
+
+}  // namespace cyane

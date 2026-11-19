@@ -21,6 +21,7 @@
 #include "cyane/core/error.hpp"
 #include "cyane/core/log.hpp"
 #include "cyane/game/command.hpp"
+#include "cyane/game/default_config.hpp"
 #include "cyane/game/server.hpp"
 #include "cyane/generated/registry_meta.hpp"
 
@@ -261,10 +262,15 @@ int main(int argc, char** argv) {
     }
 
     ensure_config_dir(config_path);
-    auto config = cyane::Config::load_file(config_path);
+    const bool config_existed = std::filesystem::exists(config_path);
+    auto config = cyane::Config::load_or_create(config_path, cyane::kDefaultServerToml);
     if (!config) {
         std::print(stderr, "cyane: {}: {}\n", cyane::to_string(config.error().code), config.error().message);
         return 1;
+    }
+
+    if (!config_existed) {
+        std::print("cyane: 未找到配置文件，已生成默认配置 {}\n", config_path);
     }
 
     auto server_config = cyane::ServerConfig::from(*config);

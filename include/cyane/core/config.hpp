@@ -32,6 +32,10 @@ public:
     using TableArray = std::vector<Table>;
 
     [[nodiscard]] static Result<Config> load_file(const std::filesystem::path& path);
+    // 配置文件不存在时先写出 default_text（父目录一并创建）再读取；
+    // 已存在则原样读取，绝不覆盖用户配置。
+    [[nodiscard]] static Result<Config> load_or_create(const std::filesystem::path& path,
+                                                       std::string_view default_text);
     [[nodiscard]] static Result<Config> parse(std::string_view text, std::string_view source = "<memory>");
 
     [[nodiscard]] bool contains(std::string_view key) const noexcept { return entries_.contains(key); }

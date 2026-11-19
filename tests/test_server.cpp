@@ -10,6 +10,7 @@
 #include "cyane/core/config.hpp"
 #include "cyane/game/command.hpp"
 #include "cyane/game/op_manager.hpp"
+#include "cyane/game/default_config.hpp"
 #include "cyane/game/server.hpp"
 #include "test_framework.hpp"
 
@@ -393,4 +394,36 @@ CYANE_TEST(gamerule_command_matches_vanilla_semantics) {
     console.messages.clear();
     CYANE_CHECK(cyane::game::CommandDispatcher::execute(console, *srv, "gamerule noSuchRule"));
     CYANE_CHECK(console.messages[0].find("There is no game rule named noSuchRule") != std::string::npos);
+}
+
+CYANE_TEST(config_load_or_create_writes_default_and_preserves_existing) {
+    const auto dir = std::filesystem::temp_directory_path() / "cyane_config_or_create";
+    std::filesystem::remove_all(dir);
+    const auto path = dir / "nested" / "server.toml";
+
+    // 文件不存在：连父目录一起创建，并写入默认内容
+    const auto created = cyane::Config::load_or_create(path, "[network]\nport = 1234\n");
+    CYANE_CHECK(created.has_value());
+    CYANE_CHECK(std::filesystem::exists(path));
+    CYANE_CHECK_EQ(created->get<std::int64_t>("network.port").value_or(0), 1234);
+
+    // 已存在：绝不覆盖用户配置
+    const auto again = cyane::Config::load_or_create(path, "[network]\nport = 9999\n");
+    CYANE_CHECK(again.has_value());
+    CYANE_CHECK_EQ(again->get<std::int64_t>("network.port").value_or(0), 1234);
+
+    std::filesystem::remove_all(dir);
+}
+
+CYANE_TEST(default_server_toml_parses_and_matches_server_config_defaults) {
+    const auto config = cyane::Config::parse(cyane::kDefaultServerToml);
+    CYANE_CHECK(config.has_value());
+    const auto server = cyane::ServerConfig::from(*config);
+    CYANE_CHECK(server.has_value());
+    // 内置默认配置必须能被解析成一份完整可用的 ServerConfig
+    CYANE_CHECK_EQ(static_cast<int>(server->port), 25565);
+    CYANE_CHECK_EQ(server->max_players, 20);
+    CYANE_CHECK_EQ(server->view_distance, 8);
+    CYANE_CHECK_EQ(server->world_dir, std::string("world"));
+    CYANE_CHECK_EQ(server->op_file, std::string("config/ops.json"));
 }

@@ -1,3 +1,4 @@
+#include "cyane/game/default_recipes.hpp"
 #include "cyane/game/server.hpp"
 #include "cyane/game/player_data.hpp"
 
@@ -240,7 +241,8 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         log::warn("failed to load ops file: {}", rc.error().message);
     }
     server->crafting_ = std::make_unique<item::CraftingRegistry>();
-    auto recipes = Config::load_file(server->config_.recipe_file);
+    auto recipes = Config::load_or_create(server->config_.recipe_file,
+                                          kDefaultRecipesToml);
     if (recipes) {
         if (const auto rc = server->crafting_->load_config(*recipes); !rc) {
             log::warn("failed to load recipes from {}: {}", server->config_.recipe_file, rc.error().message);
