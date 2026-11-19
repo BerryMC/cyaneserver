@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -53,6 +54,9 @@ struct ServerConfig {
     std::string seed{""};  // 种子：支持数字或文本；留空首启时随机，已存在则以 level.dat 为准
 
     [[nodiscard]] static Result<ServerConfig> from(const Config& config);
+    // from() 实际读取的配置键。默认配置文本里的键必须都在这里，
+    // 否则会被静默忽略——这个坑踩过一次（log_level vs log.level）。
+    [[nodiscard]] static std::span<const std::string_view> known_keys() noexcept;
 };
 
 class Server {

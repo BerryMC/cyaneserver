@@ -427,3 +427,36 @@ CYANE_TEST(default_server_toml_parses_and_matches_server_config_defaults) {
     CYANE_CHECK_EQ(server->world_dir, std::string("world"));
     CYANE_CHECK_EQ(server->op_file, std::string("config/ops.json"));
 }
+
+CYANE_TEST(default_config_only_uses_keys_the_server_reads) {
+    // 防的是"配置键写错名字被静默忽略"：生成文本里的每个键都必须是
+    // ServerConfig::from 真正读取的键（踩过 log_level vs log.level 这个坑）。
+    const auto config = cyane::Config::parse(cyane::kDefaultServerToml);
+    CYANE_CHECK(config.has_value());
+
+    const auto known = cyane::ServerConfig::known_keys();
+    std::string unknown;
+    for (const auto& [key, value] : config->entries()) {
+        (void)value;
+        bool found = false;
+        for (const auto candidate : known) {
+            if (candidate == key) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            unknown = key;
+            break;
+        }
+    }
+    CYANE_CHECK_EQ(unknown, std::string(""));
+
+    const auto server = cyane::ServerConfig::from(*config);
+    CYANE_CHECK(server.has_value());
+    CYANE_CHECK_EQ(server->log_level, std::string("info"));
+    CYANE_CHECK_EQ(server->log_file, std::string("logs/latest.log"));
+    CYANE_CHECK_EQ(server->autosave_interval, 300);
+    CYANE_CHECK_EQ(server->player_data_dir, std::string("world/playerdata"));
+    CYANE_CHECK_EQ(server->game_mode, std::string("creative"));
+}

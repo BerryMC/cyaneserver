@@ -85,6 +85,19 @@ namespace {
 
 }
 
+std::span<const std::string_view> ServerConfig::known_keys() noexcept {
+    static constexpr std::string_view keys[] = {
+        "network.bind", "network.port", "network.motd", "network.online_mode",
+        "network.compression_threshold", "network.io_threads",
+        "server.max_players", "server.view_distance", "server.tick_rate",
+        "server.game_mode", "server.worker_threads", "server.world_dir",
+        "server.autosave_interval", "server.player_data_dir", "server.op_file",
+        "server.recipe_file", "server.seed",
+        "log.level", "log.file",
+    };
+    return keys;
+}
+
 Result<ServerConfig> ServerConfig::from(const Config& config) {
     ServerConfig out;
 
