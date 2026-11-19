@@ -6,7 +6,7 @@
 - 严重度：**P0** = 数据丢失/玩家可见的破缺；**P1** = 机制与原版不同；**P2** = 数值/文本差异
 - 状态：`待修` / `进行中` / `已修`
 
-统计：**待修 40 条、已修 37 条、阻塞 1 条**（`python3 tools/vanilla_progress.py` 自动核对）。
+统计：**待修 39 条、已修 38 条、阻塞 1 条**（`python3 tools/vanilla_progress.py` 自动核对）。
 
 ---
 
@@ -62,7 +62,7 @@
 | COMBAT-03 | 战斗 | `connection_combat.cpp` | `EntityPlayer.java:1396-1460` | 暴击（下落中、非疾跑、`f2>0.9`，×1.5）与横扫（`flag && !flag2 && !flag1 && onGround`，邻近实体各 1 点 + 0.4 击退）未实现；击退增益也未接 | 待修 |
 | AI-11 | 经验球 | `src/net/xp_orb.cpp` | `EntityXPOrb.java:239`、`EntityPlayer.java` | 拾取冷却 `xpCooldown`（拾取后置 2、每 tick 递减）未做；经验球模块无单元测试覆盖（需 World 实例） | 待修 |
 | SYS-03e | 规则 | `server.cpp` / `mob_manager.cpp` | `GameRules.java` 各读取点 | 仍未接线：`doMobLoot` `doTileDrops` `doEntityDrops` `showDeathMessages` `naturalRegeneration` `randomTickSpeed` `doFireTick` `mobGriefing` `spawnRadius` `maxEntityCramming` `doLimitedCrafting` `spectatorsGenerateChunks` `logAdminCommands` `commandBlockOutput` `sendCommandFeedback` `announceAdvancements` | 待修 |
-| GEN-01 | 群系 | `gen_layer_chain.hpp` | `GenLayer.java:22-88` | **layer 层已完成**：19 个 GenLayer 全部实现且有测试（`2cc5f33`）。**剩余**：把 `chunk_generator` 的选群系从自创 sin/cos 气候函数切到 `make_overworld_biome_chain(seed).biome_at(x,z)` | 部分 |
+| GEN-01 | 群系 | `gen_layer_chain.hpp` | `GenLayer.java:22-88` | 19 个 GenLayer 全部实现，且 `ChunkGeneratorOverworld` 的四处群系查询已切到链上（`5991005`） | 已修 `5991005` |
   Hills 已于 `9f74c79` 完成。仍缺 BiomeEdge / Shore，卡在尚未建模的机制上：
   · **变异体表**：`Biome.getMutationForBiome(id)` = `fromId(id + 128)`，但只有部分群系有变异体，
     需要在表里标明"无变异"以复现原版返回 null 的分支
