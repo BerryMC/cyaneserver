@@ -207,6 +207,10 @@ struct MobHurt {
 };
 
 // 生物登记表：Server::tick 驱动 AI 与物理（20Hz），连接线程读快照补发。
+// 生物 AI 的随机源。原版所有 AI 随机都取自 world.rand（世界种子派生），
+// 服务器在拿到世界种子后调用本函数，使行为可复现。
+void set_ai_rng_seed(std::uint64_t seed);
+
 class MobManager {
 public:
     // 在中心点附近随机生成 count 只被动生物，落在地表（world 提供 surface_y）

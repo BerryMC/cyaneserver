@@ -1252,4 +1252,8 @@ void MobManager::spawn_cycle(world::World& world, std::span<const PlayerSnapshot
     }
 }
 
+void set_ai_rng_seed(std::uint64_t seed) {
+    rng().seed(static_cast<std::uint32_t>(seed ^ (seed >> 32)));
+}
+
 }  // namespace cyane::net

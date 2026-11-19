@@ -947,3 +947,25 @@ CYANE_TEST(hostile_mob_ignores_player_behind_wall) {
     CYANE_CHECK(zombie.has_value());
     CYANE_CHECK_EQ(zombie->target_player, 0u);
 }
+
+// 生物 AI 的随机源跟随世界种子：同种子必须可复现
+CYANE_TEST(mob_ai_is_reproducible_with_seeded_rng) {
+    const auto run = [] {
+        world::World world;
+        net::MobManager mobs;
+        net::set_ai_rng_seed(20240601);
+        const auto id = mobs.spawn(54, 0.5, static_cast<double>(kGroundY), 0.5, 0.0f);
+        const std::vector<net::PlayerSnapshot> players = {player_at(7, 6.5, kGroundY, 0.5)};
+        for (int i = 0; i < 60; ++i) {
+            (void)mobs.tick(world, players);
+        }
+        const auto mob = mobs.by_id(id);
+        return mob ? std::array<double, 3>{mob->pos.x, mob->pos.y, mob->pos.z}
+                   : std::array<double, 3>{-1.0, -1.0, -1.0};
+    };
+    const auto first = run();
+    const auto second = run();
+    CYANE_CHECK_NEAR(first[0], second[0], 1e-9);
+    CYANE_CHECK_NEAR(first[1], second[1], 1e-9);
+    CYANE_CHECK_NEAR(first[2], second[2], 1e-9);
+}

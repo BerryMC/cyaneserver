@@ -342,6 +342,8 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
         }
         server->seed_ = actual_seed;
         server->weather_rand_ = world::gen::JavaRandom{static_cast<std::uint64_t>(actual_seed)};
+        // 生物 AI 的随机源跟随世界种子（原版走 world.rand）
+        net::set_ai_rng_seed(static_cast<std::uint64_t>(actual_seed));
         // 注入世界生成器（使用 level.dat 的 RandomSeed）
         server->world_->set_generator(static_cast<std::uint64_t>(actual_seed));
         log::info("world generator initialized with seed {}", actual_seed);

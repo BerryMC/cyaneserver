@@ -185,4 +185,6 @@ MapGenCaves 的全部参数与算法，**均与原版一致**：
 1. 同一世界重放时生物行为不可复现；
 2. 依赖生物游走的测试可能跨次运行不稳定（已遇到一次：僵尸绕出测试墙）。
 
-待办：给 `MobManager` 接收世界种子并用自己的 `JavaRandom` 替换全局 `rng()`。
+已修：服务器在拿到世界种子后调用 `net::set_ai_rng_seed(seed)`，AI 随机源
+与 world.rand 一样跟随世界种子；新增 mob_ai_is_reproducible_with_seeded_rng
+验证同种子下 60 tick 后位置完全一致。
