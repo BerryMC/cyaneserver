@@ -97,6 +97,9 @@ public:
     }
 
     // 区块的磁盘原始 NBT（无则空）
+    [[nodiscard]] std::size_t spill_written() const noexcept { return spill_written_; }
+    [[nodiscard]] std::size_t spill_dropped() const noexcept { return spill_dropped_; }
+
     [[nodiscard]] Bytes source_nbt(ChunkPos pos) const {
         std::lock_guard<std::mutex> lock{mutex_};
         if (const auto* sc = find_locked(pos); sc != nullptr) {
@@ -365,7 +368,9 @@ private:
         }
     }
 
-    [[nodiscard]] StoredChunk& ensure_locked(ChunkPos pos) {
+    // 只保证"地形就绪"（磁盘或生成），不触发装饰级联。
+    // 装饰需要 3×3 邻域都存在，先把它铺出来再单独跑级联。
+    [[nodiscard]] StoredChunk& ensure_terrain_locked(ChunkPos pos) {
         const auto key = chunk_key(pos);
         if (auto it = chunks_.find(key); it != chunks_.end()) {
             return *it->second;
@@ -381,18 +386,14 @@ private:
                 sc->chunk.set_terrain_populated(true);
                 sc->source_nbt = std::move(source);
                 sc->dirty = false;
-                auto& stored = *chunks_.emplace(key, std::move(sc)).first->second;
-                populate_cascade_locked(pos);
-                return stored;
+                return *chunks_.emplace(key, std::move(sc)).first->second;
             }
         }
         if (generator_) {
             auto sc = std::make_shared<StoredChunk>();
             sc->chunk = generator_->generate(pos.x, pos.z);
             sc->dirty = true;
-            auto& stored = *chunks_.emplace(key, std::move(sc)).first->second;
-            populate_cascade_locked(pos);
-            return stored;
+            return *chunks_.emplace(key, std::move(sc)).first->second;
         }
         auto sc = std::make_shared<StoredChunk>();
         sc->chunk = materialize_flat(pos);
@@ -419,6 +420,18 @@ private:
         }
         return section;
     }
+    // 对外入口：先把 3×3 邻域的地形铺好，再跑装饰级联。
+    // 这样装饰的越界写入总能找到目标区块，不再被丢弃。
+    [[nodiscard]] StoredChunk& ensure_locked(ChunkPos pos) {
+        for (std::int32_t dz = -1; dz <= 1; ++dz) {
+            for (std::int32_t dx = -1; dx <= 1; ++dx) {
+                (void)ensure_terrain_locked(ChunkPos{pos.x + dx, pos.z + dz});
+            }
+        }
+        populate_cascade_locked(pos);
+        return *find_locked(pos);
+    }
+
     mutable std::mutex mutex_;
     // 装饰越界写入的统计（调试/测试用）
     std::size_t spill_written_{0};
