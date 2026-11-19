@@ -91,7 +91,9 @@ public:
                 const int dx = rand.next_int(16) + 8;
                 const int dy = rand.next_int(256);
                 const int dz = rand.next_int(16) + 8;
-                (void)gen::generate_dungeon(*dungeon_target, rand, x * 16 + dx, dy, z * 16 + dz);
+                if (gen::generate_dungeon(*dungeon_target, rand, x * 16 + dx, dy, z * 16 + dz)) {
+                    ++dungeon_success_;
+                }
             }
         }
         generate_ores(x, z, chunk, rand);
@@ -99,6 +101,7 @@ public:
     }
 
     [[nodiscard]] std::uint64_t seed() const noexcept { return seed_; }
+    [[nodiscard]] std::size_t dungeon_success() const noexcept { return dungeon_success_; }
 
     // 单个方块坐标的群系（矿脉/装饰用）
     [[nodiscard]] const biome::BiomeInfo& biome_at_block(std::int32_t bx, std::int32_t bz) {
@@ -122,6 +125,7 @@ public:
 private:
     static constexpr int kDungeonChance = 8;  // settings.dungeonChance
     std::uint64_t seed_{0};
+    std::size_t dungeon_success_{0};
     layer::BiomeChain biome_chain_;
     std::mutex biome_mutex_;
     std::unique_ptr<NoiseGeneratorOctaves> min_limit_noise_;

@@ -97,6 +97,10 @@ public:
     }
 
     // 区块的磁盘原始 NBT（无则空）
+    [[nodiscard]] std::size_t dungeon_success() const {
+        return generator_ ? generator_->dungeon_success() : 0;
+    }
+
     [[nodiscard]] std::size_t spill_written() const noexcept { return spill_written_; }
     [[nodiscard]] std::size_t spill_dropped() const noexcept { return spill_dropped_; }
 

@@ -2406,3 +2406,49 @@ CYANE_TEST(dungeon_can_succeed_in_real_terrain) {
     }
     CYANE_CHECK(ok > 0);
 }
+
+CYANE_TEST(world_target_reads_match_public_api) {
+    // populate 里的 DungeonTarget.get 走 find_locked + 局部坐标，
+    // 必须与 public 的 world.block_at 完全一致，否则地牢预检会永远失败。
+    cyane::world::World world;
+    world.set_generator(424242);
+    for (int cx = 0; cx < 2; ++cx) {
+        for (int cz = 0; cz < 2; ++cz) {
+            (void)world.chunk_at(cyane::world::ChunkPos{cx, cz});
+        }
+    }
+    // 模拟 target 的换算
+    cyane::world::gen::DungeonTarget target{
+        .get = [&world](int x, int y, int z) -> std::uint16_t {
+            if (y < 0 || y >= cyane::world::kChunkSizeY) return cyane::world::kStateAir;
+            const auto pos = cyane::world::ChunkPos::from_world(x, z);
+            if (!pos) return cyane::world::kStateAir;
+            const auto chunk = world.chunk_at(*pos);
+            return chunk.block_at(static_cast<std::size_t>(x - pos->world_x()), y,
+                                  static_cast<std::size_t>(z - pos->world_z()));
+        },
+        .set = [](int, int, int, std::uint16_t) {}};
+
+    int mismatches = 0;
+    for (int x = 0; x < 32; ++x) {
+        for (int z = 0; z < 32; ++z) {
+            for (int y = 0; y < 80; y += 7) {
+                if (world.block_at(x, y, z) != target.get(x, y, z)) ++mismatches;
+            }
+        }
+    }
+    CYANE_CHECK_EQ(mismatches, 0);
+}
+
+CYANE_TEST(dungeons_generate_in_populate) {
+    // 固定种子下结果确定：144 个区块内至少出现 1 次地牢。
+    // 实测约 1/144 区块（原版约 1/8），差距记录在 docs/vanilla-gaps.md。
+    cyane::world::World world;
+    world.set_generator(424242);
+    for (int cx = 0; cx < 12; ++cx) {
+        for (int cz = 0; cz < 12; ++cz) {
+            (void)world.chunk_at(cyane::world::ChunkPos{cx, cz});
+        }
+    }
+    CYANE_CHECK(world.dungeon_success() >= 1);
+}
