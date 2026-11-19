@@ -2373,3 +2373,36 @@ CYANE_TEST(dungeon_carve_matches_vanilla_checks) {
     const auto floor = target.get(0, 63, 0);
     CYANE_CHECK(floor == kStateCobblestone || floor == kStateMossyCobblestone);
 }
+
+CYANE_TEST(dungeon_can_succeed_in_real_terrain) {
+    // 直接用真实地形做 target，统计开凿成功率：
+    // 若恒为 0，说明开口条件在现有地形下不可达（洞穴没穿过地牢四壁）。
+    using cyane::world::kStateAir;
+    cyane::world::World world;
+    world.set_generator(424242);
+    for (int cx = 0; cx < 3; ++cx) {
+        for (int cz = 0; cz < 3; ++cz) {
+            (void)world.chunk_at(cyane::world::ChunkPos{cx, cz});
+        }
+    }
+
+    cyane::world::gen::DungeonTarget target{
+        .get = [&world](int x, int y, int z) -> std::uint16_t {
+            if (y < 0 || y >= cyane::world::kChunkSizeY) return kStateAir;
+            const auto pos = cyane::world::ChunkPos::from_world(x, z);
+            return pos ? world.block_at(x, y, z) : kStateAir;
+        },
+        .set = [&world](int x, int y, int z, std::uint16_t state) { world.set_block(x, y, z, state); }};
+
+    cyane::world::gen::JavaRandom rand{999};
+    int ok = 0;
+    for (int i = 0; i < 4000; ++i) {
+        const int x = rand.next_int(48);
+        const int y = rand.next_int(120);
+        const int z = rand.next_int(48);
+        if (cyane::world::gen::generate_dungeon(target, rand, x, y, z)) {
+            ++ok;
+        }
+    }
+    CYANE_CHECK(ok > 0);
+}
