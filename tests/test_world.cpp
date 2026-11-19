@@ -2229,3 +2229,34 @@ CYANE_TEST(world_populate_cascade_waits_for_neighbours) {
     CYANE_CHECK(world.chunk_at(cyane::world::ChunkPos{0, 0}).terrain_populated());
     CYANE_CHECK_EQ(world.chunk_at(cyane::world::ChunkPos{0, 0}).block_at(8, 64, 8), before);
 }
+
+CYANE_TEST(chunk_spill_writer_receives_out_of_range_writes) {
+    // 装饰阶段把越界写入转给邻区块，是"树冠在区块边界被硬切"的解法。
+    cyane::world::Chunk chunk{cyane::world::ChunkPos{0, 0}};
+    std::vector<std::array<std::int32_t, 3>> captured;
+    std::vector<std::uint16_t> captured_state;
+    chunk.set_spill_writer(
+        [&](std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state) {
+            captured.push_back({wx, wy, wz});
+            captured_state.push_back(state);
+        });
+
+    // 界内：正常写入，不进 spill
+    chunk.set_block_state(3, 5, 3, 43);
+    CYANE_CHECK_EQ(chunk.block_at(3, 5, 3), std::uint16_t{43});
+    CYANE_CHECK(captured.empty());
+
+    // 越界（左上角各差一格）：转给 spill
+    chunk.set_block_state(-1, 6, -1, 42);
+    chunk.set_block_state(16, 7, 3, 44);
+    CYANE_CHECK_EQ(captured.size(), std::size_t{2});
+    CYANE_CHECK_EQ(captured[0][0], -1);
+    CYANE_CHECK_EQ(captured[0][2], -1);
+    CYANE_CHECK_EQ(captured_state[0], std::uint16_t{42});
+    CYANE_CHECK_EQ(captured[1][0], 16);
+
+    // 摘掉 spill 后越界写入应被静默丢弃
+    chunk.clear_spill_writer();
+    chunk.set_block_state(-2, 6, -2, 45);
+    CYANE_CHECK_EQ(captured.size(), std::size_t{2});
+}

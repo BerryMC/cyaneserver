@@ -312,7 +312,27 @@ private:
             return;
         }
         stored.chunk.set_terrain_populated(true);
+        // 装饰期间允许越界写入落到已存在的邻居区块；目标不存在则丢弃
+        // （不触发生成，避免按需生成下的递归）。
+        auto* self = &stored;
+        stored.chunk.set_spill_writer(
+            [this, self](std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state) {
+                const auto pos = ChunkPos::from_world(wx, wz);
+                if (!pos) {
+                    return;
+                }
+                auto* target = find_locked(*pos);
+                if (target == nullptr) {
+                    ++spill_dropped_;
+                    return;
+                }
+                target->chunk.set_block_state(wx, wy, wz, state);
+                target->dirty = true;
+                ++spill_written_;
+                (void)self;
+            });
         generator_->populate(stored.chunk.pos().x, stored.chunk.pos().z, stored.chunk);
+        stored.chunk.clear_spill_writer();
         stored.dirty = true;
     }
 
@@ -398,7 +418,11 @@ private:
             }
         }
         return section;
-    }    mutable std::mutex mutex_;
+    }
+    mutable std::mutex mutex_;
+    // 装饰越界写入的统计（调试/测试用）
+    std::size_t spill_written_{0};
+    std::size_t spill_dropped_{0};
     // shared_ptr：release 后 BlockCache 等锁外读者仍可安全持有区块
     std::unordered_map<std::int64_t, std::shared_ptr<StoredChunk>> chunks_;
     ChunkLoader loader_;  // WorldPersistence 注入；ensure_locked 在持锁状态下调用

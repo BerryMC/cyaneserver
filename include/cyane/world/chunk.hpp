@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <utility>
@@ -138,10 +139,21 @@ public:
                                        static_cast<std::size_t>(sz)));
     }
 
+    // 越界写入的接收者。装饰阶段挂上它，特征就能把方块写到邻区块——
+    // 这正是"树冠在区块边界被硬切"的根因。默认为空，越界写入照旧丢弃。
+    using SpillWriter =
+        std::function<void(std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state)>;
+
+    void set_spill_writer(SpillWriter writer) { spill_ = std::move(writer); }
+    void clear_spill_writer() { spill_ = nullptr; }
+
     void set_block_state(std::int32_t wx, std::int32_t wy, std::int32_t wz, std::uint16_t state) {
         const int sx = wx - pos_.world_x();
         const int sz = wz - pos_.world_z();
         if (sx < 0 || sx >= kChunkSizeX || sz < 0 || sz >= kChunkSizeZ || wy < 0 || wy >= kChunkSizeY) {
+            if (spill_) {
+                spill_(wx, wy, wz, state);
+            }
             return;
         }
         sections_[static_cast<std::size_t>(wy) / 16].set(
@@ -175,6 +187,7 @@ private:
     std::array<Section, kSectionCount> sections_{};
     std::array<std::uint8_t, 256> biomes_{};
     bool terrain_populated_{false};
+    SpillWriter spill_{};
 };
 
 }
