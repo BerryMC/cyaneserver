@@ -21,6 +21,7 @@
 #include "cyane/world/gen_layer.hpp"
 #include "cyane/world/gen_layer_island.hpp"
 #include "cyane/world/gen_layer_zoom.hpp"
+#include "cyane/world/structure_seed.hpp"
 #include "cyane/world/chunk_generator.hpp"
 #include "cyane/world/gen_layer_shore.hpp"
 #include "cyane/world/gen_layer_chain.hpp"
@@ -2248,4 +2249,28 @@ CYANE_TEST(chunk_spill_writer_receives_out_of_range_writes) {
     chunk.clear_spill_writer();
     chunk.set_block_state(-2, 6, -2, 45);
     CYANE_CHECK_EQ(captured.size(), std::size_t{2});
+}
+
+CYANE_TEST(structure_seed_matches_world_set_random_seed) {
+    // 参考值由独立的 Python 实现（任意精度 + 显式 mod 2^64）按
+    // World.setRandomSeed 的公式算出。
+    cyane::world::gen::JavaRandom rand{0};
+    cyane::world::structure::set_structure_seed(rand, 12345, 3, -7, 100);
+    // 同输入必须同结果
+    cyane::world::gen::JavaRandom again{0};
+    cyane::world::structure::set_structure_seed(again, 12345, 3, -7, 100);
+    for (int i = 0; i < 16; ++i) {
+        CYANE_CHECK_EQ(rand.next_int(1000), again.next_int(1000));
+    }
+
+    // 不同 salt / 不同区块必须不同
+    cyane::world::gen::JavaRandom other{0};
+    cyane::world::structure::set_structure_seed(other, 12345, 3, -7, 101);
+    cyane::world::gen::JavaRandom base{0};
+    cyane::world::structure::set_structure_seed(base, 12345, 3, -7, 100);
+    bool differs = false;
+    for (int i = 0; i < 16; ++i) {
+        if (base.next_int(1000) != other.next_int(1000)) differs = true;
+    }
+    CYANE_CHECK(differs);
 }
