@@ -138,6 +138,19 @@ bool Connection::handle_play_position(std::int32_t packet_id, ByteSpan payload) 
     if (reader.remaining() >= 1) {
         player_on_ground_ = reader.u8() != 0;
     }
+    // EntityPlayerMP.handleFalling → Entity.updateFallState：
+    // 落地清零；否则只要向下位移为正就累加（原版按移动包的 dy 计算）
+    {
+        const double dx = pos.x - player_pos_.x;
+        const double dz = pos.z - player_pos_.z;
+        walk_delta_ = static_cast<float>(std::sqrt(dx * dx + dz * dz));
+        const double dy = pos.y - player_pos_.y;
+        if (player_on_ground_) {
+            fall_distance_ = 0.0f;
+        } else if (dy < 0.0) {
+            fall_distance_ -= static_cast<float>(dy);
+        }
+    }
     player_pos_ = pos;
     if (context_.player_manager != nullptr) {
         context_.player_manager->update_position(player_id_, pos);

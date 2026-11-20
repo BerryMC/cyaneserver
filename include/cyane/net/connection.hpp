@@ -376,6 +376,10 @@ private:
     Uuid uuid_;
     entity::Position player_pos_{};
     bool player_on_ground_{true};  // 移动包尾部的 onGround（击退竖直门控用）
+    // Entity.fallDistance：由移动包逐次累加（Entity.updateFallState），爆击判定用
+    float fall_distance_{0.0f};
+    // 最近一个移动包的水平位移，对应原版 d0 = distanceWalkedModified 的逐 tick 增量
+    float walk_delta_{0.0f};
 
     std::unique_ptr<crypto::StreamCipher> decrypt_cipher_;
     std::unique_ptr<crypto::StreamCipher> encrypt_cipher_;

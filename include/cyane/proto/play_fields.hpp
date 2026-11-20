@@ -48,8 +48,10 @@ inline constexpr std::uint8_t kGlowing = 1U << 6;
 }
 
 // PacketPlayOutNamedSoundEffect 的 SoundCategory 序数（EnumSoundCategory 声明顺序）
+// SoundCategory 序号（EntityPlayer.getSoundCategory() = PLAYERS）
 namespace sound_category {
 inline constexpr std::int32_t kBlocks = 4;
+inline constexpr std::int32_t kPlayers = 0;
 }
 
 // PacketPlayOutAbilities 的 flags 位

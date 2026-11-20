@@ -3,6 +3,7 @@
 
 #include "cyane/item/item_stack.hpp"
 #include "cyane/item/item_tools.hpp"
+#include "cyane/net/combat_rules.hpp"
 #include "cyane/net/packet_writers.hpp"
 #include "cyane/proto/play_fields.hpp"
 #include "cyane/world/blocks.hpp"
@@ -221,4 +222,69 @@ CYANE_TEST(attack_cooldown_scaling_matches_vanilla) {
     CYANE_CHECK_EQ(scaled(strength_after(13)), 1.0f);
     // 单调递增
     CYANE_CHECK(scaled(strength_after(6)) < scaled(strength_after(13)));
+}
+
+// 爆击 / 疾跑击退 / 横扫的判定真值表（EntityPlayer.attackTargetEntityWithCurrentItem）
+CYANE_TEST(attack_outcome_matches_vanilla_rules) {
+    using cyane::net::AttackConditions;
+    using cyane::net::resolve_attack;
+
+    {
+        const auto r = resolve_attack(AttackConditions{.charged = true, .on_ground = true,
+                                                       .holding_sword = true,
+                                                       .walked_toward = true});
+        CYANE_CHECK(r.sweeping);
+        CYANE_CHECK(!r.crit);
+        CYANE_CHECK_NEAR(r.knockback, 0.4f, 1e-6);
+    }
+    {
+        const auto r = resolve_attack(AttackConditions{.charged = true, .on_ground = true,
+                                                       .holding_sword = false,
+                                                       .walked_toward = true});
+        CYANE_CHECK(!r.sweeping);
+    }
+    {
+        const auto r = resolve_attack(AttackConditions{.charged = true, .on_ground = true,
+                                                       .holding_sword = true,
+                                                       .walked_toward = false});
+        CYANE_CHECK(!r.sweeping);
+    }
+    {
+        const auto r = resolve_attack(AttackConditions{.charged = true,
+                                                       .fall_distance = 1.5f,
+                                                       .on_ground = false,
+                                                       .holding_sword = true,
+                                                       .walked_toward = true});
+        CYANE_CHECK(r.crit);
+        CYANE_CHECK(!r.sweeping);
+    }
+    {
+        const auto r = resolve_attack(AttackConditions{.charged = true,
+                                                       .fall_distance = 1.5f,
+                                                       .on_ground = false,
+                                                       .sprinting = true,
+                                                       .holding_sword = true,
+                                                       .walked_toward = true});
+        CYANE_CHECK(!r.crit);
+        CYANE_CHECK(!r.sweeping);
+        CYANE_CHECK(r.sprint_knockback);
+        CYANE_CHECK_NEAR(r.knockback, 0.5f, 1e-6);
+    }
+    {
+        const auto r = resolve_attack(AttackConditions{.charged = true,
+                                                       .fall_distance = 1.5f,
+                                                       .on_ground = false,
+                                                       .in_water = true});
+        CYANE_CHECK(!r.crit);
+    }
+    {
+        const auto r = resolve_attack(AttackConditions{.charged = false,
+                                                       .fall_distance = 1.5f,
+                                                       .on_ground = false,
+                                                       .holding_sword = true,
+                                                       .walked_toward = true});
+        CYANE_CHECK(!r.crit);
+        CYANE_CHECK(!r.sweeping);
+        CYANE_CHECK(!r.sprint_knockback);
+    }
 }

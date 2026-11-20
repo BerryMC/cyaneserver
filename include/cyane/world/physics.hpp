@@ -28,6 +28,13 @@ struct Aabb {
     double max_z{0.0};
 };
 
+// AxisAlignedBB.intersects：严格不等式（贴面不算相交）
+[[nodiscard]] inline bool aabb_intersects(const Aabb& a, const Aabb& b) noexcept {
+    return b.max_x > a.min_x && b.min_x < a.max_x &&
+           (b.max_y > a.min_y && b.min_y < a.max_y) &&
+           (b.max_z > a.min_z && b.min_z < a.max_z);
+}
+
 [[nodiscard]] inline Aabb entity_box(double x, double y, double z, float width,
                                      float height) noexcept {
     const double half = static_cast<double>(width) * 0.5;

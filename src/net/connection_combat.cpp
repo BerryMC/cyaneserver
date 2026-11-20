@@ -1,3 +1,4 @@
+#include "cyane/net/combat_rules.hpp"
 #include "cyane/net/connection.hpp"
 
 #include <cmath>
@@ -64,14 +65,97 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
         const float cooled = std::clamp(
             (static_cast<float>(ticks_since_last_swing_) + 0.5f) / cooldown_period, 0.0f, 1.0f);
         ticks_since_last_swing_ = 0;
-        const float damage =
-            item::attack_damage(held_id) * (0.2f + cooled * cooled * 0.8f);
+        // 爆击 / 疾跑击退 / 横扫
+        const bool in_water = [&] {
+            if (context_.world == nullptr) {
+                return false;
+            }
+            const auto feet = context_.world->block_at(
+                static_cast<std::int32_t>(std::floor(player_pos_.x)),
+                static_cast<std::int32_t>(std::floor(player_pos_.y)),
+                static_cast<std::int32_t>(std::floor(player_pos_.z)));
+            const auto id = world::block_id(feet);
+            return id == 8 || id == 9;
+        }();
+        const auto outcome = resolve_attack(AttackConditions{
+            .charged = cooled > 0.9f,
+            .fall_distance = fall_distance_,
+            .on_ground = player_on_ground_,
+            .sprinting = sprinting_,
+            .in_water = in_water,
+            .holding_sword = item::tool_of(held_id).kind == item::ToolKind::sword,
+            // 原版 d0 < getAIMoveSpeed()：玩家步行速度约 0.1
+            .walked_toward = walk_delta_ < 0.1f,
+        });
+        const bool crit = outcome.crit;
+        const bool sweeping = outcome.sweeping;
+        const float base_damage = item::attack_damage(held_id) * (0.2f + cooled * cooled * 0.8f);
+        const float damage = crit ? base_damage * 1.5f : base_damage;
+        const float knockback = outcome.knockback;
+
         const auto hurt = context_.mobs->damage(static_cast<std::uint32_t>(*target), damage,
-                                                player_pos_.x, player_pos_.z, 0.4f, true);
+                                                player_pos_.x, player_pos_.z, knockback, true);
         if (!hurt.found) {
             return true;
         }
         constexpr auto kBlocks = proto::sound_category::kBlocks;
+        constexpr auto kPlayers = proto::sound_category::kPlayers;
+
+        // 横扫：攻击主目标周围（目标盒 grow(1.0, 0.25, 1.0) 内、与玩家距离² < 9）
+        // 的其他生物各受 1.0 伤害并击退 0.4（无横扫附魔时 sweepingRatio = 0）
+        if (sweeping) {
+            const auto target_mob = context_.mobs->by_id(static_cast<std::uint32_t>(*target));
+            if (target_mob) {
+                const auto& ts = world::mob_type(target_mob->type);
+                const double tw = ts ? static_cast<double>(ts->width) : 0.6;
+                const double th = ts ? static_cast<double>(ts->height) : 1.8;
+                const auto target_box = world::entity_box(target_mob->pos.x, target_mob->pos.y,
+                                                          target_mob->pos.z,
+                                                          static_cast<float>(tw),
+                                                          static_cast<float>(th));
+                const world::Aabb sweep_box{target_box.min_x - 1.0, target_box.min_y - 0.25,
+                                            target_box.min_z - 1.0, target_box.max_x + 1.0,
+                                            target_box.max_y + 0.25, target_box.max_z + 1.0};
+                for (const auto& other : context_.mobs->snapshot()) {
+                    if (other.entity_id == static_cast<std::uint32_t>(*target)) {
+                        continue;
+                    }
+                    const auto& os = world::mob_type(other.type);
+                    if (!os) {
+                        continue;
+                    }
+                    const auto other_box =
+                        world::entity_box(other.pos.x, other.pos.y, other.pos.z, os->width,
+                                          os->height);
+                    if (!world::aabb_intersects(sweep_box, other_box)) {
+                        continue;
+                    }
+                    const double ddx = other.pos.x - player_pos_.x;
+                    const double ddy = other.pos.y - player_pos_.y;
+                    const double ddz = other.pos.z - player_pos_.z;
+                    if (ddx * ddx + ddy * ddy + ddz * ddz >= 9.0) {
+                        continue;
+                    }
+                    (void)context_.mobs->damage(other.entity_id, 1.0f, player_pos_.x,
+                                                player_pos_.z, 0.4f, true);
+                }
+            }
+            ByteWriter sweep_sound;
+            writers::write_named_sound(sweep_sound, 361 /* entity.player.attack.sweep */, kPlayers,
+                                       static_cast<std::int32_t>(player_pos_.x),
+                                       static_cast<std::int32_t>(player_pos_.y),
+                                       static_cast<std::int32_t>(player_pos_.z), 1.0f, 1.0f);
+            send_packet(proto::play_cb::kSoundEffect, sweep_sound.data());
+        }
+        if (crit) {
+            ByteWriter crit_sound;
+            writers::write_named_sound(crit_sound, 357 /* entity.player.attack.crit */, kPlayers,
+                                       static_cast<std::int32_t>(player_pos_.x),
+                                       static_cast<std::int32_t>(player_pos_.y),
+                                       static_cast<std::int32_t>(player_pos_.z), 1.0f, 1.0f);
+            send_packet(proto::play_cb::kSoundEffect, crit_sound.data());
+        }
+
         ByteWriter hurt_status;
         writers::write_entity_status(hurt_status, static_cast<std::uint32_t>(*target), 2);
         ByteWriter hurt_sound;
