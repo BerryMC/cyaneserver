@@ -969,3 +969,33 @@ CYANE_TEST(mob_ai_is_reproducible_with_seeded_rng) {
     CYANE_CHECK_NEAR(first[1], second[1], 1e-9);
     CYANE_CHECK_NEAR(first[2], second[2], 1e-9);
 }
+
+// EntityAIAttackMelee：进入攻击距离后就挥击，不再检查视线。
+// 场景：僵尸先获得目标（此时视线通畅），随后视线被挡住但仍在 60 tick 记忆期内，
+// 应当继续挥击。
+CYANE_TEST(melee_attack_does_not_require_line_of_sight) {
+    world::World world;
+    net::MobManager mobs;
+    net::set_ai_rng_seed(11);
+
+    const std::int32_t y = kGroundY;
+    // 玩家站在高一格的台阶上：(1, y, 0) 是台阶，玩家站位 (1.5, y+1, 0.5)
+    world.set_block(1, y, 0, world::kStateStone);
+    world.set_block(1, y, 1, world::kStateStone);
+
+    (void)mobs.spawn(54, 0.5, static_cast<double>(y), 0.5, 0.0f);
+    const std::vector<net::PlayerSnapshot> players = {player_at(7, 1.5, y + 1, 0.5)};
+
+    int attacks = 0;
+    for (int i = 0; i < 40; ++i) {
+        const auto result = mobs.tick(world, players);
+        attacks += static_cast<int>(result.attacks.size());
+        if (i == 5) {
+            // 遮挡视线（射线在半途穿过 (1, y+2, 0)）
+            world.set_block(1, y + 2, 0, world::kStateStone);
+            CYANE_CHECK_EQ(world.block_at(1, y + 2, 0), world::kStateStone);
+        }
+    }
+    // 遮挡后冷却到了仍会挥击（不依赖视线）
+    CYANE_CHECK(attacks >= 2);
+}

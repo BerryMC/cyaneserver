@@ -992,8 +992,8 @@ MobTickResult MobManager::tick(world::World& world, std::span<const PlayerSnapsh
                     follow_path(1.0);
                 } else {
                     mob.pos.yaw = yaw_towards(mob.pos.yaw, dx, dz);
-                    // 攻击距离内：视线可见才挥拳（无寻路时可停滞）
-                    if (can_see && mob.attack_cooldown <= 0) {
+                    // EntityAIAttackMelee：只要在攻击距离内就挥击，不要求视线
+                    if (mob.attack_cooldown <= 0) {
                         mob.attack_cooldown = kAttackIntervalTicks;
                         result.attacks.push_back(MobAttack{mob.entity_id, target->entity_id,
                                                            species->attack_damage, mob.pos.x,
