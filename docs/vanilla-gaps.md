@@ -59,9 +59,9 @@
 | ID | 区域 | 位置 | 原版参照 | 问题 | 状态 |
 |---|---|---|---|---|---|
 | LOOT-03 | 战利品 | `loot_table.hpp` 注册表 | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 4 个函数已注册为 Noop + 加载告警；真正生效依赖缺失的附魔表 / ItemStack NBT / 属性修饰符 | 部分（阻塞） |
-| COMBAT-03 | 战斗 | `combat_rules.hpp` | `EntityPlayer.java:1396-1500` | 已实现：爆击（蓄力满 + `fallDistance>0` + 离地 + 非水 + 非疾跑 → ×1.5，含 crit 音效）、疾跑击退（击退 0.5 并取消横扫）、横扫（蓄力满 + 非爆击 + 非疾跑击退 + 站地 + 持剑 + 本 tick 位移 < 0.1 → 目标盒 grow(1,0.25,1) 内其他生物各 1.0 伤害 + 0.4 击退，含 sweep 音效）。`fallDistance` 与逐 tick 位移由移动包维护 | 已修 |
+| COMBAT-03 | 战斗 | `combat_rules.hpp` | `EntityPlayer.java:1396-1500` | 爆击/疾跑击退/横扫全部实现（含音效），fallDistance 与逐 tick 位移由移动包维护 | 已修 `977c48c` |
 | AI-11 | 经验球 | `src/net/xp_orb.cpp` | `EntityXPOrb.java:239`、`EntityPlayer.java` | 拾取冷却 `xpCooldown`（拾取后置 2、每 tick 递减）未做；经验球模块无单元测试覆盖（需 World 实例） | 待修 |
-| SYS-03e | 规则 | `server.cpp` / `connection_world.cpp` | `GameRules.java` 各读取点 | 已接线：`doTileDrops`（方块破坏掉落）、`doMobLoot`（生物掉落与经验）、`mobGriefing`（爆炸破坏地形）。**仍缺**：`doEntityDrops` `showDeathMessages` `naturalRegeneration` `randomTickSpeed` `doFireTick` `spawnRadius` `maxEntityCramming` `doLimitedCrafting` `spectatorsGenerateChunks` `logAdminCommands` `commandBlockOutput` `sendCommandFeedback` `announceAdvancements` —— 这些对应的功能本身还没实现，接规则无意义 | 部分 |
+| SYS-03e | 规则 | `server.cpp` | `GameRules.java` | doTileDrops / doMobLoot / mobGriefing 已接线；其余 13 条对应的功能尚未实现 | 部分 `c055ece` |
 | GEN-01 | 群系 | `gen_layer_chain.hpp` | `GenLayer.java:22-88` | 19 个 GenLayer 全部实现，且 `ChunkGeneratorOverworld` 的四处群系查询已切到链上（`5991005`） | 已修 `5991005` |
   Hills 已于 `9f74c79` 完成。仍缺 BiomeEdge / Shore，卡在尚未建模的机制上：
   · **变异体表**：`Biome.getMutationForBiome(id)` = `fromId(id + 128)`，但只有部分群系有变异体，
@@ -83,11 +83,11 @@
 |---|---|---|---|---|---|
 
 
-| AI-05 | 目标 | `mob_manager.cpp:516-534` | `EntityAITarget.java` | `unseen_ticks` 计的是“出范围”不是“看不见” → 僵尸隔墙永久追击 | 待修 |
-| AI-06 | 近战 | `mob_manager.cpp:995` | `EntityAIAttackMelee.java:139-160` | 挥击不再要求视线：进入 `reach_sq` 后按冷却挥击 | 已修 |
-| AI-07 | 骷髅 | `mob_manager.cpp` / `projectile_manager.cpp` | `AbstractSkeleton.java:49`、`EntityArrow.java:227-250` | 射箭冷却改为 20（原版构造参数固定 20，与难度无关）；取消飞行中箭的 100 tick 自毁（原版只有落地 1200 tick 后消失）；箭伤 2.0×速度 与原版一致 | 已修 |
-| AI-08 | 动物 | `mob_manager.cpp` | `EntityAnimal.setInLove`、`EntitySheep.onSheared` | 已修：爱心 600（30 秒）；剪羊毛掉落 1+rand(3) 个且颜色跟随羊毛色（生成时按原版概率表：5% 黑 / 5% 灰 / 5% 淡灰 / 3% 棕 / 白，其中 1/500 粉）。**仍缺**：繁殖产生幼崽、幼崽成长 | 部分 |
-| AI-09 | 掉落 | `mob_manager.cpp:349-357` | `EntityLivingBase.java:435` | 任何死法都掉经验（原版要求 `recentlyHit>0`）→ 岩浆/摔落刷怪机可无限刷 | 待修 |
+| AI-05 | 目标 | `mob_manager.cpp` | `EntityAITarget.shouldContinueExecuting` | 已按原版重写：超距立即放弃；范围内看不见累计 unseenTicks（>60 放弃）；看得见清零；新目标需 canEntityBeSeen | 已修 `882ef76` |
+| AI-06 | 近战 | `mob_manager.cpp` | `EntityAIAttackMelee` | 挥击不再要求视线 | 已修 `6291733` |
+| AI-07 | 骷髅 | `mob_manager.cpp` | `AbstractSkeleton.java:49` | 射箭冷却 20；取消飞行中箭的 100 tick 自毁 | 已修 `20869e4` |
+| AI-08 | 动物 | `mob_manager.cpp` | `EntitySheep.onSheared` | 爱心 600；羊毛 1+rand(3) 且带颜色。仍缺繁殖/幼崽 | 部分 `fdde09b` |
+| AI-09 | 掉落 | `mob_manager.cpp` | `EntityLivingBase.java:435` | 经验只在 recentlyHit>0 时掉落，且受 doMobLoot 门控 | 已修 `97df028` |
 | AI-10 | 碰撞 | `blocks.hpp:186-250`、`physics.hpp:156-170` | `getCollisionBoundingBox` | 碰撞体按整格，半砖/楼梯/耕地/灵魂沙都当满方块 | 待修 |
 | CMD-06 | 命令 | `command.cpp:380-431` | `EntitySelector.java:44`、`CommandHandler.java:69-91` | 无选择器参数（`type=/name=/r=/dx=/team=/score_*`）与多实体展开 | 待修 |
 | CMD-07 | 命令 | `command.cpp:554-564` | `CommandGive.java:56-72` | `/give` 数量 clamp 1..64、忽略 dataTag、反馈用注册名 | 待修 |
