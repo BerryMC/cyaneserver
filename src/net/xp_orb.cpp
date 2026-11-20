@@ -38,6 +38,15 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
     result.spawned = std::move(newly_spawned_);
     newly_spawned_.clear();
 
+    // EntityPlayer.onUpdate：xpCooldown 每 tick 递减
+    for (auto it = pickup_cooldown_.begin(); it != pickup_cooldown_.end();) {
+        if (--it->second <= 0) {
+            it = pickup_cooldown_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     for (auto it = orbs_.begin(); it != orbs_.end();) {
         // 重力
         int bx = static_cast<int>(std::floor(it->x));
@@ -143,9 +152,12 @@ std::uint32_t XPOrbManager::spawn(double x, double y, double z, int value) {
                               orb_box.min_y > player_box.max_y ||
                               orb_box.max_z < player_box.min_z ||
                               orb_box.min_z > player_box.max_z);
-            if (intersects && it->delay_before_can_pickup == 0) {
+            const auto cd = pickup_cooldown_.find(player.entity_id);
+            const bool on_cooldown = cd != pickup_cooldown_.end() && cd->second > 0;
+            if (intersects && it->delay_before_can_pickup == 0 && !on_cooldown) {
                 collected = true;
                 collector_id = player.entity_id;
+                pickup_cooldown_[player.entity_id] = 2;  // EntityPlayer.xpCooldown = 2
                 break;
             }
         }

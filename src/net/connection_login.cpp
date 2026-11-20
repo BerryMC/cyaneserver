@@ -171,10 +171,12 @@ void Connection::send_join_game() {
     fields.i32(static_cast<std::int32_t>(player_id_));
     fields.u8(context_.game_mode);
     fields.i32(0);  // overworld
-    fields.u8(2);   // normal
+    fields.u8(static_cast<std::uint8_t>(context_.difficulty));
     fields.u8(static_cast<std::uint8_t>(std::min<std::int32_t>(context_.max_players, 255)));
     fields.string("default");
-    fields.boolean(false);
+    // reducedDebugInfo 取同名 gamerule（SPacketJoinGame 也是如此）
+    fields.boolean(context_.game_rules != nullptr &&
+                   context_.game_rules->get_bool("reducedDebugInfo"));
     send_packet(proto::play_cb::kJoinGame, fields.data());
 
     // 所有模式都发 PlayerAbilities (0x2C)：创造/旁观开飞行，生存/冒险显式清零

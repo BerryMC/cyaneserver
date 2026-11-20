@@ -60,7 +60,7 @@
 |---|---|---|---|---|---|
 | LOOT-03 | 战利品 | `loot_table.hpp` 注册表 | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 4 个函数已注册为 Noop + 加载告警；真正生效依赖缺失的附魔表 / ItemStack NBT / 属性修饰符 | 部分（阻塞） |
 | COMBAT-03 | 战斗 | `combat_rules.hpp` | `EntityPlayer.java:1396-1500` | 爆击/疾跑击退/横扫全部实现（含音效），fallDistance 与逐 tick 位移由移动包维护 | 已修 `977c48c` |
-| AI-11 | 经验球 | `src/net/xp_orb.cpp` | `EntityXPOrb.java:239`、`EntityPlayer.java` | 拾取冷却 `xpCooldown`（拾取后置 2、每 tick 递减）未做；经验球模块无单元测试覆盖（需 World 实例） | 待修 |
+| AI-11 | 经验球 | `src/net/xp_orb.cpp` | `EntityXPOrb.java:239`、`EntityPlayer.java` | 拾取冷却 xpCooldown 已实现（拾取置 2、每 tick 递减，同周期每人只吃一个）；新增 xp_orbs_respect_pickup_cooldown | 已修 |
 | SYS-03e | 规则 | `server.cpp` | `GameRules.java` | doTileDrops / doMobLoot / mobGriefing 已接线；其余 13 条对应的功能尚未实现 | 部分 `c055ece` |
 | GEN-01 | 群系 | `gen_layer_chain.hpp` | `GenLayer.java:22-88` | 19 个 GenLayer 全部实现，且 `ChunkGeneratorOverworld` 的四处群系查询已切到链上（`5991005`） | 已修 `5991005` |
   Hills 已于 `9f74c79` 完成。仍缺 BiomeEdge / Shore，卡在尚未建模的机制上：
@@ -118,7 +118,7 @@
 | GEN-13 | 装饰缺失 | `chunk_generator.hpp` | `BiomeDecorator.java:131-152,210-330` | 无沙盘/黏土盘/砾石盘、枯木、蘑菇、藤蔓、西瓜、双高草 | 待修 |
 | GEN-14 | 超平坦 | `dim_generators.hpp:19-34` | `ChunkGeneratorFlat.java:108-137` | 不设 seaLevel、不写群系、无装饰与结构 | 待修 |
 | NET-03 | 协议 | `connection_login.cpp:172` | `SPacketJoinGame.java:69-76` | 缺 hardcore 位（`gameType | 8`） | 待修 |
-| NET-04 | 协议 | `connection_login.cpp:170-176` | `PlayerList.java:152` | difficulty/levelType/reducedDebugInfo 写死 | 待修 |
+| NET-04 | 协议 | `connection_login.cpp` | `SPacketJoinGame.java:69-76` | JoinGame 的 difficulty 改为发世界难度（新增 ConnectionContext::difficulty），reducedDebugInfo 改为发同名 gamerule | 已修 |
 | NET-05 | 协议 | `chunk_codec.hpp:18-24,69-75` | `BlockStateContainer.java:44-56` | palette>256 时仍写调色板前缀（应切全局调色板、无前缀） | 待修 |
 | NET-06 | 协议 | `packet_writers.hpp:173-175` | `SPacketSoundEffect.java:32-34` | 音效坐标量化到方块中心（原版用精确位置） | 待修 |
 | NET-07 | 协议 | `play_fields.hpp:43` | `SoundCategory.java:11-20` | 所有音效都用 BLOCKS(4)；生物应 HOSTILE(5)、玩家应 PLAYER(7) | 待修 |

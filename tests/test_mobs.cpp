@@ -7,6 +7,7 @@
 
 #include "cyane/net/item_drop.hpp"
 #include "cyane/net/mob_manager.hpp"
+#include "cyane/net/xp_orb.hpp"
 #include "cyane/net/projectile_manager.hpp"
 #include "cyane/net/packet_writers.hpp"
 #include "cyane/world/blocks.hpp"
@@ -1057,4 +1058,37 @@ CYANE_TEST(shearing_yields_one_to_three_colored_wool) {
     std::vector<item::ItemStack> again;
     (void)mobs.interact(ids.front(), 359, 0, &again);
     CYANE_CHECK(again.empty());
+}
+
+// EntityPlayer.xpCooldown：一次拾取后 2 tick 内不再吃球
+CYANE_TEST(xp_orbs_respect_pickup_cooldown) {
+    world::World world;
+    net::XPOrbManager orbs;
+    const auto a = orbs.spawn(0.5, static_cast<double>(kGroundY), 0.5, 1);
+    const auto b = orbs.spawn(0.5, static_cast<double>(kGroundY), 0.5, 1);
+    const auto c = orbs.spawn(0.5, static_cast<double>(kGroundY), 0.5, 1);
+    CYANE_CHECK(a != 0 && b != 0 && c != 0);
+
+    const std::vector<net::PlayerSnapshot> players = {player_at(7, 0.5, kGroundY, 0.5)};
+    int collected = 0;
+    for (int i = 0; i < 40; ++i) {
+        (void)orbs.tick(world, players);
+        // 拾取发生在 tick 内部，用剩余数量推算已吃球数
+        collected = 3 - static_cast<int>(orbs.all_orbs().size());
+    }
+    // 20 tick 足够吃完全部 3 个（每个至少间隔 2 tick）
+    CYANE_CHECK_EQ(collected, 3);
+
+    // 再验证：一 tick 内不会同时吃掉多个
+    world::World world2;
+    net::XPOrbManager orbs2;
+    (void)orbs2.spawn(0.5, static_cast<double>(kGroundY), 0.5, 1);
+    (void)orbs2.spawn(0.5, static_cast<double>(kGroundY), 0.5, 1);
+    // 先让初始 20 tick 延迟走完
+    for (int i = 0; i < 20; ++i) {
+        (void)orbs2.tick(world2, players);
+    }
+    const auto before = orbs2.all_orbs().size();
+    (void)orbs2.tick(world2, players);
+    CYANE_CHECK(before - orbs2.all_orbs().size() <= 1);
 }

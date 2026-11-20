@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <mutex>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 #include "cyane/entity/player_manager.hpp"
@@ -87,6 +88,10 @@ public:
 
     // 当前所有经验球快照（新玩家/区块补发）
     [[nodiscard]] std::vector<XPOrb> snapshot() const;
+
+    // EntityPlayer.xpCooldown：拾取后置 2，每 tick 递减；
+    // 同一次拾取周期内每个玩家最多吃一个球
+    std::unordered_map<std::uint32_t, std::int32_t> pickup_cooldown_;
 
 private:
     mutable std::mutex mutex_;

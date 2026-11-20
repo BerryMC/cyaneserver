@@ -35,6 +35,7 @@
 #include "cyane/net/item_drop.hpp"
 #include "cyane/net/player_hub.hpp"
 #include "cyane/net/xp_orb.hpp"
+#include "cyane/world/difficulty.hpp"
 #include "cyane/world/game_rules.hpp"
 #include "cyane/world/world.hpp"
 #include "cyane/game/player_data.hpp"
@@ -73,6 +74,8 @@ struct ConnectionContext {
     entity::PlayerManager* player_manager{nullptr};
     PlayerHub* hub{nullptr};
     BlockTicks* block_ticks{nullptr};  // 世界级延迟方块更新（按钮回弹）
+    // JoinGame 里的 difficulty 字段（SPacketJoinGame 用 world 的难度）
+    world::EnumDifficulty difficulty{world::EnumDifficulty::Normal};
     ItemDropManager* item_drops{nullptr};
     MobManager* mobs{nullptr};
     XPOrbManager* xp_orbs{nullptr};

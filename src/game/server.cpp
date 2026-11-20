@@ -272,6 +272,7 @@ Result<std::unique_ptr<Server>> Server::create(ServerConfig config) {
     server->hub_ = std::make_unique<net::PlayerHub>();
     context.hub = server->hub_.get();
     context.game_rules = &server->world_info_.game_rules;
+    context.difficulty = server->world_info_.difficulty;
     server->block_ticks_ = std::make_unique<net::BlockTicks>();
     context.block_ticks = server->block_ticks_.get();
     server->projectiles_ = std::make_unique<net::ProjectileManager>();
