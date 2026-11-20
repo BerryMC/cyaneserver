@@ -135,6 +135,22 @@ std::uint32_t MobManager::spawn_locked(std::int32_t type, double x, double y, do
     mob.pos = entity::Position{x, y, z, yaw, 0.0f};
     mob.health = species->health;
     mob.state_ticks = rand_ticks(20, 100);
+    if (type == 91) {
+        // EntitySheep.getRandomSheepColor：5% 黑 / 5% 灰 / 5% 淡灰 / 3% 棕 /
+        // 其余白，其中 1/500 为粉
+        const int roll = rand_ticks(0, 99);
+        if (roll < 5) {
+            mob.wool_color = 15;  // black
+        } else if (roll < 10) {
+            mob.wool_color = 7;   // gray
+        } else if (roll < 15) {
+            mob.wool_color = 8;   // silver
+        } else if (roll < 18) {
+            mob.wool_color = 12;  // brown
+        } else {
+            mob.wool_color = rand_ticks(0, 499) == 0 ? 6 : 0;  // pink / white
+        }
+    }
     mobs_.push_back(std::move(mob));
     return mobs_.back().entity_id;
 }
@@ -245,7 +261,8 @@ bool MobManager::remove_locked(std::uint32_t id) {
 }
 
 bool MobManager::interact(std::uint32_t id, std::int16_t held_item_id,
-                           std::int16_t held_item_damage) {
+                           std::int16_t held_item_damage,
+                           std::vector<item::ItemStack>* drops) {
     (void)held_item_damage;
     std::lock_guard<std::mutex> lock{mutex_};
     for (auto& mob : mobs_) {
@@ -256,9 +273,15 @@ bool MobManager::interact(std::uint32_t id, std::int16_t held_item_id,
         if (!species) {
             return false;
         }
-        // 剪羊毛：手持 shears (359) 右键 sheep (91)
+        // 剪羊毛：EntitySheep.onSheared —— 1 + rand(3) 个、颜色跟随羊毛色
         if (mob.type == 91 && !mob.sheared && held_item_id == 359) {
             mob.sheared = true;
+            if (drops != nullptr) {
+                const int count = 1 + rand_ticks(0, 2);
+                for (int k = 0; k < count; ++k) {
+                    drops->push_back(item::ItemStack{35, 1, mob.wool_color});
+                }
+            }
             return true;
         }
         // 挤奶：手持 bucket (325) 右键 cow (92)
@@ -277,7 +300,7 @@ bool MobManager::interact(std::uint32_t id, std::int16_t held_item_id,
         }
         if (is_breeding_food) {
             mob.in_love = true;
-            mob.love_timer = 2000;  // 100 秒爱心模式
+            mob.love_timer = 600;  // EntityAnimal.setInLove: inLove = 600（30 秒）
             return true;
         }
         return false;

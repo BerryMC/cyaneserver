@@ -9,6 +9,7 @@
 
 #include "cyane/entity/player_entity.hpp"
 #include "cyane/entity/player_manager.hpp"
+#include "cyane/item/item_stack.hpp"
 #include "cyane/net/player_hub.hpp"
 #include "cyane/world/mob_types.hpp"
 #include "cyane/world/pathfinding.hpp"
@@ -86,6 +87,8 @@ struct Mob {
     // EntityLivingBase.recentlyHit：被玩家伤害时置 100，每 tick 递减；
     // 只有 > 0 时才掉落经验（原版 onDeath 的门控）
     std::int32_t recently_hit{0};
+    // 羊的羊毛颜色（EnumDyeColor 的 metadata 0..15），生成时按原版概率表随机
+    std::int8_t wool_color{0};
 };
 
 // 苦力怕 swell 状态变化：Server 据此播引信音效并广播 metadata（-1 熄灭 / 1 引信中）
@@ -289,8 +292,10 @@ public:
 
     // 交互（右键生物）：喂食繁殖 / 剪羊毛 / 挤奶桶。返回是否处理过。
     // 由 Connection::handle_play_use_entity(type=0) 调用。
+    // drops：交互产生的掉落物（剪羊毛等），由调用方生成实体
     [[nodiscard]] bool interact(std::uint32_t id, std::int16_t held_item_id,
-                                 std::int16_t held_item_damage);
+                                 std::int16_t held_item_damage,
+                                 std::vector<item::ItemStack>* drops = nullptr);
 
     [[nodiscard]] std::size_t size() const {
         std::lock_guard<std::mutex> lock(mutex_);

@@ -102,8 +102,9 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
     // INTERACT (type 0) / INTERACT_AT (type 2)：
     // 喂食繁殖 / 剪羊毛 / 挤奶桶
     const auto held = inventory_.hotbar_item(selected_slot_);
+    std::vector<item::ItemStack> interact_drops;
     const bool interacted = context_.mobs->interact(static_cast<std::uint32_t>(*target), held.id,
-                                                    held.damage);
+                                                    held.damage, &interact_drops);
     if (!interacted) {
         return true;
     }
@@ -121,8 +122,10 @@ bool Connection::handle_play_use_entity(ByteSpan payload) {
         writers::write_entity_status(status, static_cast<std::uint32_t>(*target), 10);
         broadcast_entity_packet(status.data(), static_cast<std::int32_t>(mob->pos.x),
                                 static_cast<std::int32_t>(mob->pos.z));
-        // 掉落羊毛
-        spawn_dropped_item_at(mob->pos.x, mob->pos.y, mob->pos.z, item::ItemStack{35, 1, 0});
+        // 掉落羊毛（数量与颜色由 MobManager 按 EntitySheep.onSheared 决定）
+        for (const auto& drop : interact_drops) {
+            spawn_dropped_item_at(mob->pos.x, mob->pos.y, mob->pos.z, drop);
+        }
     } else {
         // 繁殖 / 挤奶：心形粒子
         writers::write_entity_status(status, static_cast<std::uint32_t>(*target), 12);

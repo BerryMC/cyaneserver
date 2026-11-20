@@ -1023,3 +1023,38 @@ CYANE_TEST(arrow_has_no_airborne_lifetime_limit) {
     }
     CYANE_CHECK_EQ(arrows.size(), std::size_t{1});
 }
+
+// 剪羊毛：1..3 个、颜色跟随羊毛色（EntitySheep.onSheared）
+CYANE_TEST(shearing_yields_one_to_three_colored_wool) {
+    world::World world;
+    net::MobManager mobs;
+    net::set_ai_rng_seed(4242);
+    // 生成足够多的羊，覆盖 1..3 的数量范围与颜色分布
+    std::vector<std::uint32_t> ids;
+    for (int i = 0; i < 40; ++i) {
+        ids.push_back(mobs.spawn(91, 0.5 + i, static_cast<double>(kGroundY), 0.5, 0.0f));
+    }
+    int min_count = 99;
+    int max_count = 0;
+    bool color_matches = true;
+    for (const auto id : ids) {
+        const auto sheep = mobs.by_id(id);
+        CYANE_CHECK(sheep.has_value());
+        std::vector<item::ItemStack> drops;
+        CYANE_CHECK(mobs.interact(id, 359, 0, &drops));
+        min_count = std::min(min_count, static_cast<int>(drops.size()));
+        max_count = std::max(max_count, static_cast<int>(drops.size()));
+        for (const auto& drop : drops) {
+            CYANE_CHECK_EQ(drop.id, static_cast<std::uint16_t>(35));
+            if (drop.damage != sheep->wool_color) color_matches = false;
+        }
+    }
+    CYANE_CHECK(min_count >= 1);
+    CYANE_CHECK(max_count <= 3);
+    CYANE_CHECK(max_count >= 2);  // 40 只羊全出 1 个的概率为 (1/3)^40
+    CYANE_CHECK(color_matches);
+    // 已剪过：再次交互不再产出
+    std::vector<item::ItemStack> again;
+    (void)mobs.interact(ids.front(), 359, 0, &again);
+    CYANE_CHECK(again.empty());
+}
