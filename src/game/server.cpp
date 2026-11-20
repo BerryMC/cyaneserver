@@ -776,7 +776,9 @@ void Server::tick() {
                 }
             }
             // 掉落（onDeath 立即掉落；玩家击杀与自然环境死亡统一走这里，避免双份）
-            if (species && item_drops_ != nullptr) {
+            // EntityLivingBase.onDeath：canDropLoot() && doMobLoot
+            const bool mob_loot = world_info_.game_rules.get_bool("doMobLoot");
+            if (species && mob_loot && item_drops_ != nullptr) {
                 static thread_local std::mt19937 drop_engine{std::random_device{}()};
                 for (const auto& drop : species->drops) {
                     if (drop.item_id == 0) {
@@ -802,7 +804,8 @@ void Server::tick() {
                 }
             }
             // 生成经验球
-            if (xp_orb_manager_ != nullptr && species && death.experience > 0) {
+            // 经验同样受 doMobLoot 门控（onDeathUpdate 里的同一个 if）
+            if (xp_orb_manager_ != nullptr && species && death.experience > 0 && mob_loot) {
                 xp_orb_manager_->spawn(death.x, death.y, death.z, death.experience);
             }
         }
@@ -867,7 +870,9 @@ void Server::tick() {
         }
         // 苦力怕引爆
         for (const auto& explosion : mob_events.explosions) {
-            apply_explosion(explosion.x, explosion.y, explosion.z, explosion.power);
+            // EntityCreeper.explode：isSmoking = mobGriefing
+            apply_explosion(explosion.x, explosion.y, explosion.z, explosion.power,
+                            world_info_.game_rules.get_bool("mobGriefing"));
         }
         // 自然刷怪生成
         for (const auto& spawn : mob_events.spawns) {
@@ -1077,7 +1082,7 @@ void Server::fire_arrow(const net::MobShot& shot) {
     }
 }
 
-void Server::apply_explosion(double x, double y, double z, float power) {
+void Server::apply_explosion(double x, double y, double z, float power, bool damages_terrain) {
     const double power_d = static_cast<double>(power);
     const double blast_radius = power_d * 2.0;  // vanilla f3 = size * 2
     const std::int32_t radius = std::clamp(config_.view_distance, 2, 8);
@@ -1088,7 +1093,7 @@ void Server::apply_explosion(double x, double y, double z, float power) {
     // 每步衰减 (抗性+0.3)*0.3（blocks.hpp::explosion_absorption），强度耗尽即停。
     // 同时收集被毁方块相对爆心的 byte 偏移——1.12.2 的 Explosion 包记录就是它们。
     std::vector<std::array<std::int8_t, 3>> records;
-    if (world_ != nullptr && power >= 0.1f) {
+    if (world_ != nullptr && power >= 0.1f && damages_terrain) {
         std::uniform_real_distribution<float> unit(0.0f, 1.0f);
         std::uniform_int_distribution<int> drop_chance(1, 100);
         std::unordered_set<std::int64_t> destroyed;

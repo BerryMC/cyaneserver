@@ -153,7 +153,8 @@ private:
     // World.updateWeatherBody + WorldServer.updateWeather
     void update_weather();
     // 苦力怕爆炸：范围伤害（玩家+生物）+ 破坏方块（含掉落）+ 音效/Explosion 包
-    void apply_explosion(double x, double y, double z, float power);
+    // damages_terrain：对应 Explosion 的 isSmoking（苦力怕取 mobGriefing 规则）
+    void apply_explosion(double x, double y, double z, float power, bool damages_terrain = true);
     // 骷髅射箭：生成箭实体并广播 SpawnObject + 射击音效
     void fire_arrow(const net::MobShot& shot);
     // 掉落物 tick 事件落地：消失/位置同步/合并/燃烧音

@@ -61,7 +61,7 @@
 | LOOT-03 | 战利品 | `loot_table.hpp` 注册表 | `EnchantRandomly/EnchantWithLevels/SetNBT/SetAttributes` | 4 个函数已注册为 Noop + 加载告警；真正生效依赖缺失的附魔表 / ItemStack NBT / 属性修饰符 | 部分（阻塞） |
 | COMBAT-03 | 战斗 | `combat_rules.hpp` | `EntityPlayer.java:1396-1500` | 已实现：爆击（蓄力满 + `fallDistance>0` + 离地 + 非水 + 非疾跑 → ×1.5，含 crit 音效）、疾跑击退（击退 0.5 并取消横扫）、横扫（蓄力满 + 非爆击 + 非疾跑击退 + 站地 + 持剑 + 本 tick 位移 < 0.1 → 目标盒 grow(1,0.25,1) 内其他生物各 1.0 伤害 + 0.4 击退，含 sweep 音效）。`fallDistance` 与逐 tick 位移由移动包维护 | 已修 |
 | AI-11 | 经验球 | `src/net/xp_orb.cpp` | `EntityXPOrb.java:239`、`EntityPlayer.java` | 拾取冷却 `xpCooldown`（拾取后置 2、每 tick 递减）未做；经验球模块无单元测试覆盖（需 World 实例） | 待修 |
-| SYS-03e | 规则 | `server.cpp` / `mob_manager.cpp` | `GameRules.java` 各读取点 | 仍未接线：`doMobLoot` `doTileDrops` `doEntityDrops` `showDeathMessages` `naturalRegeneration` `randomTickSpeed` `doFireTick` `mobGriefing` `spawnRadius` `maxEntityCramming` `doLimitedCrafting` `spectatorsGenerateChunks` `logAdminCommands` `commandBlockOutput` `sendCommandFeedback` `announceAdvancements` | 待修 |
+| SYS-03e | 规则 | `server.cpp` / `connection_world.cpp` | `GameRules.java` 各读取点 | 已接线：`doTileDrops`（方块破坏掉落）、`doMobLoot`（生物掉落与经验）、`mobGriefing`（爆炸破坏地形）。**仍缺**：`doEntityDrops` `showDeathMessages` `naturalRegeneration` `randomTickSpeed` `doFireTick` `spawnRadius` `maxEntityCramming` `doLimitedCrafting` `spectatorsGenerateChunks` `logAdminCommands` `commandBlockOutput` `sendCommandFeedback` `announceAdvancements` —— 这些对应的功能本身还没实现，接规则无意义 | 部分 |
 | GEN-01 | 群系 | `gen_layer_chain.hpp` | `GenLayer.java:22-88` | 19 个 GenLayer 全部实现，且 `ChunkGeneratorOverworld` 的四处群系查询已切到链上（`5991005`） | 已修 `5991005` |
   Hills 已于 `9f74c79` 完成。仍缺 BiomeEdge / Shore，卡在尚未建模的机制上：
   · **变异体表**：`Biome.getMutationForBiome(id)` = `fromId(id + 128)`，但只有部分群系有变异体，

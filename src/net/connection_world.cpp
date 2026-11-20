@@ -232,7 +232,10 @@ bool Connection::handle_play_digging(ByteSpan payload) {
     }
     // 附着型方块（按钮/拉杆）：支撑方块没了就一起破坏并掉落
     break_unsupported_neighbors(bx, by, bz);
-    if (!creative && context_.item_drops != nullptr && prev != world::kStateAir) {
+    // doTileDrops=false 时不产生方块掉落（Block.spawnAsEntity 的 gamerule 门控）
+    const bool tile_drops = context_.game_rules == nullptr ||
+                            context_.game_rules->get_bool("doTileDrops");
+    if (!creative && tile_drops && context_.item_drops != nullptr && prev != world::kStateAir) {
         // 方块特性掉落表 + 采集资格：无正确工具时方块破坏但不掉落（vanilla 行为）
         const auto tool = item::tool_of(inventory_.hotbar_item(selected_slot_).id);
         for (const auto& drop : world::block_drops(prev, tool)) {
