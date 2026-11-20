@@ -27,7 +27,9 @@ struct Arrow {
     double vy{0.0};
     double vz{0.0};
     float damage{2.0f};
-    std::int32_t ttl{100};  // 5 秒自毁上限
+    // EntityArrow.ticksInAir：只用于"主人 5 tick 内免疫"的判定。
+    // 原版飞行中的箭没有生命周期上限——命中方块或实体才会消失。
+    std::int32_t ticks_in_air{0};
 };
 
 // 箭的命中结果：Server 据此结算伤害并广播销毁。

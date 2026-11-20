@@ -25,7 +25,9 @@ constexpr std::int32_t kSpawnAttemptsPerCycle = 3;   // 每次刷怪尝试次数
 constexpr int kSpawnCapPerCategory = 5;             // 各类生物上限（敌对/被动各 5 个）
 constexpr std::int32_t kAttackIntervalTicks = 20;  // 近战挥击冷却（vanilla 20 tick）
 constexpr std::int32_t kFuseTicks = 30;            // 苦力怕引信（EntityCreeper.maxFuseTicks）
-constexpr std::int32_t kShootIntervalTicks = 40;   // 骷髅射箭间隔（dm(): 非困难难度 b0=40）
+// AbstractSkeleton：new EntityAIAttackRangedBow(this, 1.0D, 20, 15.0F)
+// 冷却 20 tick，与难度无关
+constexpr std::int32_t kShootIntervalTicks = 20;
 
 std::mt19937& rng() {
     thread_local std::mt19937 engine{std::random_device{}()};

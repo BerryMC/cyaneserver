@@ -593,15 +593,25 @@ CYANE_TEST(skeleton_shoots_from_range) {
     const std::vector<net::PlayerSnapshot> players = {player_at(7, 10.5, kGroundY, 0.5)};
     int shots = 0;
     double x_min = 99.0;
-    for (int i = 0; i < 120; ++i) {
+    std::vector<int> shot_ticks;
+    for (int i = 0; i < 200; ++i) {
         const auto result = mobs.tick(world, players);
         shots += static_cast<int>(result.shots.size());
+        for (std::size_t k = 0; k < result.shots.size(); ++k) {
+            shot_ticks.push_back(i);
+        }
         const auto skeleton = mobs.by_id(id);
         if (skeleton) {
             x_min = std::min(x_min, skeleton->pos.x);
         }
     }
-    CYANE_CHECK(shots >= 2);                       // 6 秒内至少射 2 箭
+    // 冷却 20 tick + 拉弓 20 tick → 两箭间隔约 40 tick
+    // （AbstractSkeleton：new EntityAIAttackRangedBow(this, 1.0D, 20, 15.0F)）
+    CYANE_CHECK(shots >= 3);
+    CYANE_CHECK(shot_ticks.size() >= 2);
+    for (std::size_t k = 1; k < shot_ticks.size(); ++k) {
+        CYANE_CHECK(shot_ticks[k] - shot_ticks[k - 1] <= 45);
+    }
     CYANE_CHECK(x_min < 6.0);                      // 玩家在射程内：骷髅原地射击，不近身
     const auto last = mobs.tick(world, players);
     for (const auto& shot : last.shots) {
@@ -998,4 +1008,18 @@ CYANE_TEST(melee_attack_does_not_require_line_of_sight) {
     }
     // 遮挡后冷却到了仍会挥击（不依赖视线）
     CYANE_CHECK(attacks >= 2);
+}
+
+// 原版飞行中的箭没有生命周期上限（旧的实现是 100 tick 后自毁）
+CYANE_TEST(arrow_has_no_airborne_lifetime_limit) {
+    world::World world;
+    net::PlayerHub hub;
+    net::MobManager mobs;
+    net::ProjectileManager arrows;
+    // 从高空高速上抛：100 tick 内既不会落地也不会命中任何方块
+    arrows.spawn(1, 0.5, 250.0, 0.5, 0.0, 5.0, 0.0, 2.0f);
+    for (int i = 0; i < 105; ++i) {
+        (void)arrows.tick(world, hub, mobs);
+    }
+    CYANE_CHECK_EQ(arrows.size(), std::size_t{1});
 }

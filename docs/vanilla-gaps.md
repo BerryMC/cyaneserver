@@ -85,7 +85,7 @@
 
 | AI-05 | 目标 | `mob_manager.cpp:516-534` | `EntityAITarget.java` | `unseen_ticks` 计的是“出范围”不是“看不见” → 僵尸隔墙永久追击 | 待修 |
 | AI-06 | 近战 | `mob_manager.cpp:995` | `EntityAIAttackMelee.java:139-160` | 挥击不再要求视线：进入 `reach_sq` 后按冷却挥击 | 已修 |
-| AI-07 | 骷髅 | `mob_manager.cpp:27,907` | `AbstractSkeleton.java:235-237`、`EntityArrow.java:368` | 射箭间隔写死 40（困难应 20）、箭伤写死 2.0；箭 5 秒空中自毁（原版无） | 待修 |
+| AI-07 | 骷髅 | `mob_manager.cpp` / `projectile_manager.cpp` | `AbstractSkeleton.java:49`、`EntityArrow.java:227-250` | 射箭冷却改为 20（原版构造参数固定 20，与难度无关）；取消飞行中箭的 100 tick 自毁（原版只有落地 1200 tick 后消失）；箭伤 2.0×速度 与原版一致 | 已修 |
 | AI-08 | 动物 | `mob_manager.cpp:253-274` | `EntityAnimal.setInLove`、`EntitySheep.onSheared` | 无繁殖/幼崽/成长；爱心 2000（应 600）；羊毛恒 1 个且恒白（应 1–3、继承颜色） | 待修 |
 | AI-09 | 掉落 | `mob_manager.cpp:349-357` | `EntityLivingBase.java:435` | 任何死法都掉经验（原版要求 `recentlyHit>0`）→ 岩浆/摔落刷怪机可无限刷 | 待修 |
 | AI-10 | 碰撞 | `blocks.hpp:186-250`、`physics.hpp:156-170` | `getCollisionBoundingBox` | 碰撞体按整格，半砖/楼梯/耕地/灵魂沙都当满方块 | 待修 |

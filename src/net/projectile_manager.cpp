@@ -24,8 +24,8 @@ std::vector<ArrowHit> ProjectileManager::tick(world::World& world, const PlayerH
     std::lock_guard<std::mutex> lock{mutex_};
     for (std::size_t i = 0; i < arrows_.size();) {
         Arrow& arrow = arrows_[i];
-        --arrow.ttl;
-        const int ticks_in_air = 100 - arrow.ttl;  // EntityArrow.ticksInAir
+        ++arrow.ticks_in_air;
+        const int ticks_in_air = arrow.ticks_in_air;
         const double fx = arrow.x;
         const double fy = arrow.y;
         const double fz = arrow.z;
@@ -125,7 +125,7 @@ std::vector<ArrowHit> ProjectileManager::tick(world::World& world, const PlayerH
         arrow.vy *= drag;
         arrow.vz *= drag;
         arrow.vy -= 0.05;
-        if (arrow.ttl <= 0 || arrow.y < -64.0) {
+        if (arrow.y < -64.0) {
             arrows_[i] = arrows_.back();
             arrows_.pop_back();
         } else {
