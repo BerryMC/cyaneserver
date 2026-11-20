@@ -14,13 +14,16 @@ public:
     constexpr WorldGenMinable(std::uint16_t ore_state, int block_count) noexcept
         : ore_state_(ore_state), number_of_blocks_(block_count) {}
 
+    // 世界坐标（WorldGenMinable.generate 的 BlockPos）：矿脉中心 = pos + 8，
+    // 因此会跨区块；写入走 set_block_state（populate 期间由 spill writer 转发），
+    // 读取仅限本区块，区块外视为不可替换。
     bool generate(Chunk& chunk, JavaRandom& rand, int x, int y, int z) const noexcept {
         constexpr double kPi = 3.14159265358979323846;
         const float f = rand.next_float() * static_cast<float>(kPi);
-        const double d0 = static_cast<double>(static_cast<float>(x) + std::sin(f) * static_cast<float>(number_of_blocks_) / 8.0f);
-        const double d1 = static_cast<double>(static_cast<float>(x) - std::sin(f) * static_cast<float>(number_of_blocks_) / 8.0f);
-        const double d2 = static_cast<double>(static_cast<float>(z) + std::cos(f) * static_cast<float>(number_of_blocks_) / 8.0f);
-        const double d3 = static_cast<double>(static_cast<float>(z) - std::cos(f) * static_cast<float>(number_of_blocks_) / 8.0f);
+        const double d0 = static_cast<double>(static_cast<float>(x + 8) + std::sin(f) * static_cast<float>(number_of_blocks_) / 8.0f);
+        const double d1 = static_cast<double>(static_cast<float>(x + 8) - std::sin(f) * static_cast<float>(number_of_blocks_) / 8.0f);
+        const double d2 = static_cast<double>(static_cast<float>(z + 8) + std::cos(f) * static_cast<float>(number_of_blocks_) / 8.0f);
+        const double d3 = static_cast<double>(static_cast<float>(z + 8) - std::cos(f) * static_cast<float>(number_of_blocks_) / 8.0f);
         const double d4 = static_cast<double>(y + rand.next_int(3) - 2);
         const double d5 = static_cast<double>(y + rand.next_int(3) - 2);
 
@@ -42,18 +45,23 @@ public:
 
             for (int bx = min_bx; bx <= max_bx; ++bx) {
                 const double dist_x = (static_cast<double>(bx) + 0.5 - cx) / (rad_h / 2.0);
-                if (dist_x * dist_x < 1.0 && bx >= 0 && bx < 16) {
+                if (dist_x * dist_x < 1.0) {
                     for (int by = min_by; by <= max_by; ++by) {
                         const double dist_y = (static_cast<double>(by) + 0.5 - cy) / (rad_v / 2.0);
                         if (dist_x * dist_x + dist_y * dist_y < 1.0 && by >= 0 && by < 256) {
                             for (int bz = min_bz; bz <= max_bz; ++bz) {
                                 const double dist_z = (static_cast<double>(bz) + 0.5 - cz) / (rad_h / 2.0);
-                                if (dist_x * dist_x + dist_y * dist_y + dist_z * dist_z < 1.0 && bz >= 0 && bz < 16) {
-                                    const auto current = chunk.block_at(static_cast<std::size_t>(bx), by, static_cast<std::size_t>(bz));
+                                if (dist_x * dist_x + dist_y * dist_y + dist_z * dist_z < 1.0) {
+                                    if (!chunk_contains(chunk, bx, bz)) {
+                                        continue;
+                                    }
+                                    const auto lx = static_cast<std::size_t>(bx - chunk.pos().world_x());
+                                    const auto lz = static_cast<std::size_t>(bz - chunk.pos().world_z());
+                                    const auto current = chunk.block_at(lx, by, lz);
                                     if (current == kStateStone || current == kStateGranite ||
                                         current == kStateDiorite || current == kStateAndesite ||
                                         current == kStateNetherrack) {
-                                        chunk.set_block(static_cast<std::size_t>(bx), by, static_cast<std::size_t>(bz), ore_state_);
+                                        chunk.set_block_state(bx, by, bz, ore_state_);
                                     }
                                 }
                             }
@@ -66,6 +74,12 @@ public:
     }
 
 private:
+    [[nodiscard]] static bool chunk_contains(const Chunk& chunk, int wx, int wz) noexcept {
+        const int lx = wx - chunk.pos().world_x();
+        const int lz = wz - chunk.pos().world_z();
+        return lx >= 0 && lx < 16 && lz >= 0 && lz < 16;
+    }
+
     std::uint16_t ore_state_;
     int number_of_blocks_;
 };

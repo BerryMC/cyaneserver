@@ -392,12 +392,14 @@ private:
         static constexpr WorldGenMinable diamond_gen{kStateDiamondOre, 8};
         static constexpr WorldGenMinable lapis_gen{kStateLapisOre, 7};
 
+        // vanilla：BlockPos = chunkPos.add(nextInt(16), y, nextInt(16))，
+        // 矿脉本体再用 pos+8 作为中心，因此会跨区块
         const auto gen_ore = [&](int count, const WorldGenMinable& gen, int min_y, int max_y) {
             for (int i = 0; i < count; ++i) {
                 const int px = rand.next_int(16);
                 const int py = rand.next_int(max_y - min_y) + min_y;
                 const int pz = rand.next_int(16);
-                gen.generate(chunk, rand, px, py, pz);
+                gen.generate(chunk, rand, x * 16 + px, py, z * 16 + pz);
             }
         };
 
@@ -418,7 +420,7 @@ private:
             const int py = rand.next_int(16) + rand.next_int(16) + 16 - 16;
             const int pz = rand.next_int(16);
             if (py >= 0 && py < 256) {
-                lapis_gen.generate(chunk, rand, px, py, pz);
+                lapis_gen.generate(chunk, rand, x * 16 + px, py, z * 16 + pz);
             }
         }
 
@@ -430,7 +432,7 @@ private:
                 const int px = rand.next_int(16);
                 const int py = rand.next_int(28) + 4;
                 const int pz = rand.next_int(16);
-                emerald_gen.generate(chunk, rand, px, py, pz);
+                emerald_gen.generate(chunk, rand, x * 16 + px, py, z * 16 + pz);
             }
         }
     }
@@ -465,17 +467,21 @@ private:
         // 2. 地下岩壁泉眼（水瀑布与熔岩泉）
         static constexpr WorldGenLiquids water_spring{kStateWater};
         static constexpr WorldGenLiquids lava_spring{kStateLava};
+        // BiomeDecorator.generateFalls：抽取顺序与取值范围逐项对齐
         for (int i = 0; i < 50; ++i) {
-            const int sx = rand.next_int(14) + 1;
-            const int sy = rand.next_int(rand.next_int(240) + 8) + 4;
-            const int sz = rand.next_int(14) + 1;
-            water_spring.generate(chunk, sx, sy, sz);
+            const int sx = rand.next_int(16) + 8;
+            const int sz = rand.next_int(16) + 8;
+            const int max_y = rand.next_int(248) + 8;
+            if (max_y > 0) {
+                const int sy = rand.next_int(max_y);
+                water_spring.generate(chunk, x * 16 + sx, sy, z * 16 + sz);
+            }
         }
         for (int i = 0; i < 20; ++i) {
-            const int sx = rand.next_int(14) + 1;
-            const int sy = rand.next_int(rand.next_int(rand.next_int(230) + 8) + 8) + 4;
-            const int sz = rand.next_int(14) + 1;
-            lava_spring.generate(chunk, sx, sy, sz);
+            const int sx = rand.next_int(16) + 8;
+            const int sz = rand.next_int(16) + 8;
+            const int sy = rand.next_int(rand.next_int(rand.next_int(240) + 8) + 8);
+            lava_spring.generate(chunk, x * 16 + sx, sy, z * 16 + sz);
         }
 
         // 3. 树木生成

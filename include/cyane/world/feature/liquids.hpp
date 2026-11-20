@@ -92,7 +92,12 @@ class WorldGenLiquids {
 public:
     explicit constexpr WorldGenLiquids(std::uint16_t liquid_state) noexcept : liquid_(liquid_state) {}
 
-    bool generate(Chunk& chunk, int x, int y, int z) const noexcept {
+    // 世界坐标（WorldGenLiquids.generate 的 BlockPos）；读取限制在本区块内，
+    // 写入走 set_block_state 以便越界时交给 spill writer
+    bool generate(Chunk& chunk, int wx, int wy, int wz) const noexcept {
+        const int x = wx - chunk.pos().world_x();
+        const int z = wz - chunk.pos().world_z();
+        const int y = wy;
         if (y < 5 || y > 250 || x <= 0 || x >= 15 || z <= 0 || z >= 15) return false;
         const auto sx = static_cast<std::size_t>(x);
         const auto sz = static_cast<std::size_t>(z);
@@ -119,7 +124,7 @@ public:
         else if (chunk.block_at(sx, y, sz + 1) == kStateAir) ++air_sides;
 
         if (stone_sides == 3 && air_sides == 1) {
-            chunk.set_block(sx, y, sz, liquid_);
+            chunk.set_block_state(wx, y, wz, liquid_);
             return true;
         }
         return false;

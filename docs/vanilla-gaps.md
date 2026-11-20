@@ -109,9 +109,9 @@
 | GEN-04 | 群系表 | `biome.hpp:37,39,47,48` | `Biome.java:567,571,584,585` | stone_beach 高度变化 0.3（应 0.8）；jungle base 0.125（应 0.1）；id 38/39 名称与高度错位 | 待修 |
 | GEN-05 | 装饰次数 | `chunk_generator.hpp:429-469` | `BiomeJungle/Savanna/Taiga/Forest` | 丛林树 12（应 50）、草 12（应 25）；草原草 8（应 20）；深色森林应 `-999` | 待修 |
 | GEN-06 | 花草 | `vegetation.hpp:34` | `WorldGenFlowers.java:27` | 16 次（应 64），且只认 grass 不认泥土/灰化土 | 待修 |
-| GEN-07 | 矿脉 | `feature/ores.hpp:20-23,45` | `WorldGenMinable.java:34-37` | 缺中心 `+8` 偏移并裁到本区块 → 矿脉永不跨区块 | 待修 |
+| GEN-07 | 矿脉 | `feature/ores.hpp` | `WorldGenMinable.java:34-37` | 已改为世界坐标 + 中心 +8，并按原版跨区块写入（读取仅本区块） | 已修 |
 | GEN-08 | 湖 | `chunk_generator.hpp:389-409` | `ChunkGeneratorOverworld.java:439-459` | 熔岩湖 1/80（应 1/8）；水湖 y 固定扫描、缺 desert_hills 排除、坐标缺 +8 | 待修 |
-| GEN-09 | 泉 | `chunk_generator.hpp:417,423` | `BiomeDecorator.java:352-366` | `nextInt(248)` 写 240、`240` 写 230 且多 +4 | 待修 |
+| GEN-09 | 泉 | `chunk_generator.hpp` | `BiomeDecorator.java:352-366` | 抽取顺序与范围逐项对齐：水泉 nextInt(16)+8 / nextInt(248)+8 / nextInt(i17)；熔岩泉 nextInt(16)+8 / nextInt(nextInt(nextInt(240)+8)+8)；改为世界坐标 | 已修 |
 | GEN-10 | 洞穴 | `map_gen.hpp:211-237` | `MapGenCaves.java:203-220,326-360` | `digBlock` 白名单缺 159/172/110，缺“上方非水”与 `foundTop` 复原 | 待修 |
 | GEN-11 | 下界洞 | `map_gen.hpp:289-314` | `MapGenCavesHell.java:43,112,126-146` | 缺 `nextInt(6)==0`→0.92 分支、缺岩浆检测、`y≤31` 自创填岩浆（原版只放空气） | 待修 |
 | GEN-12 | 地表 | `chunk_generator.hpp:279-282` | `Biome.java:330-340,361-365` | 缺“沙→砂岩”续接、缺冷群系 ICE/WATER 分支、噪声源单层而非 4 层 | 待修 |
